@@ -2,6 +2,10 @@ import { spawn } from "child_process";
 import crypto from "crypto";
 const FIXED_WORKSPACE_ROOT = "/tmp/app-" + crypto.randomUUID();
 const FIXED_PATH = "/usr/local/bin:/usr/bin:/bin";
+
+// Default timeout for user-supplied commands. Callers can override by passing
+// their own AbortSignal; this deadline applies only when none is provided.
+const EXEC_TIMEOUT_MS = 60_000;
 /**
  * Executes a command natively on the host (AI Studio mode).
  * Commands run inside the workspace root with only git-specific environment
@@ -69,12 +73,15 @@ export async function runNativeProcess(
 /**
  * Executes a command natively. Mirrors the execCommand interface
  * from dockerRunner.ts for use in AI Studio.
+ *
+ * If no AbortSignal is supplied, a default timeout of EXEC_TIMEOUT_MS is
+ * applied to prevent LLM-generated commands from hanging indefinitely.
  */
 export async function execCommand(
   command: string,
   signal?: AbortSignal,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
-  return runNativeProcess(command, signal);
+  return runNativeProcess(command, signal ?? AbortSignal.timeout(EXEC_TIMEOUT_MS));
 }
 
 export function getWorkspaceRoot(): string {
