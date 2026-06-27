@@ -10,17 +10,36 @@ function getRunner() {
   return isAIStudio() ? native : docker;
 }
 
+// Shared singleton — one instance means one busy flag, so withLock
+// actually protects concurrent callers across the whole application.
+let _sandbox: GitSandbox | null = null;
+
 /**
  * Initializes the workspace for this app instance.
- * Selects the appropriate runner based on the AI_STUDIO environment variable
- * and initializes the git sandbox at the corresponding paths.
+ * Selects the appropriate runner based on the AI_STUDIO environment variable,
+ * creates the shared GitSandbox singleton, and initializes the git environment.
  *
- * Must be called once at startup before any execCommand calls are made.
+ * Must be called once at startup before any getGitSandbox() or execCommand calls.
+ * Calling it a second time is a no-op — the existing sandbox is returned as-is.
  */
 export async function initializeWorkspace(): Promise<void> {
+  if (_sandbox) return;
   const runner = getRunner();
-  const sandbox = new GitSandbox(runner.getWorkspaceRoot(), runner.getGitDir());
-  await sandbox.initializeGitSandboxAsync();
+  _sandbox = new GitSandbox(runner.getWorkspaceRoot(), runner.getGitDir());
+  await _sandbox.initializeGitSandboxAsync();
+}
+
+/**
+ * Returns the shared GitSandbox instance.
+ * Throws if initializeWorkspace() has not been called yet.
+ */
+export function getGitSandbox(): GitSandbox {
+  if (!_sandbox) {
+    throw new Error(
+      "GitSandbox is not initialized. Call initializeWorkspace() before getGitSandbox()."
+    );
+  }
+  return _sandbox;
 }
 
 /**
@@ -28,12 +47,6 @@ export async function initializeWorkspace(): Promise<void> {
  */
 export function getExecCommand() {
   return getRunner().execCommand;
-}
-
-/**
- * Returns a GitSandbox instance bound to the appropriate runner's paths.
- */
-export function getGitSandbox(): GitSandbox {
-  const runner = getRunner();
+}  const runner = getRunner();
   return new GitSandbox(runner.getWorkspaceRoot(), runner.getGitDir());
 }
