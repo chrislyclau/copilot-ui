@@ -1,6 +1,10 @@
 import { spawn } from "child_process";
 const FIXED_WORKSPACE_ROOT = "/app";
 
+// Default timeout for user-supplied commands. Callers can override by passing
+// their own AbortSignal; this deadline applies only when none is provided.
+const EXEC_TIMEOUT_MS = 60_000;
+
 /**
  * Assume container is already running and initialized. User of the app should have full control over the container lifecycle. This module only provides a way to run commands inside the container.
  */
@@ -91,13 +95,16 @@ export async function runDockerProcess(
 }
 
 /**
- * Executes a command in /app
+ * Executes a command in /app.
+ *
+ * If no AbortSignal is supplied, a default timeout of EXEC_TIMEOUT_MS is
+ * applied to prevent LLM-generated commands from hanging indefinitely.
  */
 export async function execCommand(
   command: string,
   signal?: AbortSignal,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
-  return runDockerProcess(command, signal);
+  return runDockerProcess(command, signal ?? AbortSignal.timeout(EXEC_TIMEOUT_MS));
 }
 export function getWorkspaceRoot(): string {
   return FIXED_WORKSPACE_ROOT;
