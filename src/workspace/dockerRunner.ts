@@ -85,10 +85,27 @@ export async function runDockerProcess(
     } else {
       if (signal) signal.removeEventListener("abort", onAbort);
       child.kill("SIGKILL");
-      resolve({
-        stdout: "",
-        stderr: "Docker process stdin not writable — container may not be running.",
-        exitCode: 1,
+
+      // Wait for the process to fully exit before resolving. A fallback timer
+      // guards against close never firing (e.g. the kill not propagating into
+      // the container). Whichever branch wins cancels the other to ensure
+      // resolve() is called exactly once and neither handler is left dangling.
+      const timer = setTimeout(() => {
+        child.removeAllListeners("close");
+        resolve({
+          stdout: "",
+          stderr: "Docker process stdin not writable — timeout waiting for close.",
+          exitCode: 1,
+        });
+      }, 1000);
+
+      child.once("close", () => {
+        clearTimeout(timer);
+        resolve({
+          stdout: "",
+          stderr: "Docker process stdin not writable — container may not be running.",
+          exitCode: 1,
+        });
       });
     }
   });
