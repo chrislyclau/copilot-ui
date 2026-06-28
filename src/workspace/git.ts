@@ -1,25 +1,27 @@
-import { execFile } from "child_process";
-import * as util from "util";
-import * as fs from "fs/promises";
 import * as path from "path";
 
-const FIXED_GIT_PATH = "/usr/bin/git";
-const execFileAsync = util.promisify(execFile);
-
-// Maximum time to wait for any single git operation. Git should never
-// block for long in a local sandbox — if it does, something is wrong
-// (e.g. a credential prompt, a stale lock file) and we want to fail loudly.
-const GIT_TIMEOUT_MS = 30_000;
+export type ExecCommand = (
+    command: string,
+    signal?: AbortSignal
+) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>;
 
 export class GitSandbox {
     private readonly workTree: string;
     private readonly gitDir: string;
+    private readonly execCommand: ExecCommand;
     private busy = false;
     private initialized = false;
 
-    constructor(workTree: string, gitDir: string) {
+    /**
+     * @param workTree   Absolute path to the workspace root (host or container).
+     * @param gitDir     Absolute path to the .git directory (host or container).
+     * @param execCommand Runner-provided executor — routes commands to the correct
+     *                   environment (native bash or docker exec) automatically.
+     */
+    constructor(workTree: string, gitDir: string, execCommand: ExecCommand) {
         this.workTree = workTree;
         this.gitDir = gitDir;
+        this.execCommand = execCommand;
     }
 
     // -------------------------------------------------------------------------
@@ -41,31 +43,42 @@ export class GitSandbox {
     }
 
     // -------------------------------------------------------------------------
-    // Raw git executor — no longer manages the busy flag (withLock owns that).
+    // Raw git executor — delegates to the injected execCommand so git always
+    // runs in the same environment as the workspace (host or container).
+    // Timeout is handled by the runner's execCommand layer.
     // -------------------------------------------------------------------------
     private async git(args: string[]): Promise<string> {
-        try {
-            const ret = await execFileAsync(FIXED_GIT_PATH, args, {
-                cwd: this.workTree,
-                signal: AbortSignal.timeout(GIT_TIMEOUT_MS),
-                env: {
-                    HOME: this.workTree,
-                    // FIX: USER must be a username string, not a directory path.
-                    USER: "sandbox",
-                    GIT_DIR: this.gitDir,
-                    GIT_WORK_TREE: this.workTree,
-                    GIT_PAGER: "cat"
-                }
-            });
-            return ret.stdout ? ret.stdout.trim() : "";
-        } catch (e: any) {
-            if (e.name === "AbortError") {
-                throw new Error(
-                    `Git command timed out after ${GIT_TIMEOUT_MS / 1000}s: git ${args.join(" ")}`
-                );
-            }
-            const message = e.stderr ? e.stderr.trim() : e.message;
-            throw new Error(`Git command failed (exit ${e.code}): ${message}`);
+        // Build env prefix so git uses the correct work tree and git dir
+        // regardless of the shell's working directory inside the runner.
+        const env = [
+            `HOME=${this.workTree}`,
+            `GIT_DIR=${this.gitDir}`,
+            `GIT_WORK_TREE=${this.workTree}`,
+            `GIT_PAGER=cat`,
+        ].join(" ");
+
+        const command = `${env} git ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`;
+        const result = await this.execCommand(command);
+
+        if (result.exitCode !== 0) {
+            const message = result.stderr ? result.stderr.trim() : "(no stderr)";
+            throw new Error(
+                `Git command failed (exit ${result.exitCode}): ${message}`
+            );
+        }
+
+        return result.stdout ? result.stdout.trim() : "";
+    }
+
+    // -------------------------------------------------------------------------
+    // Shell helper — runs a non-git command in the workspace environment.
+    // Used for mkdir, tee, etc. during initialisation.
+    // -------------------------------------------------------------------------
+    private async sh(command: string): Promise<void> {
+        const result = await this.execCommand(command);
+        if (result.exitCode !== 0) {
+            const message = result.stderr ? result.stderr.trim() : "(no stderr)";
+            throw new Error(`Shell command failed (exit ${result.exitCode}): ${message}`);
         }
     }
 
@@ -111,10 +124,11 @@ export class GitSandbox {
 
     /**
      * Prepares the sandbox git environment if it does not already exist.
-     * Guards against partial initialisation by checking for the git HEAD file
-     * rather than just the directory, and uses async I/O throughout to avoid
-     * blocking the event loop.
-     * Roots baseline exclusions to the snapshots folder.
+     * All filesystem operations are routed through execCommand so they run
+     * inside the container in docker mode rather than on the host.
+     *
+     * Guards against partial initialisation by checking for the git HEAD file.
+     * Throws if called more than once on the same instance.
      */
     private async _initializeGitSandboxAsync(): Promise<void> {
         if (this.initialized) {
@@ -127,19 +141,20 @@ export class GitSandbox {
         // A valid git repo always has a HEAD file. Checking for it (rather than
         // just the directory) avoids silently skipping a previously interrupted init.
         const headPath = path.join(this.gitDir, "HEAD");
-        const alreadyInitialized = await fs.access(headPath).then(() => true, () => false);
+        const alreadyInitialized = await this.execCommand(`test -f '${headPath}'`)
+            .then(r => r.exitCode === 0);
 
         if (!alreadyInitialized) {
-            await fs.mkdir(this.gitDir, { recursive: true });
-            await fs.mkdir(this.workTree, { recursive: true });
+            await this.sh(`mkdir -p '${this.gitDir}' '${this.workTree}'`);
 
             // Run init first so git owns the metadata layout, then write
             // info/exclude into the directory structure git itself created.
             await this.git(["init"]);
 
-            const excludeDir = path.join(this.gitDir, "info");
-            await fs.mkdir(excludeDir, { recursive: true });
-            await fs.writeFile(path.join(excludeDir, "exclude"), "snapshots/\n");
+            // Write the exclude file to suppress the snapshots folder from git tracking.
+            const excludePath = path.join(this.gitDir, "info", "exclude");
+            await this.sh(`mkdir -p '${path.join(this.gitDir, "info")}' && echo 'snapshots/' > '${excludePath}'`);
+
             await this.git(["config", "user.email", "sandbox@aistudio.local"]);
             await this.git(["config", "user.name", "AI Studio Sandbox"]);
             await this.git(["add", "-A"]);
@@ -218,9 +233,6 @@ export class GitSandbox {
      * Compares the current working tree against the staging area.
      * Captures ONLY unstaged local changes; modifications already added via
      * `git add` are not included.
-     *
-     * FIX: Consistent with other diff methods — GIT_PAGER=cat in the env already
-     * suppresses the pager, so --no-pager is not needed here.
      */
     private async _getGitDiffAsync(): Promise<string> {
         return this.git(["diff"]);
