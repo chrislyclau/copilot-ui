@@ -3,8 +3,5 @@ build/
 dist/
 coverage/
 .DS_Store
-*.log
-debug_log.txt
-workspace/
 .env*
 !.env.example
