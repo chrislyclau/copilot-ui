@@ -1,7 +1,14 @@
 import { spawn } from "child_process";
 import crypto from "crypto";
+import * as fs from "fs";
+
 const FIXED_WORKSPACE_ROOT = "/tmp/app-" + crypto.randomUUID();
 const FIXED_PATH = "/usr/local/bin:/usr/bin:/bin";
+
+// Create the workspace root immediately at module load so spawn() never
+// fails with ENOENT when setting cwd. This runs once before any async
+// calls and is safe as a synchronous operation at module initialization.
+fs.mkdirSync(FIXED_WORKSPACE_ROOT, { recursive: true });
 
 // Default timeout for user-supplied commands. Callers can override by passing
 // their own AbortSignal; this deadline applies only when none is provided.
