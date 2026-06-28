@@ -25,7 +25,11 @@ let _sandbox: GitSandbox | null = null;
 export async function initializeWorkspace(): Promise<void> {
   if (_sandbox) return;
   const runner = getRunner();
-  _sandbox = new GitSandbox(runner.getWorkspaceRoot(), runner.getGitDir());
+  _sandbox = new GitSandbox(
+    runner.getWorkspaceRoot(),
+    runner.getGitDir(),
+    runner.execCommand
+  );
   await _sandbox.initializeGitSandboxAsync();
 }
 
