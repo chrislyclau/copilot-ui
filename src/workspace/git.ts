@@ -5,6 +5,11 @@ export type ExecCommand = (
     signal?: AbortSignal
 ) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>;
 
+// Tighter deadline than the runner's default user-command timeout — git
+// operations on local disk should never take long. If they do, something
+// is wrong (stale lock file, credential prompt) and we want to fail loudly.
+const GIT_TIMEOUT_MS = 30_000;
+
 export class GitSandbox {
     private readonly workTree: string;
     private readonly gitDir: string;
@@ -45,7 +50,8 @@ export class GitSandbox {
     // -------------------------------------------------------------------------
     // Raw git executor — delegates to the injected execCommand so git always
     // runs in the same environment as the workspace (host or container).
-    // Timeout is handled by the runner's execCommand layer.
+    // Uses a dedicated GIT_TIMEOUT_MS deadline — tighter than the runner's
+    // default user-command timeout — so hung git ops fail loudly and fast.
     // -------------------------------------------------------------------------
     private async git(args: string[]): Promise<string> {
         // Build env prefix so git uses the correct work tree and git dir
@@ -58,7 +64,7 @@ export class GitSandbox {
         ].join(" ");
 
         const command = `${env} git ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`;
-        const result = await this.execCommand(command);
+        const result = await this.execCommand(command, AbortSignal.timeout(GIT_TIMEOUT_MS));
 
         if (result.exitCode !== 0) {
             const message = result.stderr ? result.stderr.trim() : "(no stderr)";
