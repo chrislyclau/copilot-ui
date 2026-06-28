@@ -21,7 +21,7 @@ export class CapiProxy {
   async start(): Promise<string> {
     return new Promise((resolve, reject) => {
       this.server = http.createServer(async (req, res) => {
-        console.log(`[CapiProxy] Request: ${req.method} ${req.url}`);
+        // console.log(`[CapiProxy] Request: ${req.method} ${req.url}`);
 
         if (req.url === "/_mock_config" && req.method === "POST") {
           let body = "";
@@ -85,7 +85,7 @@ export class CapiProxy {
         }
 
         if (req.url?.startsWith("/chat/completions") && req.method === "POST") {
-          console.log("[CapiProxy] Intercepted /chat/completions request");
+          // console.log("[CapiProxy] Intercepted /chat/completions request");
           let body = "";
           req.on("data", (chunk) => (body += chunk));
           req.on("end", async () => {
@@ -103,10 +103,10 @@ export class CapiProxy {
               res.end(errorPayload);
               return;
             }
-            console.log(
+            /* console.log(
               "[CapiProxy DEBUG] parsedBody:",
               JSON.stringify(parsedBody, null, 2),
-            );
+            ); */
 
             const sendToolCallResponse = async (
               id: string,
@@ -286,11 +286,11 @@ export class CapiProxy {
             // Prefix-matching snapshot matching logic
             if (this.snapshot && this.snapshot.conversations) {
               const incomingMessages = parsedBody.messages;
-              console.log(
+            /* console.log(
                 "[CapiProxy] INCOMING LENGTH:",
                 incomingMessages.length,
               );
-              console.dir(incomingMessages, { depth: null });
+              console.dir(incomingMessages, { depth: null }); */
               const matchedConversation = this.snapshot.conversations.find(
                 (conv: any, idx: number) => {
                   let incoming = incomingMessages;

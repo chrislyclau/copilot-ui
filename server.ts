@@ -81,7 +81,7 @@ import { getAuditorExecutionConfig, executeAuditSession } from './src/utils/audi
 
 // Ensure the Copilot CLI path is explicitly set to work reliably in both dev and bundled production (CJS) modes
 if (!process.env.COPILOT_CLI_PATH) {
-  process.env.COPILOT_CLI_PATH = path.join(process.cwd(), 'node_modules', '@github', 'copilot', 'index.js');
+  process.env.COPILOT_CLI_PATH = path.join(process.cwd(), 'node_modules', '@github', 'copilot', 'npm-loader.js');
 }
 
 const LOG_FILE = path.join(process.cwd(), 'debug_log.txt');

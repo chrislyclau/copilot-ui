@@ -1,8 +1,6 @@
 {
-  "name": "Remix: V8: Copilot UI",
-  "description": "A custom UI wrapper around Copilot SDK.\n\nPreviously Copilot Event Visualizer.",
+  "name": "Workspace Utilities",
+  "description": "Utilities for workspace setup, Git sandboxing, and executing commands.",
   "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

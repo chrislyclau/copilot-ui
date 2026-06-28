@@ -1,7 +1,18 @@
 import Database from 'better-sqlite3';
+import path from 'path';
+import fs from 'fs';
 
 export const isTestMode = process.env.NODE_ENV === 'test' || process.env.DIAGNOSTIC_MODE === 'true';
-export const db = new Database(isTestMode ? 'app-test.db' : 'app.db');
+
+// Use /tmp for the databases to avoid polluting the workspace root and triggering
+// file watcher/tracking layer resets.
+const dbDir = '/tmp';
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
+const dbPath = path.join(dbDir, isTestMode ? 'app-test.db' : 'app.db');
+export const db = new Database(dbPath);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (

@@ -93,10 +93,10 @@ describe('SQLite Persistence layer', () => {
     };
 
     saveSession(dummySession);
-    expect(getSession('sess-123')).not.toBeNull();
+    expect(getSession('sess-123')).toBeDefined();
 
     deleteSession('sess-123');
-    expect(getSession('sess-123')).toBeNull();
+    expect(getSession('sess-123')).toBeUndefined();
   });
 
   it('should save and retrieve escalations', () => {

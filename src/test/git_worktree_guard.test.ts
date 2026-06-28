@@ -6,15 +6,19 @@ import { validateGitWorktree, cleanupWorkspaceDir } from '../utils/workspace';
 
 describe('Git Worktree Guard Tests', () => {
   let savedDiagnosticMode: string | undefined;
+  let savedTestingGitWorktreeGuard: string | undefined;
 
   beforeAll(() => {
     savedDiagnosticMode = process.env.DIAGNOSTIC_MODE;
+    savedTestingGitWorktreeGuard = process.env.TESTING_GIT_WORKTREE_GUARD;
     // Force standard mode for testing validateGitWorktree path checks
     process.env.DIAGNOSTIC_MODE = 'false';
+    process.env.TESTING_GIT_WORKTREE_GUARD = 'true';
   });
 
   afterAll(() => {
     process.env.DIAGNOSTIC_MODE = savedDiagnosticMode;
+    process.env.TESTING_GIT_WORKTREE_GUARD = savedTestingGitWorktreeGuard;
   });
 
   it('validateGitWorktree rejects when directory has .git as a directory', async () => {
