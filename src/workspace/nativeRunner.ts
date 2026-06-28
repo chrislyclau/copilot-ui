@@ -61,10 +61,27 @@ export async function runNativeProcess(
     } else {
       if (signal) signal.removeEventListener("abort", onAbort);
       child.kill("SIGKILL");
-      resolve({
-        stdout: "",
-        stderr: "Native process stdin not writable — process failed to start.",
-        exitCode: 1,
+
+      // Wait for the process to fully exit before resolving. A fallback timer
+      // guards against close never firing (e.g. the process ignores SIGKILL).
+      // Whichever branch wins cancels the other to ensure resolve() is called
+      // exactly once and neither handler is left dangling.
+      const timer = setTimeout(() => {
+        child.removeAllListeners("close");
+        resolve({
+          stdout: "",
+          stderr: "Native process stdin not writable — timeout waiting for close.",
+          exitCode: 1,
+        });
+      }, 1000);
+
+      child.once("close", () => {
+        clearTimeout(timer);
+        resolve({
+          stdout: "",
+          stderr: "Native process stdin not writable — process failed to start.",
+          exitCode: 1,
+        });
       });
     }
   });
