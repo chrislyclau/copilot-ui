@@ -168,14 +168,12 @@ To maintain portability and resilience across varying container virtualization e
 
 ### 7.1 Workspace & Environment Integration
 
-- **SYS-REQ-001:** The system **shall** mount the host workspace directory to the Docker sandbox container using a direct volume mapping.
-- **SYS-REQ-002:** **When** a session initializes, the system **shall** evaluate the workspace `.git` path structural type.
-- **SYS-REQ-003:** **If** the workspace `.git` path resolves to a directory rather than a file worktree pointer, the system **shall** block container mounting and surface a critical initialization failure.
+- **SYS-REQ-001:** The system **shall** not manage docker container's lifecycle. src/workspace/dockerRunner.ts **shall** receive the container's name via an environment variable and assumes the workspace is mounted by volume at a fixed location inside the container.
+
 - **SYS-REQ-004:** The system **shall** map external model definitions to generic API handlers using an abstract provider adapter layer.
 - **SYS-REQ-005:** The system **shall** strip unsupported parameters from payloads before sending requests to non-native generic compatibility layers.
 - **SYS-REQ-005a:** The browser-side application interface **shall not** track, transmit, or render parameters, options, or controls specific to container virtualization engines (such as Docker bypasses).
-- **SYS-REQ-005b:** **If** `DIAGNOSTIC_MODE` is active and the host Docker engine is unreachable, the backend API runner **shall** dynamically and silently reroute terminal actions through native subprocess runners without notifying or modifying the client application state.
-  - _Architectural Constraint:_ The backend owns all state and all state transitions. The frontend may act as a thin, user-initiated trigger (e.g. a button that fires a single request) but must not drive, poll, or otherwise orchestrate the execution loop beyond that initial signal.
+- **SYS-REQ-005b:** The backend owns all state and all state transitions. The frontend may act as a thin, user-initiated trigger (e.g. a button that fires a single request) but must not drive, poll, or otherwise orchestrate the execution loop beyond that initial signal.
 
 ### 7.2 Verification UI & View Turn Diff
 
