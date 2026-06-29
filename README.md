@@ -231,3 +231,9 @@ strictly to the active subtask definition and its immediate validation gate fail
   
 - **SYS-REQ-020a (Unwanted Behavior):** **If** any module directly imports and uses `child_process` methods (`exec`, `execSync`, `spawn`) instead of routing through the centralized workspace API, **then** the system **shall** fail code review as a violation of architectural boundary separation.
   - _Rationale:_ Centralized routing ensures unified timeout policies (GIT_TIMEOUT_MS, EXEC_TIMEOUT_MS), host-container environment abstraction, concurrency control via `GitSandbox.withLock()`, and coherent audit trails across all autonomous execution.
+
+## Policy exceptions
+
+- dev-terminal/ is an explicit development-only exception to SYS-REQ-020. It intentionally runs host processes for local development and debugging while the project runs in AI Studio mode. dev-terminal/ must be excluded from security audits and code-scanning workflows and removed before production or when AI Studio is no longer used. Any other use of `child_process` outside `src/workspace/` requires an explicit, documented exception and code-review approval.
+
+- TODO: Remove dev-terminal/ when AI_STUDIO support is removed.
