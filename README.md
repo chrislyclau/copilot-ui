@@ -97,7 +97,7 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 
 ### 4.2 Asynchronous Panic Break (Loop Abort)
 
-- **ORCH-REQ-017 (Event-Driven):** **When** a user triggers a manual `PANIC_STOP` signal from the UI timeline, the Orchestrator Server shall immediately issue a hard termination signal (`SIGKILL`) to any running Docker subprocesses tied to that specific session ID.
+- **ORCH-REQ-017 (Event-Driven):** **When** a user triggers a manual `PANIC_STOP` signal from the UI timeline, the Orchestrator Server shall immediately issue a hard termination signal (`SIGKILL`) to any running commands.
 - **ORCH-REQ-018 (State-Driven):** **While** in a panicked or aborted state, the Orchestrator Server shall persist the session status as `MANUAL_INTERVENTION_REQUIRED`, reject all incoming automated agent tool mutations, drop the client loading animation.
 
 
@@ -115,10 +115,7 @@ To guarantee the platform is strictly model-agnostic, all core orchestrator modu
 
 ### 7.2 Host-Container Volume Handoff & Git Guard Rail
 
-The host workspace directory is mounted directly to the isolated execution Docker container as a volume to support rapid, zero-overhead file operations. To protect the host repository's version history from destructive sandbox operations, the system enforces a strict environment heuristic:
-
-- **Detection:** The system must verify that the target workspace is structured as an isolated Git worktree (where `.git` is a file pointer referencing a parent repository, rather than a standard, self-contained directory).
-- **Enforcement:** If a primary `.git` directory is detected instead of a worktree file pointer, the orchestrator must refuse to mount the volume, halt execution immediately, and throw a blocking initialization error to protect host repository integrity.
+All workspace management is handled via the src/workspace code, to which changes are not permitted without a discussion.
 
 ### 7.3 Strict Architectural Layer-Boundary Separation
 
