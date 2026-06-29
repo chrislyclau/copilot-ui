@@ -19,12 +19,12 @@ import { makeDockerToolHandler } from './src/utils/toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from './src/config/tools';
 import { getWorkspaceRoot, getDefaultWorkspaceDir } from './src/utils/sandbox';
 
-import { exec, execSync } from 'child_process';
+
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from './src/config/gates';
 import { runSpecAudit } from './src/gates/specAuditor';
 import { sanitizeSensitives } from './src/utils/sanitizers';
 import { truncateOutput } from './src/utils/formatters';
-import { getIsolatedName, getWorkspaceHash, activeContainers, syncWorkspace, validateGitWorktree, cleanupWorkspaceDir } from './src/utils/workspace';
+import { getWorkspaceHash, validateGitWorktree, cleanupWorkspaceDir } from './src/utils/workspace';
 import { initializeWorkspace, getGitSandbox, getExecCommand } from './src/workspace';
 import { enforceWorkingMemoryTruncation, SlidingWindowCircularBuffer, clearCleanCache } from './src/utils/contextManager';
 import { fetchStubbedTraceResponse } from './src/utils/traceRegistry';
@@ -35,34 +35,7 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 // --- GLOBAL ORPHAN CLEANUP ---
-function cleanupOrphans() {
-  for (const name of activeContainers) {
-    try {
-      if (process.env.NODE_ENV !== 'test') {
-        // Intentional host-side exec: container lifecycle management must run
-        // on the Docker host, not inside a workspace container.
-        execSync(`docker rm -f ${name} > /dev/null 2>&1 || true`);
-      }
-      console.log(`[GC] Force-killed orphan container: ${name}`);
-    } catch (err) {
-      console.log(`[GC] Failed to kill container: ${name}`, err);
-    }
-  }
-  // Try cleaning the known base container and temp dir
-  try {
-    const baseName = getIsolatedName('copilot-runner');
-    if (process.env.NODE_ENV !== 'test') {
-      // Intentional host-side exec: container lifecycle management must run
-      // on the Docker host, not inside a workspace container.
-      execSync(`docker rm -f ${baseName} > /dev/null 2>&1 || true`);
-    }
-    const workspaceHash = getWorkspaceHash();
-    const tsNodeTmp = path.join(process.cwd(), `tmp-${workspaceHash}`);
-    if (fs.existsSync(tsNodeTmp)) {
-      cleanupWorkspaceDir(tsNodeTmp);
-    }
-  } catch (e) {}
-}
+
 
 if (process.env.NODE_ENV !== 'test') {
   ['SIGINT', 'SIGTERM', 'uncaughtException'].forEach((signal) => {
@@ -414,9 +387,9 @@ function getCodeState(
   return result;
 }
 
-async function runCommandInDocker(command: string, workingDir: string = '/workspace', signal?: AbortSignal) {
-  const { runDockerProcess } = await import('./src/utils/dockerRunner');
-  return await runDockerProcess(command, workingDir, signal);
+async function runCommand(command: string, signal?: AbortSignal) {
+  const execCommand = getExecCommand();
+  return await execCommand(command, signal);
 }
 
 async function runLlmAudit(promptStr: string, codeStateSummary: string, apiKey?: string): Promise<{ pass: boolean; findings: any[] }> {
@@ -1227,7 +1200,7 @@ await initializeWorkspace();
     }
   });
 
-  // T2 — Diagnostics: Docker (test command inside isolated container context)
+  // T2 — Diagnostics: Exec check (smoke-test command execution through the workspace runner)
   app.get('/api/diagnostics/docker', async (req, res) => {
     const start = Date.now();
     const controller = new AbortController();
@@ -1255,7 +1228,7 @@ await initializeWorkspace();
         throw new Error(`Blocking Initialization Error: Refusing to mount. Workspace .git must not be a directory.`);
       }
 
-      const result = await runCommandInDocker('echo "docker-ok"', '/workspace', controller.signal);
+      const result = await runCommand('echo "exec-ok"', controller.signal);
       const durationMs = Date.now() - start;
 
       res.json({
@@ -1266,12 +1239,12 @@ await initializeWorkspace();
       });
     } catch (err: any) {
       const durationMs = Date.now() - start;
-      writeLog(`[DIAGNOSTICS] Error running docker diagnostics: ${err}`);
+      writeLog(`[DIAGNOSTICS] Error running exec diagnostics: ${err}`);
       res.json({
         pass: false,
         stdout: '',
         exitCode: err.code === 'ENOENT' ? 127 : -1,
-        error: err.message || 'Docker daemon unreachable',
+        error: err.message || 'Workspace runner unreachable',
         durationMs
       });
     }
@@ -1689,18 +1662,6 @@ await initializeWorkspace();
         sseResToSessionId.delete(res);
       } else {
         sseResToSessionId.delete(res);
-      }
-
-      const containerName = getIsolatedName('copilot-runner', currentSessionId || undefined);
-      // SYS-REQ-014: Ensure absolute container demolition regardless of bypass flags
-      // This enforces container pruning for all closed sessions
-      if (process.env.NODE_ENV !== 'test') {
-        // Intentional host-side exec: docker container lifecycle must run on the host.
-        exec(`docker rm -f ${containerName}`, (err) => {
-          if (!err) {
-            writeLog(`[GC] Cleaned up/pruned sandbox container ${containerName} successfully.`);
-          }
-        });
       }
 
       if (heartbeatId) {
@@ -3031,20 +2992,9 @@ await initializeWorkspace();
     } catch (_) {}
   } finally {
     updateStateSnapshot(currentSessionId, { isRunning: false, activeGate: undefined });
-    const containerName = getIsolatedName('copilot-runner', currentSessionId || undefined);
-    writeLog(`[CleanupGuard] Orchestration sequence finished or failed. Pruning sandbox container ${containerName}.`);
-    
-    // Ensure the runner programmatically issues a teardown signal to prune the specific sandbox container
-    if (process.env.NODE_ENV !== 'test') {
-      // Intentional host-side exec: docker container lifecycle must run on the host.
-      exec(`docker rm -f ${containerName}`, (err) => {
-        if (!err) {
-          writeLog(`[CleanupGuard] Cleaned up/pruned sandbox container ${containerName} successfully.`);
-        }
-      });
-    }
+    writeLog(`[CleanupGuard] Orchestration sequence finished or failed.`);
 
-    // and scrub local runtime temporary worktree directories
+    // Scrub local runtime temporary worktree directories
     try {
       const workspaceHash = getWorkspaceHash(currentSessionId || undefined);
       const targetTempDir = path.join(process.cwd(), `tmp-${workspaceHash}`);
@@ -3147,19 +3097,6 @@ await initializeWorkspace();
         writeLog(`[Panic] Error calling abort: ${err.message}`);
       }
       activeLocks.delete(sessionId);
-    }
-
-    // Forcefully execute docker kill against the container
-    const containerName = getIsolatedName('copilot-runner', sessionId);
-    if (process.env.NODE_ENV !== 'test') {
-      // Intentional host-side exec: docker container lifecycle must run on the host.
-      exec(`docker kill ${containerName}`, (err) => {
-        if (err) {
-          writeLog(`[Panic] Error killing container ${containerName}: ${err.message}`);
-        } else {
-          writeLog(`[Panic] Forcefully killed container ${containerName} successfully.`);
-        }
-      });
     }
 
     res.json({ success: true, message: 'Panic stops triggered successfully.' });
