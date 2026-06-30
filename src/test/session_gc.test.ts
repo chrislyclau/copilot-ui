@@ -8,11 +8,12 @@ describe('Session TTL Garbage Collector Tests', () => {
     const staleSessionId = 'stale-session-gc-test';
     const mockRes = {};
     let abortCalled = false;
-    const mockAbortController = {
-      abort: () => {
-        abortCalled = true;
-      },
-    } as AbortController;
+    const mockAbortController = new AbortController();
+    const originalAbort = mockAbortController.abort.bind(mockAbortController);
+    mockAbortController.abort = () => {
+      abortCalled = true;
+      return originalAbort();
+    };
     
     // Setup stale session
     const mockDisconnectCalled = { value: false };
