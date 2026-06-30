@@ -1,18 +1,20 @@
-import { vi, describe, it } from 'vitest';
+import { describe, it, beforeEach, afterEach } from 'vitest';
 import assert from 'node:assert';
-
-vi.mock('../services/sessionGarbageCollector', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../services/sessionGarbageCollector')>();
-  return {
-    ...actual,
-    startSessionGarbageCollector: vi.fn().mockReturnValue(() => {}),
-  };
-});
 
 import { activeSessions, sessionWritePromises } from '../../server';
 import { sweepStaleSessions } from '../services/sessionGarbageCollector';
 
 describe('Session TTL Garbage Collector Tests', () => {
+  beforeEach(() => {
+    activeSessions.clear();
+    sessionWritePromises.clear();
+  });
+
+  afterEach(() => {
+    activeSessions.clear();
+    sessionWritePromises.clear();
+  });
+
   it('correctly prunes stale sessions from activeSessions, sessionWritePromises, and activeLocks when they exceed TTL', async () => {
     const staleSessionId = 'stale-session-gc-test';
     const mockRes = {};

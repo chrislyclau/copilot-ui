@@ -26,6 +26,7 @@ export default defineConfig(async () => {
     test: {
       globals: true,
       environment: 'node',
+      setupFiles: ['./src/test/vitest.setup.ts'],
       // Single thread pool: all test files share one worker process, eliminating
       // the N sequential server lifecycle problem.
       pool: 'threads',
