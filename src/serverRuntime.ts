@@ -34,6 +34,8 @@ if (process.env.NODE_ENV !== 'test') {
   dotenv.config();
 }
 
+let stopSessionGarbageCollector: (() => void) | null = null;
+
 // --- GLOBAL ORPHAN CLEANUP ---
 
 
@@ -61,6 +63,8 @@ if (process.env.NODE_ENV !== 'test') {
       } else {
         console.log(`[SYSTEM] ${signal} received. Cleaning up...`);
       }
+      stopSessionGarbageCollector?.();
+      stopSessionGarbageCollector = null;
       cleanupOrphans();
       process.exit(signal === 'uncaughtException' ? 1 : 0);
     });
@@ -570,7 +574,7 @@ const { secureWrite, flushSseAndEnd } = createSseWriter({
   writeLog,
 });
 
-startSessionGarbageCollector({
+stopSessionGarbageCollector = startSessionGarbageCollector({
   activeSessions,
   sessionWritePromises,
   sseResToSessionId,

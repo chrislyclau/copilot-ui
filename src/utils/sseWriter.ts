@@ -171,6 +171,10 @@ export function createSseWriter({
       }
       throw err;
     });
+    if (res.writableEnded || res.destroyed) {
+      writeLog(`[WRITE] secureWrite skipped, res.writableEnded=${res.writableEnded} res.destroyed=${res.destroyed}`);
+      return;
+    }
     sseWriteLocks.set(res, nextLock.catch(() => {}));
     await nextLock;
   }
