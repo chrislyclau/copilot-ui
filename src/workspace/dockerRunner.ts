@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
-const FIXED_WORKSPACE_ROOT = process.env.WORKSPACE_HOST_LOCATION || "/app";
-
+const FIXED_WORKSPACE_ROOT = "/app";
+const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || FIXED_WORKSPACE_ROOT;
 // Default timeout for user-supplied commands. Callers can override by passing
 // their own AbortSignal; this deadline applies only when none is provided.
 const EXEC_TIMEOUT_MS = 60_000;
@@ -127,7 +127,7 @@ export function getWorkspaceRoot(): string {
   return FIXED_WORKSPACE_ROOT;
 }
 export function getWorkspaceHostLocation(): string {
-  return FIXED_WORKSPACE_ROOT;
+  return WORKSPACE_HOST_LOCATION;
 }
 export function getGitDir(): string {
   return FIXED_WORKSPACE_ROOT + "/snapshots/.git";
