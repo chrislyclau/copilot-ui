@@ -1,8 +1,14 @@
 import { spawn } from "child_process";
-import crypto from "crypto";
 import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 
-const FIXED_WORKSPACE_ROOT = "/tmp/app-" + crypto.randomUUID();
+// fs.mkdtempSync atomically creates a uniquely-named directory under the
+// OS temp root (respects TMPDIR/TEMP/TMP) and returns its path — avoiding
+// the need to hand-roll uniqueness with crypto.randomUUID() plus a
+// separate mkdirSync call.
+const FIXED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "app-"));
+
 const FIXED_PATH = "/usr/local/bin:/usr/bin:/bin";
 
 // Create the workspace root immediately at module load so spawn() never
