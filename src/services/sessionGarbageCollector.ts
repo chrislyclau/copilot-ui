@@ -3,7 +3,7 @@ import type { SessionRecord } from '../types/session';
 export interface SessionGarbageCollectorDependencies {
   activeSessions: Map<string, SessionRecord>;
   sessionWritePromises: Map<string, Promise<void>>;
-  sseResToSessionId: Map<any, string>;
+  sseResToSessionId: Map<unknown, string>;
   activeLocks: Map<string, AbortController>;
   ttlMs: number;
   writeLog: (message: string) => void;
