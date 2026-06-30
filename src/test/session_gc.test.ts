@@ -30,11 +30,14 @@ describe('Session TTL Garbage Collector Tests', () => {
     activeSessions.set(staleSessionId, mockSessionRecord);
     sessionWritePromises.set(staleSessionId, Promise.resolve());
 
+    const sseResToSessionId = new Map([[mockRes, staleSessionId]]);
+    const activeLocks = new Map([[staleSessionId, mockAbortController]]);
+
     await sweepStaleSessions({
       activeSessions,
       sessionWritePromises,
-      sseResToSessionId: new Map([[mockRes, staleSessionId]]),
-      activeLocks: new Map([[staleSessionId, mockAbortController]]),
+      sseResToSessionId,
+      activeLocks,
       ttlMs: 30 * 60 * 1000,
       writeLog: () => {},
     });
@@ -42,7 +45,9 @@ describe('Session TTL Garbage Collector Tests', () => {
     // Verify cleanup
     assert.strictEqual(activeSessions.has(staleSessionId), false, 'Stale session must be evicted from activeSessions');
     assert.strictEqual(sessionWritePromises.has(staleSessionId), false, 'Stale session must be evicted from sessionWritePromises');
+    assert.strictEqual(sseResToSessionId.has(mockRes), false, 'SSE response mapping must be removed during GC eviction');
     assert.strictEqual(abortCalled, true, 'activeLocks AbortController must be aborted during GC eviction');
+    assert.strictEqual(activeLocks.has(staleSessionId), false, 'activeLocks entry must be removed during GC eviction');
     assert.strictEqual(mockAbortController.signal.aborted, true, 'AbortController signal must be aborted during GC eviction');
     assert.strictEqual(mockDisconnectCalled.value, true, 'copilotSession.disconnect() must be invoked during GC eviction');
   });
