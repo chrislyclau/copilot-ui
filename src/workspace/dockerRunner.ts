@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-const FIXED_WORKSPACE_ROOT = "/app";
+const FIXED_WORKSPACE_ROOT = process.env.WORKSPACE_HOST_LOCATION || "/app";
 
 // Default timeout for user-supplied commands. Callers can override by passing
 // their own AbortSignal; this deadline applies only when none is provided.
@@ -124,6 +124,9 @@ export async function execCommand(
   return runDockerProcess(command, signal ?? AbortSignal.timeout(EXEC_TIMEOUT_MS));
 }
 export function getWorkspaceRoot(): string {
+  return FIXED_WORKSPACE_ROOT;
+}
+export function getWorkspaceHostLocation(): string {
   return FIXED_WORKSPACE_ROOT;
 }
 export function getGitDir(): string {
