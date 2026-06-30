@@ -59,3 +59,10 @@ export function getExecCommand() {
 export function getWorkspaceRoot(): string {
   return getRunner().getWorkspaceRoot();
 }
+
+/**
+ * Returns the host workspace location bound to the appropriate runner.
+ */
+export function getWorkspaceHostLocation(): string {
+  return getRunner().getWorkspaceHostLocation();
+}
