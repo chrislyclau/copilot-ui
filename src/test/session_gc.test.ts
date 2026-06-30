@@ -1,5 +1,14 @@
-import { describe, it } from 'vitest';
+import { vi, describe, it } from 'vitest';
 import assert from 'node:assert';
+
+vi.mock('../services/sessionGarbageCollector', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/sessionGarbageCollector')>();
+  return {
+    ...actual,
+    startSessionGarbageCollector: vi.fn().mockReturnValue(() => {}),
+  };
+});
+
 import { activeSessions, sessionWritePromises } from '../../server';
 import { sweepStaleSessions } from '../services/sessionGarbageCollector';
 

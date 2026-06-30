@@ -72,10 +72,6 @@ export function startSessionGarbageCollector(
   deps: SessionGarbageCollectorDependencies,
   sweepIntervalMs: number = 5 * 60 * 1000,
 ): () => void {
-  if (process.env.NODE_ENV === 'test') {
-    return () => {};
-  }
-
   const timer = setInterval(() => {
     void sweepStaleSessions(deps).catch(err => {
       deps.writeLog(`[Session GC] Sweep failed: ${err}`);
