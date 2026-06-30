@@ -114,14 +114,15 @@ export function createSseWriter({
         writeLog(`[WRITE] secureWrite result: canWrite=${canWrite}`);
         if (!canWrite) {
           writeLog(`[Backpressure] Streaming buffer full. Pausing until drain...`);
+          const onClose = () => {
+            clearTimeout(timeoutId);
+            resolve();
+          };
+          res.once('close', onClose);
           res.once('drain', () => {
+            res.removeListener('close', onClose);
             clearTimeout(timeoutId);
             writeLog(`[Backpressure] Streaming buffer drained. Resuming...`);
-            resolve();
-          });
-
-          res.once('close', () => {
-            clearTimeout(timeoutId);
             resolve();
           });
         } else {
