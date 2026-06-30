@@ -17,7 +17,6 @@ import { SessionRecord, StateSnapshot, CopilotEventData, Turn } from './src/type
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from './src/utils/prompt';
 import { makeDockerToolHandler } from './src/utils/toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from './src/config/tools';
-import { getWorkspaceRoot, getDefaultWorkspaceDir, getWorkspaceHash, getIsolatedName } from './src/utils/sandbox';
 
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from './src/config/gates';
 import { runSpecAudit } from './src/gates/specAuditor';
@@ -78,7 +77,7 @@ if (!process.env.COPILOT_CLI_PATH) {
 const LOG_FILE = path.join('/tmp', 'debug_log.txt');
 export const lastRunLog: string[] = [];
 
-const DEFAULT_WORKSPACE_DIR = getDefaultWorkspaceDir();
+const DEFAULT_WORKSPACE_DIR = './workspace';
 if (!fs.existsSync(DEFAULT_WORKSPACE_DIR)) {
   fs.mkdirSync(DEFAULT_WORKSPACE_DIR, { recursive: true });
 }
@@ -2963,7 +2962,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
     // Scrub local runtime temporary worktree directories
     try {
-      const workspaceHash = getWorkspaceHash(currentSessionId || undefined);
+      const workspaceHash = Buffer.from(currentSessionId || 'default').toString('base64url').replace(/[^a-z0-9]/gi, '').substring(0, 8);
       const targetTempDir = path.join(process.cwd(), `tmp-${workspaceHash}`);
       await getExecCommand()(`rm -rf '${targetTempDir}'`);
       writeLog(`[CleanupGuard] Scrubbed local runtime temporary worktree directory: ${targetTempDir}`);

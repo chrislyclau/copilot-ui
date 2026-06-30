@@ -256,3 +256,7 @@ Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git manag
 - dev-terminal/ is an explicit development-only exception to SYS-REQ-020. It intentionally runs host processes for local development and debugging while the project runs in AI Studio mode. dev-terminal/ must be excluded from security audits and code-scanning workflows and removed before production or when AI Studio is no longer used. Any other use of `child_process` outside `src/workspace/` requires an explicit, documented exception and code-review approval.
 
 - TODO: Remove dev-terminal/ when AI_STUDIO support is removed.
+
+- .env.example is an AI Studio-specific exception. It contains environment variable templates required for running the project in AI Studio mode (e.g. Gemini API configuration). It must not be committed with real secrets and should be deleted when AI_STUDIO support is removed.
+
+- TODO: Remove .env.example when AI_STUDIO support is removed.
