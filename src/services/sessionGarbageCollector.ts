@@ -22,8 +22,8 @@ export async function sweepStaleSessions({
 
   for (const [sessionId, record] of activeSessions.entries()) {
     const isRunning = Boolean(record.stateSnapshot?.isRunning);
-    const hasLock = activeLocks.has(sessionId);
-    if (!isRunning && !hasLock && now - record.lastUsedAt > ttlMs) {
+    const isStale = now - record.lastUsedAt > ttlMs;
+    if (!isRunning && isStale) {
       staleSessionIds.push(sessionId);
     }
   }
@@ -34,8 +34,16 @@ export async function sweepStaleSessions({
 
     writeLog(`[Session GC] Evicting stale session ${sessionId}.`);
     sessionWritePromises.delete(sessionId);
-    activeLocks.delete(sessionId);
 
+    const controller = activeLocks.get(sessionId);
+    if (controller) {
+      try {
+        controller.abort();
+      } catch {
+        // ignore
+      }
+    }
+    activeLocks.delete(sessionId);
     for (const [res, mappedSessionId] of sseResToSessionId.entries()) {
       if (mappedSessionId === sessionId) {
         sseResToSessionId.delete(res);
