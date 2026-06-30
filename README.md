@@ -257,6 +257,6 @@ Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git manag
 
 - TODO: Remove dev-terminal/ when AI_STUDIO support is removed.
 
-- .env.example is an AI Studio-specific exception. It contains environment variable templates required for running the project in AI Studio mode (e.g. Gemini API configuration). It must not be committed with real secrets and should be deleted when AI_STUDIO support is removed.
+- .env.example is an AI Studio-specific exception.
 
 - TODO: Remove .env.example when AI_STUDIO support is removed.
