@@ -1,6 +1,7 @@
 import { describe, it } from 'vitest';
 import assert from 'node:assert';
 import { activeSessions, sessionWritePromises } from '../../server';
+import { sweepStaleSessions } from '../services/sessionGarbageCollector';
 
 describe('Session TTL Garbage Collector Tests', () => {
   it('correctly prunes stale sessions from activeSessions, sessionWritePromises, and activeLocks when they exceed TTL', async () => {
@@ -21,17 +22,14 @@ describe('Session TTL Garbage Collector Tests', () => {
     activeSessions.set(staleSessionId, mockSessionRecord);
     sessionWritePromises.set(staleSessionId, Promise.resolve());
 
-    // Execute the sweep logic manually for this test to ensure exact mapping behavior
-    const now = Date.now();
-    for (const [id, record] of activeSessions.entries()) {
-      if (now - record.lastUsedAt > 30 * 60 * 1000) {
-        activeSessions.delete(id);
-        sessionWritePromises.delete(id);
-        try {
-          await record.copilotSession.disconnect();
-        } catch (err) {}
-      }
-    }
+    await sweepStaleSessions({
+      activeSessions,
+      sessionWritePromises,
+      sseResToSessionId: new Map(),
+      activeLocks: new Map(),
+      ttlMs: 30 * 60 * 1000,
+      writeLog: () => {},
+    });
 
     // Verify cleanup
     assert.strictEqual(activeSessions.has(staleSessionId), false, 'Stale session must be evicted from activeSessions');
