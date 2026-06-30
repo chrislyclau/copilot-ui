@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 const FIXED_WORKSPACE_ROOT = "/app";
-const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || FIXED_WORKSPACE_ROOT;
+const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "./workspace";
 // Default timeout for user-supplied commands. Callers can override by passing
 // their own AbortSignal; this deadline applies only when none is provided.
 const EXEC_TIMEOUT_MS = 60_000;
