@@ -46,6 +46,9 @@ export function createSseWriter({
                   turns: session.turns ? [...session.turns] : []
                 });
                 const updatedSession = activeSessions.get(sessId)!;
+                if (!eventObj.data || typeof eventObj.data !== 'object') {
+                  eventObj.data = {};
+                }
                 eventObj.data.sequenceId = newSequenceCounter;
 
                 if (updatedSession.stateSnapshot) {
