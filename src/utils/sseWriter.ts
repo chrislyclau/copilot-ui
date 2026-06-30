@@ -132,17 +132,27 @@ export function createSseWriter({
     }).catch(err => {
       writeLog(`[SSE Lock Error] ${err}`);
       if (sessionObj && eventObj) {
-        if (!sessionObj.diagnosticTrail) {
-          sessionObj.diagnosticTrail = [];
-        }
-        sessionObj.diagnosticTrail.push(eventObj);
-        writeLog(`[secureWrite] Appended dropped event ${eventObj.type} to diagnosticTrail.`);
+        const sessionId = sessionObj.sessionId;
+        const currentSession = sessionId ? activeSessions.get(sessionId) : undefined;
+        const baseSession: any = currentSession || sessionObj;
 
-        if (sessionObj.turns && sessionObj.turns.length > 0) {
-          const currentTurn = sessionObj.turns[sessionObj.turns.length - 1];
-          const index = currentTurn.events.indexOf(eventObj);
-          if (index !== -1) {
-            currentTurn.events.splice(index, 1);
+        const nextDiagnosticTrail = [...(baseSession.diagnosticTrail || []), eventObj];
+        let nextTurns = baseSession.turns;
+        if (Array.isArray(baseSession.turns) && baseSession.turns.length > 0) {
+          const lastIndex = baseSession.turns.length - 1;
+          const lastTurn = baseSession.turns[lastIndex];
+          const filteredEvents = Array.isArray(lastTurn.events)
+            ? lastTurn.events.filter((ev: any) => ev !== eventObj)
+            : lastTurn.events;
+          nextTurns = baseSession.turns.map((turn: any, idx: number) =>
+            idx === lastIndex ? { ...turn, events: filteredEvents } : turn,
+          );
+        }
+
+        if (sessionId) {
+          activeSessions.set(sessionId, { ...baseSession, diagnosticTrail: nextDiagnosticTrail, turns: nextTurns });
+          writeLog(`[secureWrite] Appended dropped event ${eventObj.type} to diagnosticTrail.`);
+          if (Array.isArray(baseSession.turns) && baseSession.turns.length > 0) {
             writeLog(`[secureWrite] Removed dropped event from current turn to avoid client serialization drift.`);
           }
         }
