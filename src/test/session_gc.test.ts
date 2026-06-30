@@ -6,6 +6,13 @@ import { sweepStaleSessions } from '../services/sessionGarbageCollector';
 describe('Session TTL Garbage Collector Tests', () => {
   it('correctly prunes stale sessions from activeSessions, sessionWritePromises, and activeLocks when they exceed TTL', async () => {
     const staleSessionId = 'stale-session-gc-test';
+    const mockRes = {};
+    let abortCalled = false;
+    const mockAbortController = {
+      abort: () => {
+        abortCalled = true;
+      },
+    } as AbortController;
     
     // Setup stale session
     const mockDisconnectCalled = { value: false };
@@ -25,8 +32,8 @@ describe('Session TTL Garbage Collector Tests', () => {
     await sweepStaleSessions({
       activeSessions,
       sessionWritePromises,
-      sseResToSessionId: new Map(),
-      activeLocks: new Map(),
+      sseResToSessionId: new Map([[mockRes, staleSessionId]]),
+      activeLocks: new Map([[staleSessionId, mockAbortController]]),
       ttlMs: 30 * 60 * 1000,
       writeLog: () => {},
     });
@@ -34,6 +41,8 @@ describe('Session TTL Garbage Collector Tests', () => {
     // Verify cleanup
     assert.strictEqual(activeSessions.has(staleSessionId), false, 'Stale session must be evicted from activeSessions');
     assert.strictEqual(sessionWritePromises.has(staleSessionId), false, 'Stale session must be evicted from sessionWritePromises');
+    assert.strictEqual(abortCalled, true, 'activeLocks AbortController must be aborted during GC eviction');
+    assert.strictEqual(mockAbortController.signal.aborted, true, 'AbortController signal must be aborted during GC eviction');
     assert.strictEqual(mockDisconnectCalled.value, true, 'copilotSession.disconnect() must be invoked during GC eviction');
   });
 });
