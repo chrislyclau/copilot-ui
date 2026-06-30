@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { createServer as createViteServer } from 'vite';
 import { CopilotClient, PermissionRequestResult, SessionConfig, ProviderConfig as SdkProviderConfig, Tool } from '@github/copilot-sdk';
 import dotenv from 'dotenv';
@@ -77,10 +78,7 @@ if (!process.env.COPILOT_CLI_PATH) {
 const LOG_FILE = path.join('/tmp', 'debug_log.txt');
 export const lastRunLog: string[] = [];
 
-const DEFAULT_WORKSPACE_DIR = './workspace';
-if (!fs.existsSync(DEFAULT_WORKSPACE_DIR)) {
-  fs.mkdirSync(DEFAULT_WORKSPACE_DIR, { recursive: true });
-}
+const DEFAULT_WORKSPACE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-ui-workspace-'));
 
 
 // Maps model identifiers to officially supported models in Google's OpenAI compatibility endpoint to avoid 400 bad request errors
