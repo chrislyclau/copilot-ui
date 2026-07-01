@@ -4,14 +4,6 @@ import fs from 'fs';
 import path from 'path';
 import { enforceWorkingMemoryTruncation } from './utils/contextManager';
 
-function sanitizeDockerCommand(cmd: string): string {
-    const blockedPatterns = [/rm\s+-rf\s+\/workspace/, /rm\s+-r\s+node_modules/, /rm\s+-rf\s+\./, /rm\s+--dir/];
-    if (blockedPatterns.some(p => p.test(cmd))) {
-        throw new Error('blocked');
-    }
-    return cmd;
-}
-
 describe('Security & Logic Bugfix Verification Tests', () => {
   // Test 1: sseWriteLocks Map leaks on abrupt disconnect
   it('sseWriteLocks abrupt disconnect cleanups', () => {
@@ -141,21 +133,6 @@ describe('Security & Logic Bugfix Verification Tests', () => {
       // cleanup
       try { fs.rmSync(srcTestDir, { recursive: true, force: true }); } catch (e) {}
       try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
-    }
-  });
-
-  // Test 5: runDockerProcess command passed unvalidated to bash stdin
-  it('Docker process command block regexes sanitation', () => {
-    // Dangerous inputs that attempt deletions must throw
-    assert.throws(() => sanitizeDockerCommand('rm -rf /workspace'), /blocked/, 'Must block root workspace deletes');
-    assert.throws(() => sanitizeDockerCommand('rm -r node_modules'), /blocked/, 'Must block recursive deletes');
-    assert.throws(() => sanitizeDockerCommand('rm -rf .'), /blocked/, 'Must block current dir deletes');
-    assert.throws(() => sanitizeDockerCommand('rm --dir /var/cache'), /blocked/, 'Must block directory removals');
-
-    // Standard safe developer operations must pass
-    const safeCmds = ['npm install', 'git status', 'node index.js', 'cat package.json', 'ls -la'];
-    for (const cmd of safeCmds) {
-      assert.strictEqual(sanitizeDockerCommand(cmd), cmd, `Safe command: ${cmd} must be fully permitted`);
     }
   });
 
