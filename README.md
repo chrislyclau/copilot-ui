@@ -120,7 +120,18 @@ To guarantee the platform is strictly model-agnostic, all core orchestrator modu
 
 All workspace management is handled via the src/workspace code, to which changes are not permitted without a discussion.
 
-### 5.3 Strict Architectural Layer-Boundary Separation
+- **SYS-REQ-022 (Path Space Separation):** The system distinguishes three path spaces that must never be substituted for one another:
+  1. **App source tree** (`process.cwd()` at server boot) — the copilot-ui repo itself.
+  2. **Host-side managed workspace** (`getWorkspaceHostLocation()`) — the managed workspace as visible to the Node process itself (e.g. for direct fs calls, mounting).
+  3. **Execution-side managed workspace** (`getWorkspaceRoot()`) — the managed workspace as visible _inside_ wherever `getExecCommand()` actually runs (container path in Docker mode; identical to host path in native mode).
+- **SYS-REQ-023:** Any `cwd` passed to `getExecCommand()`, `runTests`, `runLint`, or `runWithTimeout` **shall** be sourced from `getWorkspaceRoot()`, never `getWorkspaceHostLocation()` or `process.cwd()`. `getWorkspaceHostLocation()` is reserved for callers that operate directly against the Node process's own filesystem view (e.g. `CopilotClient`'s `workingDirectory`).
+
+### 5.3 SDK Import Boundary
+
+- **SYS-REQ-024:** All `@github/copilot-sdk` imports **shall** be confined to `src/copilotSdk/boundary.ts`. No other module may import from `@github/copilot-sdk` directly; they consume re-exported types and wrapper functions from the boundary module instead.
+- **SYS-REQ-025:** Orchestration logic (gate loop, role dispatch, checkpoint handling) **shall** live in a dedicated module under `src/orchestrator/`, not inline in Express route handlers. Route handlers parse the request, call into the orchestrator module, and stream the result.
+
+### 5.4 Strict Architectural Layer-Boundary Separation
 
 To maintain portability and resilience across varying container virtualization environments, the frontend application must remain completely decoupled from host infrastructure constraints and execution modes.
 
