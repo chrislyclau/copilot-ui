@@ -4,20 +4,20 @@
 
 Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events via SSE (POST + `ReadableStream` reader). Gemini models accessed via OpenAI compatibility layer (`[generativelanguage.googleapis.com/v1beta/openai/](https://generativelanguage.googleapis.com/v1beta/openai/)`). UI renders a live event timeline with filtering, inspection, and stats.
 
-
 ---
 
 ### Design Principles (varying degree of certainties)
 
 - **High:** Deterministic gates (test/lint/audit) as retry loops with limits.
 - **High:** Expensive model as planner, cheap model as executor.
-- **High:** Role-based model assignment supporting heterogeneous providers per loop (Planner, Executor, Auditor).
+- **High:** Role-based model assignment supporting heterogeneous providers per loop (Planner, Executor, Auditor, Committer, Groomer).
 - **High:** **Executor Narrow Focus with Cumulative Working Memory** — The executor retains active conversational history to troubleshoot errors comparatively, but the prompt injection layer narrows focus strictly to subtasks and immediate gate failures.
+- **High:** HTTP/SSE Decoupling — The Express handler enqueues tasks and returns immediately (fire-and-forget). A background worker owns the execution loop, ensuring resilience against client disconnects.
 - **High:** Favor automation over human checkpoints (human effort is the premium resource; UI serves as an ambient notification surface, not an interruption screen).
 - **High:** Structured output always via tool calls, never prompted raw JSON text blocks.
 - **Medium:** Automated decision logging via immutable runtime audit trail.
-- **Medium:** Persistent, versioned task decomposition artifacts rather than throwaway conversational breakdowns.
-- **Medium:** Task-Based Execution — The planner (expensive model) decomposes a user goal into a versioned tasks.md artifact via tool call. The executor (cheap model) receives one task at a time as a narrow directive, with each task subject to the standard gate loop. Cross-task context is preserved via a workingMemory summary — appended after each completed task and injected as a prefix to the next. Blockers filed during execution route through the resolver/escalation mechanism.
+- **Medium:** Persistent, versioned task decomposition artifacts (SQLite) rather than throwaway conversational breakdowns.
+- **Medium:** Task-Based Execution — The planner (expensive model) decomposes a user goal into structured tasks stored in SQLite (`pending → running → blocked | done`). This creates a hierarchy of `spec (file in git) → tasks (SQLite) → sessions (execution attempts)`. The executor (cheap model) receives one task at a time as a narrow directive, with each task subject to the standard gate loop. Cross-task context is preserved via a workingMemory summary — appended after each completed task and injected as a prefix to the next. Blockers filed during execution route through the resolver/escalation mechanism.
   - **Working Memory Contract Defined:**
     - (1) **Schema/Format:** Structured markdown summary tokens comprising `[Task Summary]`, `[Key Decisions]`, and `[Pending Blockers]`.
     - (2) **Size/Token Limit:** Capped strictly at 40,000 characters (approx. 8,000 tokens) to guarantee compatibility with Gemini context bounds.
@@ -27,7 +27,6 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 - **Low/Deferred:** Dedicated LLM intent-deciphering steps per prompt (unnecessary due to robust human escalation tier).
 
 ---
-
 
 ## 1. Core Orchestration & Tool Constraints
 
@@ -43,7 +42,7 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 
 ### 1.3 Safety Circuits
 
-- **ORCH-REQ-006 (Unwanted Behavior):** **If** the autonomous execution loop reaches `MAX_LOOP_CYCLE_CEILING = 10`, **then** the Orchestrator Server shall execute a hard circuit breaker, emit a structured `CEILING_BREACHED` error code, and drop active UI loading elements.
+- **ORCH-REQ-006 (Unwanted Behavior):** **If** the autonomous execution loop reaches `MAX_LOOP_CYCLE_CEILING = 10`, **then** the Orchestrator Server shall park the task (transitioning its status to `blocked`, committing or stashing the active workspace state, and checkout the base trunk branch), and automatically pull the next unblocked task to continue execution without a hard system halt.
 
 ---
 
@@ -73,6 +72,12 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 - **ORCH-REQ-010 (State-Driven):** **While** evaluating workspace modifications, the Spec-Gate Auditor shall accept only the raw code changes (diffs) and the primary technical design specification file (e.g., `architecture-spec.md`), remaining completely blind to the Executor’s conversational history logs, intermediate thought tokens, and internal retry attempts.
 - **ORCH-REQ-011 (Unwanted Behavior):** **If** the Spec-Gate Auditor detects a structural deviation between the workspace mutations and the rules defined in the specification file, **then** it shall return a structured `SPEC_VIOLATION` tool response to the Orchestrator, failing the gate pipeline and forcing the active session to alter its task blueprint or escalate.
 
+### 2.3 Additional Agent Roles & System Outputs
+
+- **Committer** — Lightweight, single-shot, conventional commit message generator. Automatically runs upon task completion or checkpointing to produce standardized, structured git commit descriptions. Added alongside Planner, Executor, and Auditor roles.
+- **Groomer** — Spec reconciliation agent. Classification-only role triggered immediately upon detection of a specification version change to identify structural discrepancies and align tasks.
+- **End-of-run Digest** — A generated system artifact (non-agent system output) produced at the end of each orchestration run to summarize execution results, gate statuses, and final outputs.
+
 ---
 
 ## 3. Automation Enforcement (Human-Out-Of-The-Loop)
@@ -100,24 +105,22 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 - **ORCH-REQ-017 (Event-Driven):** **When** a user triggers a manual `PANIC_STOP` signal from the UI timeline, the Orchestrator Server shall immediately issue a hard termination signal (`SIGKILL`) to any running commands.
 - **ORCH-REQ-018 (State-Driven):** **While** in a panicked or aborted state, the Orchestrator Server shall persist the session status as `MANUAL_INTERVENTION_REQUIRED`, reject all incoming automated agent tool mutations, drop the client loading animation.
 
-
 ---
-
 
 ## 5. System Topology & Operational Pillars
 
-### 7.1 Abstract Provider Registry
+### 5.1 Abstract Provider Registry
 
 To guarantee the platform is strictly model-agnostic, all core orchestrator modules communicate exclusively with an abstract provider interface. This layer decouples internal execution logic from any provider-specific schemas or mutations.
 
 - **Payload Normalization:** Upstream adapters dynamically scrub structural parameters that break alternative strict OpenAI-compatible or Anthropic-compatible endpoints (e.g., stripping proprietary parsing configurations).
 - **Model Tier Mapping:** Models are registered centrally and bound to generalized processing profiles (_Baseline, Intermediate, Advanced_) rather than specific commercial brand names.
 
-### 7.2 Host-Container Volume Handoff & Git Guard Rail
+### 5.2 Host-Container Volume Handoff & Git Guard Rail
 
 All workspace management is handled via the src/workspace code, to which changes are not permitted without a discussion.
 
-### 7.3 Strict Architectural Layer-Boundary Separation
+### 5.3 Strict Architectural Layer-Boundary Separation
 
 To maintain portability and resilience across varying container virtualization environments, the frontend application must remain completely decoupled from host infrastructure constraints and execution modes.
 
@@ -127,7 +130,6 @@ To maintain portability and resilience across varying container virtualization e
 ---
 
 ## 6. Streamlined "Cockpit" & Turn History Layout
-
 
 ```
 ┌───────────────────────────────────────┬───────────────────────────────────────┐
@@ -156,7 +158,6 @@ To maintain portability and resilience across varying container virtualization e
 - **Source of Truth:** The Verification Frame is decoupled from the selection state of the Turn History Sidebar. It computes file chips and unified diff structures directly from the workspace's active Git HEAD.
 
 ### 6.2 Right Column: The Turn History Sidebar
-
 
 - **Milestone Grouping:** Telemetry and background tool logs are hidden by default. Turns pull their text labels dynamically from the Planner's task decomposition artifacts emitted via structured tool calls. Each turn block displays a categorical status badge (🟢 / 🔴).
 - **Action Breadcrumbs:** Clicking an item expands a read-only sequential breakdown of agent micro-actions (e.g., `Planner: Generated tasks`, `Composer: Assembled blueprint`).
@@ -212,8 +213,8 @@ To maintain portability and resilience across varying container virtualization e
 #### Executor History Preservation
 
 - **SYS-REQ-019:** **While** executing an assigned subtask loop, the Executor role **shall** retain short-term
-conversation history for troubleshooting, but the system's prompt injection layer **shall** narrow context focus
-strictly to the active subtask definition and its immediate validation gate failures.
+  conversation history for troubleshooting, but the system's prompt injection layer **shall** narrow context focus
+  strictly to the active subtask definition and its immediate validation gate failures.
 
 ### 7.6 Grounding Constraints
 
@@ -228,28 +229,27 @@ strictly to the active subtask definition and its immediate validation gate fail
 ### 7.7 Workspace Command Execution Centralization
 
 - **SYS-REQ-020 (Ubiquitous):** All workspace mutation, Git operations, and terminal command execution **shall** flow exclusively through the three core workspace functions exported from `src/workspace/index.ts`: `initializeWorkspace()`, `getGitSandbox()`, and `getExecCommand()`.
-  
 - **SYS-REQ-020a (Unwanted Behavior):** **If** any module directly imports and uses `child_process` methods (`exec`, `execSync`, `spawn`) instead of routing through the centralized workspace API, **then** the system **shall** fail code review as a violation of architectural boundary separation.
   - _Rationale:_ Centralized routing ensures unified timeout policies (GIT_TIMEOUT_MS, EXEC_TIMEOUT_MS), host-container environment abstraction, concurrency control via `GitSandbox.withLock()`, and coherent audit trails across all autonomous execution.
 
+### 7.8 Branch-Per-Task Policy
+
+- **SYS-REQ-021:** Each task **shall** run in a dedicated `task/<id>` git branch branched off the active trunk base branch. The system trunk branch **shall** remain untouched until human review and final merge/approval.
+- **SYS-REQ-021a:** **When** a task is parked (e.g., due to a circuit breaker breach or task blocking), the system **shall** commit all existing worktree mutations to the active `task/<id>` branch, and then checkout the base branch to prepare for the next task.
 
 ### Testing workspace policy — NO REPO MUTATION (MANDATORY)
 
 Tests MUST NOT create, persist, or mutate files or directories inside the repository working tree. To make the intent explicit and auditable:
 
-- Tests are allowed to create ephemeral workspaces only under the operating system temporary directory (e.g., os.tmpdir()). Never create test fixtures directly under the repository root (no tmp-*, .tmp/, test-fixtures/ in repo).
+- Tests are allowed to create ephemeral workspaces only under the operating system temporary directory (e.g., os.tmpdir()). Never create test fixtures directly under the repository root (no tmp-\*, .tmp/, test-fixtures/ in repo).
 - Always create ephemeral workspaces with unique names (fs.mkdtempSync or equivalent) and clean them up in a finally block or test teardown hook.
   - do not conflate the workspace the app is managing with the workspace containing the app's code.
-
-
 
   - If a test needs to exercise Git operations or workspace behaviors, prefer one of:
   - invoking the centralized workspace APIs in src/workspace,
   - mock the API in src/workspace so the tests don't make any real git operations or command executions.
-  
 
 Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git management) and prevents accidental destructive test behavior that could mutate or delete repository data. Adopting a test helper and a defensive check protects developers and CI runners from catastrophic mistakes.
-
 
 ## Policy exceptions
 
