@@ -1,7 +1,6 @@
 import { describe, it } from 'vitest';
 import assert from 'node:assert';
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt } from './utils/prompt';
-import { getIsolatedName, getWorkspaceHash } from './utils/sandbox';
 import { processEvents } from './test/utils/eventProcessor';
 import { SIMULATOR_SSE_EVENTS, FAILED_SIMULATOR_SSE_EVENTS } from './test/fixtures/mockStreamPayloads';
 
@@ -240,11 +239,6 @@ runTest('Deadlock Escalation: loop limits, cycle 5 healing, and ceiling escalati
     const finalEvent = emittedEvents[emittedEvents.length - 1];
     assert.strictEqual(finalEvent.type, 'loop.escalate_human');
     assert.ok(finalEvent.data.summary.includes('ceiling of 10 reached'), 'Escalation details should record ceiling breach');
-
-    // Simulate resources/sandbox cleanup evaluation
-    const expectedContainerName = 'copilot-runner-' + getWorkspaceHash();
-    const resolvedIsolatedName = getIsolatedName('copilot-runner');
-    assert.strictEqual(resolvedIsolatedName, expectedContainerName, 'Isolated path reference tracker must match workspace execution hash');
 });
 
 runTest('Disconnection Recovery & History Hydration integration', () => {
@@ -725,28 +719,6 @@ runTest('Multi-Click Race Assertions on /api/copilot/session/:sessionId/resume',
     assert.strictEqual(res2._status, 409, 'Secondary request must be rejected with 409 Conflict');
     assert.strictEqual(res2._json.success, false);
     assert.strictEqual(res2._json.error, 'Action in progress.');
-});
-
-runTest('Multi-user sandbox isolation (Salted Hashes & Salted Containers)', () => {
-    const sessionId1 = 'user-session-abc';
-    const sessionId2 = 'user-session-xyz';
-    
-    const hashUnsalted = getWorkspaceHash();
-    const hash1 = getWorkspaceHash(sessionId1);
-    const hash2 = getWorkspaceHash(sessionId2);
-    
-    assert.notStrictEqual(hash1, hashUnsalted, 'Salted hash should differ from unsalted hash');
-    assert.notStrictEqual(hash2, hashUnsalted, 'Salted hash should differ from unsalted hash');
-    assert.notStrictEqual(hash1, hash2, 'Distinct sessions must yield distinct hashes');
-    
-    const nameUnsalted = getIsolatedName('copilot-runner');
-    const name1 = getIsolatedName('copilot-runner', sessionId1);
-    const name2 = getIsolatedName('copilot-runner', sessionId2);
-    
-    assert.strictEqual(name1, `copilot-runner-${hash1}`);
-    assert.strictEqual(name2, `copilot-runner-${hash2}`);
-    assert.notStrictEqual(name1, nameUnsalted);
-    assert.notStrictEqual(name1, name2, 'Sandbox container names must be fully isolated across parallel session IDs');
 });
 
 runTest('Global Token Budget Limit Enforcement without Premium-Only checks', () => {

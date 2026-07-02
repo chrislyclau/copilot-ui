@@ -17,13 +17,11 @@ import { SessionRecord, StateSnapshot, CopilotEventData, Turn } from './types/se
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from './utils/prompt';
 import { makeDockerToolHandler } from './utils/toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from './config/tools';
-import { getWorkspaceRoot, getWorkspaceHash, getIsolatedName } from './utils/sandbox';
-
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from './config/gates';
 import { runSpecAudit } from './gates/specAuditor';
 import { sanitizeSensitives } from './utils/sanitizers';
 import { truncateOutput } from './utils/formatters';
-import { initializeWorkspace, getGitSandbox, getExecCommand, getWorkspaceHostLocation } from './workspace';
+import { initializeWorkspace, getGitSandbox, getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from './workspace';
 import { enforceWorkingMemoryTruncation, SlidingWindowCircularBuffer, clearCleanCache } from './utils/contextManager';
 import { fetchStubbedTraceResponse } from './utils/traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from './utils/escalationStore';
@@ -36,24 +34,6 @@ if (process.env.NODE_ENV !== 'test') {
 
 let stopSessionGarbageCollector: (() => void) | null = null;
 
-// --- GLOBAL ORPHAN CLEANUP ---
-
-
-async function cleanupOrphans() {
-  try {
-    const files = fs.readdirSync(process.cwd());
-    const tempDirs = files.filter(f => f.startsWith('tmp-') && fs.statSync(path.join(process.cwd(), f)).isDirectory());
-    for (const dir of tempDirs) {
-      const fullPath = path.join(process.cwd(), dir);
-      if (fullPath.startsWith('/tmp')) {
-          const exec = getExecCommand();
-          await exec(`rm -rf '${fullPath}'`);
-      }
-    }
-  } catch (e) {
-    console.error('[Cleanup] Failed to cleanup orphans:', e);
-  }
-}
 
 if (process.env.NODE_ENV !== 'test') {
   ['SIGINT', 'SIGTERM', 'uncaughtException'].forEach((signal) => {
@@ -65,7 +45,6 @@ if (process.env.NODE_ENV !== 'test') {
       }
       stopSessionGarbageCollector?.();
       stopSessionGarbageCollector = null;
-      cleanupOrphans();
       process.exit(signal === 'uncaughtException' ? 1 : 0);
     });
   });
@@ -2812,16 +2791,6 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
   } finally {
     updateStateSnapshot(currentSessionId, { isRunning: false, activeGate: undefined });
     writeLog(`[CleanupGuard] Orchestration sequence finished or failed.`);
-
-    // Scrub local runtime temporary worktree directories
-    try {
-      const workspaceHash = getWorkspaceHash(currentSessionId || undefined);
-      const targetTempDir = path.join(process.cwd(), `tmp-${workspaceHash}`);
-      await getExecCommand()(`rm -rf '${targetTempDir}'`);
-      writeLog(`[CleanupGuard] Scrubbed local runtime temporary worktree directory: ${targetTempDir}`);
-    } catch (dirErr: any) {
-      writeLog(`[CleanupGuard] Error scrub-cleaning temporary directories: ${dirErr?.message}`);
-    }
     
     await cleanup();
     if (!res.writableEnded && !res.destroyed) {
