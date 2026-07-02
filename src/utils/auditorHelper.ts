@@ -1,4 +1,4 @@
-import { CopilotClient } from '@github/copilot-sdk';
+import { CopilotClient } from '../copilotSdk/boundary';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG } from '../config/models';
 
