@@ -2,8 +2,8 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { CopilotClient, PermissionRequestResult, SessionConfig, ProviderConfig as SdkProviderConfig, Tool } from '@github/copilot-sdk';
 import dotenv from 'dotenv';
+import { CopilotClient, PermissionRequestResult, SessionConfig, SdkProviderConfig, Tool } from './copilotSdk/boundary';
 
 export interface CopilotCreateSessionOptions extends Omit<SessionConfig, 'provider'> {
   provider?: SdkProviderConfig;

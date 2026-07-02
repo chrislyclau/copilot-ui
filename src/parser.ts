@@ -3,7 +3,7 @@ import {
   AssistantMessageDeltaEvent,
   AssistantReasoningDeltaEvent,
   AssistantStreamingDeltaEvent
-} from '@github/copilot-sdk';
+} from './copilotSdk/boundary';
 import { ExtendedSessionEvent } from './types/events';
 import { assertNever } from './types';
 

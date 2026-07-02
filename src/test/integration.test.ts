@@ -1,10 +1,10 @@
 import { describe, it } from 'vitest';
 import assert from 'node:assert';
-import { CopilotClient } from '@github/copilot-sdk';
 import { CapiProxy } from './harness/CapiProxy';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { CopilotClient } from '../copilotSdk/boundary';
 
 describe('Copilot SDK Client Integration Tests', () => {
   it('Runs integration test with mock CapiProxy playback', { timeout: 60000 }, async () => {
