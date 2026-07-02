@@ -2,7 +2,7 @@ import { describe, it } from 'vitest';
 import assert from 'node:assert';
 import { extractAssistantText, isDeltaEvent, getBundledEvents, parseEvent, deriveEventMeta } from './parser';
 import { CopilotEvent, getEventTelemetryUsage } from './mockEvents';
-import { SessionEvent } from './copilotSdk/boundary';
+import { SessionEvent } from '@github/copilot-sdk';
 import { MODEL_TIERS, getNextTier } from './config/models';
 
 const runTest = it;

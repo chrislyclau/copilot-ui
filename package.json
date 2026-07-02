@@ -9,6 +9,7 @@
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit && eslint .",
     "diagnose:gates": "tsx scripts/diagnose-gates.ts",
+    "import:repo": "tsx scripts/import-repo.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
