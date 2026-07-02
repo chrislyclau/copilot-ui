@@ -1,4 +1,4 @@
-import { SessionEvent, ToolExecutionCompleteContent } from '@github/copilot-sdk';
+import { SessionEvent, ToolExecutionCompleteContent } from './copilotSdk/boundary';
 
 import { ExtendedSessionEvent } from './types/events';
 
