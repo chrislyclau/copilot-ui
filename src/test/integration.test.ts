@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import assert from 'node:assert';
-import { CopilotClient } from '@github/copilot-sdk';
+import { CopilotClient } from '../copilotSdk/boundary';
 import { CapiProxy } from './harness/CapiProxy';
 import * as path from 'path';
 import * as fs from 'fs';
