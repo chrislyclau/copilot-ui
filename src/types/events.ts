@@ -1,4 +1,4 @@
-import { SessionEvent } from '@github/copilot-sdk';
+import { SessionEvent } from '../copilotSdk/boundary';
 
 /**
  * Custom gate and loop events used for the verification cycles.
