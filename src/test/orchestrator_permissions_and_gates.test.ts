@@ -87,8 +87,12 @@ describe('Orchestration gate-run and resume Integration Tests', () => {
   let server: any;
   let serverPort: number;
   let proxy: CapiProxy;
+  let originalEnv: string | undefined;
 
   beforeAll(async () => {
+    originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+
     proxy = new CapiProxy();
     const proxyUrl = await proxy.start();
     process.env.COPILOT_API_URL = proxyUrl;
@@ -102,6 +106,7 @@ describe('Orchestration gate-run and resume Integration Tests', () => {
   });
 
   afterAll(async () => {
+    process.env.NODE_ENV = originalEnv;
     await proxy.stop();
     await new Promise<void>((resolve) => {
       if (server) {

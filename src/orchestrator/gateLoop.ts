@@ -20,6 +20,7 @@ import {
 import { DEFAULT_ROLES_CONFIG, MODEL_TIERS, getNextTier } from '../config/models';
 import { runGate, runTests, runLint, runWithTimeout } from '../gates';
 import { SessionRecord, StateSnapshot, CopilotEventData, Turn } from '../types/session';
+import { ExtendedSessionEvent } from '../types/events';
 import { AuditFinding } from '../types/audit';
 import {
   formatContextNarrowingPrompt,
@@ -93,16 +94,23 @@ function pruneConversationHistory(history: ReadonlyArray<{ role: 'user' | 'assis
 
 // Least-privilege permission evaluator for incoming commands and tools
 export const handleGateRunPermission = async (req: PermissionRequest): Promise<PermissionRequestResult> => {
-  const reqAsAny = req as any;
   let toolName = '';
-  if (reqAsAny.toolName) {
-    toolName = reqAsAny.toolName;
-  } else if (reqAsAny.name) {
-    toolName = reqAsAny.name;
-  } else if (reqAsAny.toolCalls && reqAsAny.toolCalls[0]) {
-    toolName = reqAsAny.toolCalls[0].function?.name || '';
-  } else if (reqAsAny.command) {
-    toolName = reqAsAny.command;
+  if (req.kind === 'custom-tool') {
+    toolName = req.toolName || '';
+  } else if (req.kind === 'shell') {
+    toolName = req.commands?.[0]?.identifier || req.fullCommandText?.split(' ')[0] || '';
+  } else {
+    // Backwards compatibility or alternative structures
+    const r = req as any;
+    if (r.toolName && typeof r.toolName === 'string') {
+      toolName = r.toolName;
+    } else if (r.name && typeof r.name === 'string') {
+      toolName = r.name;
+    } else if (r.toolCalls?.[0]?.function?.name && typeof r.toolCalls[0].function.name === 'string') {
+      toolName = r.toolCalls[0].function.name;
+    } else if (r.command && typeof r.command === 'string') {
+      toolName = r.command;
+    }
   }
   
   // Safe read-only/audit tools
@@ -147,8 +155,16 @@ export const handleGateRunPermission = async (req: PermissionRequest): Promise<P
   } as any;
 };
 
+interface RehydratedRequest extends express.Request {
+  _rehydratedHistory?: ReadonlyArray<{ readonly role: 'user' | 'assistant'; readonly content: string }>;
+  _rehydratedTurns?: ReadonlyArray<Turn>;
+  _rehydratedStateSnapshot?: StateSnapshot;
+  _blueprintTargets?: ReadonlyArray<string>;
+}
+
 export const handleGateLoop = async (req: express.Request, res: express.Response) => {
-  const isResume = req.path.includes('/gate-resume');
+  const rreq = req as RehydratedRequest;
+  const isResume = rreq.path.includes('/gate-resume');
   let session: CopilotSession | null = null;
   let unsubscribe: (() => void) | null = null;
   let isRequestClosed = false;
@@ -330,9 +346,9 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         };
         activeSessions.set(currentSessionId, sessRecord);
         
-        (req as any)._rehydratedHistory = storedSession.conversationHistory;
-        (req as any)._rehydratedTurns = storedSession.turns;
-        (req as any)._rehydratedStateSnapshot = storedSession.stateSnapshot;
+        rreq._rehydratedHistory = storedSession.conversationHistory;
+        rreq._rehydratedTurns = storedSession.turns;
+        rreq._rehydratedStateSnapshot = storedSession.stateSnapshot;
       }
     }
 
@@ -346,9 +362,9 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       }
     }
 
-    if (sessRecord && (sessRecord as any).pendingPatchedSpec) {
-      const updatedSpecText = (sessRecord as any).pendingPatchedSpec as string;
-      delete (sessRecord as any).pendingPatchedSpec;
+    if (sessRecord && sessRecord.pendingPatchedSpec) {
+      const updatedSpecText = sessRecord.pendingPatchedSpec;
+      activeSessions.set(currentSessionId!, { ...sessRecord, pendingPatchedSpec: undefined });
       promptStr = `${promptStr}\n\n[SYSTEM UPDATE] The system architecture specification has been updated. Please continue the task and adapt your strategy to adhere to the updated specification:\n\n${updatedSpecText}`;
     }
 
@@ -530,25 +546,24 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       writeLog(`[Ambiguity] Running pre-flight clarity check...`);
       try {
         const clarityConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
-        const claritySession = await client.createSession({
+        const claritySession: CopilotSession = await client.createSession({
           model: clarityConfig.model,
-          provider: clarityConfig.provider as any,
+          provider: clarityConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
           tools: [{
             name: AMBIGUITY_CHECK_TOOL.function.name,
             description: AMBIGUITY_CHECK_TOOL.function.description,
             parameters: AMBIGUITY_CHECK_TOOL.function.parameters,
-            handler: async (args: any) => {
+            handler: async () => {
               return { status: 'success' };
             }
-          } as any],
+          } as Tool<unknown>],
         });
-        const sessionAsAny = claritySession as any;
         
         let clarityData: any = null;
-        const unsub = sessionAsAny.on((event: any) => {
+        const unsub = claritySession.on('tool.execution_start', (event) => {
           writeLog(`[Ambiguity] Event: ${event.type} ${JSON.stringify(event.data || {})}`);
-          if (event.type === 'tool.execution_start' && event.data?.toolName === 'submit_clarity_check') {
+          if (event.data?.toolName === 'submit_clarity_check') {
             clarityData = event.data.arguments;
             writeLog(`[Ambiguity] Captured clarityData from tool.execution_start: ${JSON.stringify(clarityData)}`);
           }
@@ -556,15 +571,15 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         
         writeLog(`[Ambiguity] Sending request to ambiguity checker...`);
         const clarityAbortHandler = () => {
-          sessionAsAny.disconnect().catch(() => {});
+          claritySession.disconnect().catch(() => {});
         };
         abortController.signal.addEventListener('abort', clarityAbortHandler);
         try {
           await Promise.race([
-            sessionAsAny.sendAndWait({
+            claritySession.sendAndWait({
               prompt: formatClarityCheckPrompt(promptStr),
               tool_choice: { type: 'function', function: { name: 'submit_clarity_check' } }
-            }, 20000),
+            } as any, 20000),
             abortPromise
           ]);
         } finally {
@@ -606,7 +621,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       writeLog(`[Composer] Classifying task intent for: "${promptStr.substring(0, 50)}..."`);
       try {
         const classificationConfig = registryInstance.getExecutionConfig('gemini-3.1-flash-lite');
-        const classificationSession = await client.createSession({
+        const classificationSession: CopilotSession = await client.createSession({
           model: classificationConfig.model,
           provider: classificationConfig.provider as SdkProviderConfig,
           onPermissionRequest: async () => ({ kind: 'approve-once' }),
@@ -614,18 +629,16 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             name: COMPOSER_ROUTER_TOOL.function.name,
             description: COMPOSER_ROUTER_TOOL.function.description,
             parameters: COMPOSER_ROUTER_TOOL.function.parameters,
-            handler: async (args: unknown) => {
+            handler: async () => {
               return { status: 'success' };
             }
           } as Tool<unknown>],
         });
         
-        const sessionAsAny = classificationSession as any;
-
-        let toolArguments: { taskType?: string; targetDirectories?: string[] } | null = null;
-        const unsub = sessionAsAny.on((event: SessionEvent) => {
-          if (event.type === 'tool.execution_start' && (event.data as any)?.toolName === 'initialize_blueprint') {
-            toolArguments = (event.data as any).arguments as { taskType?: string; targetDirectories?: string[] };
+        let toolArguments: any = null;
+        const unsub = classificationSession.on('tool.execution_start', (event) => {
+          if (event.data?.toolName === 'initialize_blueprint') {
+            toolArguments = event.data.arguments;
             writeLog(`[Composer] Captured toolArguments from tool.execution_start: ${JSON.stringify(toolArguments)}`);
           }
         });
@@ -633,13 +646,13 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         const classificationPrompt = `Analyze the following user prompt for a code generation task and initialize the workspace blueprint: "${promptStr}"`;
 
         const classificationAbortHandler = () => {
-          sessionAsAny.disconnect().catch(() => {});
+          classificationSession.disconnect().catch(() => {});
         };
         abortController.signal.addEventListener('abort', classificationAbortHandler);
         try {
           // Force the tool choice to guarantee a structured plan
           await Promise.race([
-            sessionAsAny.sendAndWait({ 
+            classificationSession.sendAndWait({ 
               prompt: classificationPrompt,
               tool_choice: { type: 'function', function: { name: 'initialize_blueprint' } }
             } as any, 30000),
@@ -651,7 +664,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         
         unsub();
 
-        const args = toolArguments as any;
+        const args = toolArguments;
         if (args && args.taskType) {
           classifiedType = args.taskType;
           activeStepGates = resolvePipeline(classifiedType);
@@ -670,7 +683,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           await secureWrite(res, `data: ${JSON.stringify(planEvent)}\n\n`, isRequestClosed);
           
           if (args.targetDirectories) {
-             (req as any)._blueprintTargets = args.targetDirectories;
+             rreq._blueprintTargets = args.targetDirectories;
           }
         } else {
           writeLog(`[Composer] Structured classification failed or empty, falling back to feature.`);
@@ -988,6 +1001,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               abortController.signal.addEventListener('abort', onAbort);
 
               unsubscribe = activeSession.on(async (event: SessionEvent) => {
+                const extEvent = event as ExtendedSessionEvent;
                 if (sessionId && activeSessions.has(sessionId)) {
                   const sRec = activeSessions.get(sessionId)!;
                   activeSessions.set(sessionId, {
@@ -1003,15 +1017,14 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
                     return;
                   }
 
-                  if (event.type === 'tool.user_requested') {
+                  if (extEvent.type === 'tool.user_requested') {
                     toolWasCalledInThisTurn = true;
                   }
 
-                  if ((event as any).type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
+                  if (extEvent.type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
                     const sRec = activeSessions.get(sessionId)!;
-                    const resultData = event.data as any;
-                    const toolName = resultData?.toolName || 'unknown';
-                    const output = resultData?.stdout || resultData?.stderr || resultData?.output || '';
+                    const toolName = extEvent.data.toolName || 'unknown';
+                    const output = extEvent.data.stdout || extEvent.data.stderr || '';
                     activeSessions.set(sessionId, {
                         ...sRec,
                         conversationHistory: [
@@ -1022,23 +1035,23 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
                   }
 
                   // Aggregate assistant message content
-                  if (event.type === 'assistant.message') {
-                    assistantMessage += event.data.content || '';
-                  } else if (event.type === 'assistant.message_delta') {
-                    assistantMessage += (event as any).data.deltaContent || (event as any).data.content || '';
+                  if (extEvent.type === 'assistant.message') {
+                    assistantMessage += extEvent.data.content || '';
+                  } else if (extEvent.type === 'assistant.message_delta') {
+                    assistantMessage += extEvent.data.deltaContent || '';
                   }
 
                   // Step 2: Emit all SDK events to client
-                  await secureWrite(res, `data: ${JSON.stringify(event)}\n\n`, isRequestClosed);
+                  await secureWrite(res, `data: ${JSON.stringify(extEvent)}\n\n`, isRequestClosed);
 
-                  if (event.type === 'session.idle' || event.type === 'session.shutdown') {
+                  if (extEvent.type === 'session.idle' || extEvent.type === 'session.shutdown') {
                     if (unsubscribe) { unsubscribe(); unsubscribe = null; }
                     abortController.signal.removeEventListener('abort', onAbort);
                     resolve();
-                  } else if (event.type === 'session.error') {
+                  } else if (extEvent.type === 'session.error') {
                     if (unsubscribe) { unsubscribe(); unsubscribe = null; }
                     abortController.signal.removeEventListener('abort', onAbort);
-                    reject(new Error(event.data.message));
+                    reject(new Error(extEvent.data.message));
                   }
                 } catch (err: unknown) {
                   writeLog(`[GateLoop] Error forwarding event: ${err instanceof Error ? err.message : String(err)}`);
