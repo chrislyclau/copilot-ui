@@ -13,6 +13,7 @@ import {
   SdkProviderConfig,
   Tool,
   SessionEvent,
+  MessageOptions,
   ToolExecutionCompleteContent
 } from '../copilotSdk/boundary';
 
@@ -46,6 +47,26 @@ import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEsc
 import { createSseWriter } from '../utils/sseWriter';
 import { getSession, saveSession, deleteSession, getAllSessions } from '../db/sessionStore';
 import { ProviderRegistry } from '../utils/providerRegistry';
+
+export interface ClarityCheckData {
+  score: number;
+  missingVariables: string[];
+  feedback?: string;
+}
+
+export interface ComposerRouteArguments {
+  taskType?: string;
+  targetDirectories?: string[];
+}
+
+export interface ExtendedMessageOptions extends MessageOptions {
+  tool_choice?: {
+    type: 'function';
+    function: {
+      name: string;
+    };
+  };
+}
 
 // From orchestrator/sessionState (unified shared state)
 import {
@@ -93,23 +114,29 @@ function pruneConversationHistory(history: ReadonlyArray<{ role: 'user' | 'assis
 }
 
 // Least-privilege permission evaluator for incoming commands and tools
-export const handleGateRunPermission = async (req: PermissionRequest): Promise<PermissionRequestResult> => {
+export const handleGateRunPermission = async (req: PermissionRequest): Promise<PermissionRequestResult & { reason?: string }> => {
   let toolName = '';
   if (req.kind === 'custom-tool') {
     toolName = req.toolName || '';
   } else if (req.kind === 'shell') {
     toolName = req.commands?.[0]?.identifier || req.fullCommandText?.split(' ')[0] || '';
   } else {
-    // Backwards compatibility or alternative structures
-    const r = req as any;
-    if (r.toolName && typeof r.toolName === 'string') {
-      toolName = r.toolName;
-    } else if (r.name && typeof r.name === 'string') {
-      toolName = r.name;
-    } else if (r.toolCalls?.[0]?.function?.name && typeof r.toolCalls[0].function.name === 'string') {
-      toolName = r.toolCalls[0].function.name;
-    } else if (r.command && typeof r.command === 'string') {
-      toolName = r.command;
+    // Backwards compatibility or alternative structures safely checked
+    const record = req as unknown as Record<string, unknown>;
+    if (typeof record.toolName === 'string' && record.toolName) {
+      toolName = record.toolName;
+    } else if (typeof record.name === 'string' && record.name) {
+      toolName = record.name;
+    } else if (Array.isArray(record.toolCalls) && record.toolCalls.length > 0) {
+      const firstCall = record.toolCalls[0] as Record<string, unknown>;
+      if (firstCall && firstCall.function && typeof firstCall.function === 'object') {
+        const fn = firstCall.function as Record<string, unknown>;
+        if (typeof fn.name === 'string' && fn.name) {
+          toolName = fn.name;
+        }
+      }
+    } else if (typeof record.command === 'string' && record.command) {
+      toolName = record.command;
     }
   }
   
@@ -142,7 +169,7 @@ export const handleGateRunPermission = async (req: PermissionRequest): Promise<P
         kind: 'reject',
         feedback: `Execution of ${toolName} requires an active, authorized orchestration session context.`,
         reason: `Execution of ${toolName} requires an active, authorized orchestration session context.`
-      } as any;
+      };
     }
   }
 
@@ -152,7 +179,7 @@ export const handleGateRunPermission = async (req: PermissionRequest): Promise<P
     kind: 'reject',
     feedback: `Tool ${toolName} is not authorized`,
     reason: `Tool ${toolName} is not authorized`
-  } as any;
+  };
 };
 
 interface RehydratedRequest extends express.Request {
@@ -375,13 +402,26 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       return;
     }
 
-    // SYS-REQ-023: Validate/normalize client-supplied cwd via getWorkspaceRoot
+    // SYS-REQ-023: Validate/normalize client-supplied cwd via getWorkspaceRoot.
+    // SECURITY JUSTIFICATION: Absolute paths are accepted to support container-isolated execution environments
+    // (e.g., Docker runs where the host directory structure mapping differs from native).
+    // To maintain a strict security boundary, we employ checkPathInside() which performs absolute resolution and
+    // realpath/symlink resolution to guarantee the target directory is physically inside the authorized list of roots.
     let runCwd = getWorkspaceRoot();
     if (cwd && typeof cwd === 'string') {
+      // Reject any malicious patterns trying to escape directories via path manipulation
+      if (cwd.includes('..') || /[\x00-\x1F;`"$&|<>*?(){}\n\r]/.test(cwd)) {
+        writeLog(`[Security Blocked] Malicious path characters detected: ${cwd}`);
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Access denied: Invalid directory path characters.');
+        await cleanup();
+        return;
+      }
+
       if (path.isAbsolute(cwd)) {
         runCwd = cwd;
       } else {
-        runCwd = path.join(getWorkspaceRoot(), path.normalize(cwd).replace(/^(\.\.(\/|\\|$))+/, ''));
+        runCwd = path.join(getWorkspaceRoot(), path.normalize(cwd));
       }
     }
 
@@ -560,11 +600,16 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           } as Tool<unknown>],
         });
         
-        let clarityData: any = null;
+        let clarityData: ClarityCheckData | null = null;
         const unsub = claritySession.on('tool.execution_start', (event) => {
           writeLog(`[Ambiguity] Event: ${event.type} ${JSON.stringify(event.data || {})}`);
-          if (event.data?.toolName === 'submit_clarity_check') {
-            clarityData = event.data.arguments;
+          if (event.data?.toolName === 'submit_clarity_check' && event.data.arguments) {
+            const args = event.data.arguments as Record<string, unknown>;
+            clarityData = {
+              score: typeof args.score === 'number' ? args.score : 0,
+              missingVariables: Array.isArray(args.missingVariables) ? args.missingVariables.map(v => String(v)) : [],
+              feedback: typeof args.feedback === 'string' ? args.feedback : undefined,
+            };
             writeLog(`[Ambiguity] Captured clarityData from tool.execution_start: ${JSON.stringify(clarityData)}`);
           }
         });
@@ -579,7 +624,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             claritySession.sendAndWait({
               prompt: formatClarityCheckPrompt(promptStr),
               tool_choice: { type: 'function', function: { name: 'submit_clarity_check' } }
-            } as any, 20000),
+            } as ExtendedMessageOptions, 20000),
             abortPromise
           ]);
         } finally {
@@ -589,14 +634,15 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         unsub();
         await claritySession.disconnect();
         
-        if (clarityData && clarityData.score < 0.85) {
-          const missingList = clarityData.missingVariables.map((v: string) => `• ${v}`).join('\n');
+        const finalClarityData = clarityData as ClarityCheckData | null;
+        if (finalClarityData && finalClarityData.score < 0.85) {
+          const missingList = finalClarityData.missingVariables.map((v: string) => `• ${v}`).join('\n');
           const clarityEvent = {
             type: 'loop.clarity_check_failed',
             data: {
-              score: clarityData.score,
-              missingVariables: clarityData.missingVariables,
-              feedback: `Goal ambiguity detected (Clarity: ${clarityData.score}). Please clarify:\n${missingList}`
+              score: finalClarityData.score,
+              missingVariables: finalClarityData.missingVariables,
+              feedback: `Goal ambiguity detected (Clarity: ${finalClarityData.score}). Please clarify:\n${missingList}`
             }
           };
           await secureWrite(res, `data: ${JSON.stringify(clarityEvent)}\n\n`, isRequestClosed);
@@ -634,11 +680,14 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             }
           } as Tool<unknown>],
         });
-        
-        let toolArguments: any = null;
+               let toolArguments: ComposerRouteArguments | null = null;
         const unsub = classificationSession.on('tool.execution_start', (event) => {
-          if (event.data?.toolName === 'initialize_blueprint') {
-            toolArguments = event.data.arguments;
+          if (event.data?.toolName === 'initialize_blueprint' && event.data.arguments) {
+            const args = event.data.arguments as Record<string, unknown>;
+            toolArguments = {
+              taskType: typeof args.taskType === 'string' ? args.taskType : undefined,
+              targetDirectories: Array.isArray(args.targetDirectories) ? args.targetDirectories.map(d => String(d)) : undefined,
+            };
             writeLog(`[Composer] Captured toolArguments from tool.execution_start: ${JSON.stringify(toolArguments)}`);
           }
         });
@@ -655,7 +704,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             classificationSession.sendAndWait({ 
               prompt: classificationPrompt,
               tool_choice: { type: 'function', function: { name: 'initialize_blueprint' } }
-            } as any, 30000),
+            } as ExtendedMessageOptions, 30000),
             abortPromise
           ]);
         } finally {
@@ -664,7 +713,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         
         unsub();
 
-        const args = toolArguments;
+        const args = toolArguments as ComposerRouteArguments | null;
         if (args && args.taskType) {
           classifiedType = args.taskType;
           activeStepGates = resolvePipeline(classifiedType);
@@ -907,7 +956,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               totalInputTokens: 0,
               totalOutputTokens: 0,
               eventSequenceCounter: 0,
-              stateSnapshot: (req as any)._rehydratedStateSnapshot || {
+              stateSnapshot: (req as RehydratedRequest)._rehydratedStateSnapshot || {
                 isRunning: true,
                 retryCount: retryCount,
                 currentTier: currentModel,
@@ -915,8 +964,8 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
                 hasFailureState: consecutiveFailures > 0,
                 awaitingHuman: false,
               },
-              conversationHistory: (req as any)._rehydratedHistory || [],
-              turns: (req as any)._rehydratedTurns || [],
+              conversationHistory: (req as RehydratedRequest)._rehydratedHistory || [],
+              turns: (req as RehydratedRequest)._rehydratedTurns || [],
               diagnosticTrail: []
             });
             writeLog(`[GateLoop] Cached new session ${sessionId} for future reuse.`);
@@ -1331,7 +1380,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             const sessionRec = activeSessions.get(sessionId)!;
             try {
               const currentSha = await getGitSandbox().getHeadShaAsync();
-              if ((sessionRec as any).lastPassedSpecAuditSha === currentSha) {
+              if (sessionRec.lastPassedSpecAuditSha === currentSha) {
                 skipSpecAudit = true;
                 writeLog(`[GateLoop] Skipping Spec-Gate Auditor: Diff is identical to last passing state (SHA: ${currentSha})`);
               }
@@ -1363,7 +1412,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               const sessionRec = activeSessions.get(sessionId)!;
               try {
                 const currentSha = await getGitSandbox().getHeadShaAsync();
-                (sessionRec as any).lastPassedSpecAuditSha = currentSha;
+                sessionRec.lastPassedSpecAuditSha = currentSha;
               } catch (e) {}
             }
 

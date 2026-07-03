@@ -9,9 +9,10 @@ export interface GateResult {
 }
 
 export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd?: string, externalSignal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
-  // Validate cmd strictly to prevent shell injection
-  if (/[\x00-\x1F;`|&<>]/.test(cmd)) {
-    throw new Error(`Invalid command detected: shell control characters are forbidden.`);
+  // Strict command allowlist validation to completely eliminate shell-injection risks from untrusted boundaries
+  const isAllowedCommand = cmd === 'npm run test -- --watch=false' || cmd === 'npm run lint';
+  if (!isAllowedCommand) {
+    throw new Error(`Execution of unauthorized command is blocked: ${cmd}`);
   }
 
   if (cwd) {

@@ -9,6 +9,7 @@ export type {
   ProviderConfig as SdkProviderConfig,
   SessionConfig,
   SessionEvent,
+  MessageOptions,
   Tool,
   ToolExecutionCompleteContent,
   ToolExecutionCompleteEvent,

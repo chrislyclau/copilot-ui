@@ -18,16 +18,26 @@ export interface SseWriter {
   sseWriteLocks: Map<Response, Promise<void>>;
 }
 
+export interface RawEventObj {
+  readonly id?: string;
+  readonly timestamp?: string;
+  readonly type?: string;
+  readonly sequenceId?: number;
+  readonly data?: unknown;
+  readonly [key: string]: unknown;
+}
+
 /**
  * Enriches a parsed event payload with a sequenceId and the session's stateSnapshot.
  */
 export function enrichEventPayload(
-  parsedEventObj: any,
+  parsedEventObj: RawEventObj,
   sequenceId: number,
   stateSnapshot?: StateSnapshot
 ): CopilotEventData {
-  const enrichedData = (parsedEventObj.data && typeof parsedEventObj.data === 'object'
-    ? { ...parsedEventObj.data }
+  const rawData = parsedEventObj.data;
+  const enrichedData = (rawData && typeof rawData === 'object'
+    ? { ...rawData }
     : {}) as Record<string, unknown>;
 
   enrichedData.sequenceId = sequenceId;
@@ -38,6 +48,10 @@ export function enrichEventPayload(
 
   return {
     ...parsedEventObj,
+    id: parsedEventObj.id || '',
+    timestamp: parsedEventObj.timestamp || new Date().toISOString(),
+    type: parsedEventObj.type || 'unknown',
+    sequenceId,
     data: enrichedData
   };
 }
@@ -50,6 +64,10 @@ export function createSseWriter({
   const sseWriteLocks = new Map<Response, Promise<void>>();
 
   async function secureWrite(res: Response, data: string, isRequestClosed: boolean = false) {
+    if (res.destroyed || res.writableEnded || isRequestClosed) {
+      writeLog(`[WRITE] secureWrite skipped early because response is closed/destroyed/writableEnded.`);
+      return;
+    }
     const extRes = res as ExtendedResponse;
     if (extRes.simulateBackpressureDelayMs && Number(extRes.simulateBackpressureDelayMs) > 0) {
       await new Promise(r => setTimeout(r, Number(extRes.simulateBackpressureDelayMs)));
