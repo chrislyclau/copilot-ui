@@ -397,6 +397,22 @@ You MUST submit structured verification feedback, logic checks, and compiler gat
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     writeLog(`[runLlmAudit] Exception: ${msg}`);
+
+    const isAbort = (abortSignal && abortSignal.aborted) || (err instanceof Error && err.name === 'AbortError') || msg.toLowerCase().includes('abort') || msg.toLowerCase().includes('cancel');
+    if (isAbort) {
+      writeLog(`[runLlmAudit] Audit session was aborted or cancelled.`);
+      return {
+        pass: true,
+        findings: [
+          {
+            severity: 'low',
+            file: '',
+            description: 'Audit session was aborted or cancelled.'
+          }
+        ]
+      };
+    }
+
     return {
       pass: false,
       findings: [

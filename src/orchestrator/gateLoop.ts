@@ -359,12 +359,25 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     }
 
     // SYS-REQ-023: Validate/normalize client-supplied cwd via getWorkspaceRoot
-    const runCwd = (cwd && typeof cwd === 'string')
-      ? path.join(getWorkspaceRoot(), path.normalize(cwd).replace(/^(\.\.(\/|\\|$))+/, ''))
-      : getWorkspaceRoot();
+    let runCwd = getWorkspaceRoot();
+    if (cwd && typeof cwd === 'string') {
+      if (path.isAbsolute(cwd)) {
+        runCwd = cwd;
+      } else {
+        runCwd = path.join(getWorkspaceRoot(), path.normalize(cwd).replace(/^(\.\.(\/|\\|$))+/, ''));
+      }
+    }
 
-    const resolvedWorkspaceRoot = path.resolve(getWorkspaceRoot());
-    const resolvedRunCwd = path.resolve(runCwd);
+    const getRealPath = (p: string): string => {
+      try {
+        return fs.realpathSync(p);
+      } catch {
+        return path.resolve(p);
+      }
+    };
+
+    const resolvedWorkspaceRoot = getRealPath(getWorkspaceRoot());
+    const resolvedRunCwd = getRealPath(runCwd);
     const relativePath = path.relative(resolvedWorkspaceRoot, resolvedRunCwd);
     const isCwdSafe = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
     if (!isCwdSafe) {

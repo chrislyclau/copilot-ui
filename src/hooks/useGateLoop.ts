@@ -4,6 +4,7 @@ import { CopilotEvent, TurnData } from '../mockEvents';
 import { deriveEventMeta } from '../parser';
 import { GateConfig } from '../types';
 import { ExtendedSessionEvent } from '../types/events';
+import { getSequenceId } from '../types/session';
 
 interface HistoryPayload {
   readonly turns: readonly {
@@ -69,7 +70,7 @@ export function useGateLoop(
     abortControllerRef.current = new AbortController();
 
     let hydrationSettled = !((setScenarioEvents || setScenarioTurns) && sessionId);
-    let pendingEventsQueue: readonly ExtendedSessionEvent[] = [];
+    let pendingEventsQueue: readonly unknown[] = [];
     let minValidSeqIdFromSnapshot = 0;
 
     const processLiveEvent = (data: ExtendedSessionEvent) => {
@@ -242,23 +243,28 @@ export function useGateLoop(
       if (pendingEventsQueue.length > 0) {
         let eventsToFlush = [...pendingEventsQueue];
         if (minValidSeqIdFromSnapshot > 0) {
-          eventsToFlush = eventsToFlush.filter((ev: ExtendedSessionEvent) => {
-            const evObj = ev as Record<string, unknown>;
-            const seq = evObj?.sequenceId ?? (evObj?.data as Record<string, unknown> | undefined)?.sequenceId;
-            return seq === undefined || (typeof seq === 'number' && seq >= minValidSeqIdFromSnapshot);
+          eventsToFlush = eventsToFlush.filter((ev: any) => {
+            const seq = getSequenceId(ev);
+            return seq === 0 || seq >= minValidSeqIdFromSnapshot;
           });
         }
         logClient(`Flushing ${eventsToFlush.length} queued live events post-hydration.`);
-        eventsToFlush.forEach(processLiveEvent);
+        eventsToFlush.forEach((ev) => processLiveEvent(ev as ExtendedSessionEvent));
         pendingEventsQueue = [];
       }
     })();
     
     try {
+      let requestBody: any = payload;
+      if (payload && 'prompt' in payload) {
+        const { setScenarioTurns, ...serializablePayload } = payload as GateConfig;
+        requestBody = serializablePayload;
+      }
+
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(requestBody),
         signal: abortControllerRef.current.signal
       });
 
@@ -298,7 +304,7 @@ export function useGateLoop(
             }
 
             if (!hydrationSettled) {
-               pendingEventsQueue = [...pendingEventsQueue, data as ExtendedSessionEvent];
+               pendingEventsQueue = [...pendingEventsQueue, data];
                logClient(`Hydration active. Event queued.`);
             } else {
                processLiveEvent(data as ExtendedSessionEvent);

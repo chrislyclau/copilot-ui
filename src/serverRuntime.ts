@@ -904,12 +904,25 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       if (isRequestClosed) return;
 
-      const inputCwd = (cwd && typeof cwd === 'string')
-        ? path.join(getWorkspaceRoot(), path.normalize(cwd).replace(/^(\.\.(\/|\\|$))+/, ''))
-        : getWorkspaceRoot();
+      let inputCwd = getWorkspaceRoot();
+      if (cwd && typeof cwd === 'string') {
+        if (path.isAbsolute(cwd)) {
+          inputCwd = cwd;
+        } else {
+          inputCwd = path.join(getWorkspaceRoot(), path.normalize(cwd).replace(/^(\.\.(\/|\\|$))+/, ''));
+        }
+      }
 
-      const resolvedWorkspaceRoot = path.resolve(getWorkspaceRoot());
-      const resolvedInputCwd = path.resolve(inputCwd);
+      const getRealPath = (p: string): string => {
+        try {
+          return fs.realpathSync(p);
+        } catch {
+          return path.resolve(p);
+        }
+      };
+
+      const resolvedWorkspaceRoot = getRealPath(getWorkspaceRoot());
+      const resolvedInputCwd = getRealPath(inputCwd);
       const relativePath = path.relative(resolvedWorkspaceRoot, resolvedInputCwd);
       const isCwdSafe = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
       if (!isCwdSafe) {
@@ -1285,13 +1298,26 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       return;
     }
 
-    let runCwd: string | undefined = explicitCwd 
-      ? path.join(getWorkspaceRoot(), path.normalize(explicitCwd).replace(/^(\.\.(\/|\\|$))+/, ''))
-      : undefined;
+    let runCwd: string | undefined = undefined;
+    if (explicitCwd && typeof explicitCwd === 'string') {
+      if (path.isAbsolute(explicitCwd)) {
+        runCwd = explicitCwd;
+      } else {
+        runCwd = path.join(getWorkspaceRoot(), path.normalize(explicitCwd).replace(/^(\.\.(\/|\\|$))+/, ''));
+      }
+    }
 
     if (runCwd) {
-      const resolvedWorkspaceRoot = path.resolve(getWorkspaceRoot());
-      const resolvedRunCwd = path.resolve(runCwd);
+      const getRealPath = (p: string): string => {
+        try {
+          return fs.realpathSync(p);
+        } catch {
+          return path.resolve(p);
+        }
+      };
+
+      const resolvedWorkspaceRoot = getRealPath(getWorkspaceRoot());
+      const resolvedRunCwd = getRealPath(runCwd);
       const relativePath = path.relative(resolvedWorkspaceRoot, resolvedRunCwd);
       const isCwdSafe = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
       if (!isCwdSafe) {

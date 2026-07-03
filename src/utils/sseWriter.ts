@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import type { CopilotEventData, SessionRecord, Turn } from '../types/session';
+import type { CopilotEventData, SessionRecord, Turn, StateSnapshot } from '../types/session';
 
 export interface ExtendedResponse extends Response {
   simulateBackpressureDelayMs?: number;
@@ -16,6 +16,30 @@ export interface SseWriter {
   secureWrite: (res: Response, data: string, isRequestClosed?: boolean) => Promise<void>;
   flushSseAndEnd: (res: Response) => Promise<void>;
   sseWriteLocks: Map<Response, Promise<void>>;
+}
+
+/**
+ * Enriches a parsed event payload with a sequenceId and the session's stateSnapshot.
+ */
+export function enrichEventPayload(
+  parsedEventObj: any,
+  sequenceId: number,
+  stateSnapshot?: StateSnapshot
+): CopilotEventData {
+  const enrichedData = (parsedEventObj.data && typeof parsedEventObj.data === 'object'
+    ? { ...parsedEventObj.data }
+    : {}) as Record<string, unknown>;
+
+  enrichedData.sequenceId = sequenceId;
+
+  if (stateSnapshot) {
+    enrichedData.stateSnapshot = stateSnapshot;
+  }
+
+  return {
+    ...parsedEventObj,
+    data: enrichedData
+  };
 }
 
 export function createSseWriter({
@@ -52,20 +76,11 @@ export function createSseWriter({
                   turns: session.turns ? [...session.turns] : []
                 });
                 const updatedSession = activeSessions.get(sessId)!;
-                const enrichedData = (parsedEventObj.data && typeof parsedEventObj.data === 'object'
-                  ? { ...parsedEventObj.data }
-                  : {}) as Record<string, unknown>;
-                
-                enrichedData.sequenceId = newSequenceCounter;
-
-                if (updatedSession.stateSnapshot) {
-                  enrichedData.stateSnapshot = updatedSession.stateSnapshot;
-                }
-                
-                const typedEventObj: CopilotEventData = {
-                  ...parsedEventObj,
-                  data: enrichedData
-                };
+                const typedEventObj = enrichEventPayload(
+                  parsedEventObj,
+                  newSequenceCounter,
+                  updatedSession.stateSnapshot
+                );
                 eventObj = typedEventObj;
 
                 if (updatedSession.turns.length === 0) {

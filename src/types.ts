@@ -1,6 +1,6 @@
 import { CopilotEvent, TurnData } from './mockEvents';
 
-export interface GateConfig {
+export interface RunGateLoopRequest {
   readonly prompt: string;
   readonly gates: ReadonlyArray<'tests' | 'lint' | 'audit'>;
   readonly maxRetries: number;
@@ -11,6 +11,9 @@ export interface GateConfig {
   readonly diagnosticScenario?: string;
   readonly replayTraceId?: string;
   readonly simulateBackpressureDelayMs?: number;
+}
+
+export interface GateConfig extends RunGateLoopRequest {
   readonly setScenarioTurns?: (scenarioId: string, turns: readonly TurnData[], events: ReadonlyArray<CopilotEvent>) => void;
 }
 
