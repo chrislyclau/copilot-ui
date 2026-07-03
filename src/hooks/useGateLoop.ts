@@ -4,7 +4,7 @@ import { CopilotEvent, TurnData } from '../mockEvents';
 import { deriveEventMeta } from '../parser';
 import { GateConfig } from '../types';
 import { ExtendedSessionEvent } from '../types/events';
-import { getSequenceId } from '../types/session';
+import { getSequenceId, CopilotEventData } from '../types/session';
 
 interface HistoryPayload {
   readonly turns: readonly {
@@ -70,7 +70,7 @@ export function useGateLoop(
     abortControllerRef.current = new AbortController();
 
     let hydrationSettled = !((setScenarioEvents || setScenarioTurns) && sessionId);
-    let pendingEventsQueue: readonly unknown[] = [];
+    let pendingEventsQueue: readonly CopilotEventData[] = [];
     let minValidSeqIdFromSnapshot = 0;
 
     const processLiveEvent = (data: ExtendedSessionEvent) => {

@@ -8,4 +8,5 @@ export interface AuditFinding {
 export interface AuditResult {
   readonly pass: boolean;
   readonly findings: ReadonlyArray<AuditFinding>;
+  readonly aborted?: boolean;
 }

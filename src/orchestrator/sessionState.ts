@@ -403,6 +403,7 @@ You MUST submit structured verification feedback, logic checks, and compiler gat
       writeLog(`[runLlmAudit] Audit session was aborted or cancelled.`);
       return {
         pass: true,
+        aborted: true,
         findings: [
           {
             severity: 'low',

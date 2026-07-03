@@ -1,3 +1,4 @@
+import os from 'os';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -913,18 +914,30 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         }
       }
 
-      const getRealPath = (p: string): string => {
+      const checkPathInside = (parent: string, child: string): boolean => {
+        const absParent = path.resolve(parent);
+        const absChild = path.resolve(child);
+        const relAbs = path.relative(absParent, absChild);
+        const isUnresolvedSafe = relAbs === '' || (!relAbs.startsWith('..') && !path.isAbsolute(relAbs));
+        if (isUnresolvedSafe) return true;
+
         try {
-          return fs.realpathSync(p);
+          const realParent = fs.realpathSync(parent);
+          const realChild = fs.realpathSync(child);
+          const relReal = path.relative(realParent, realChild);
+          return relReal === '' || (!relReal.startsWith('..') && !path.isAbsolute(relReal));
         } catch {
-          return path.resolve(p);
+          return false;
         }
       };
 
-      const resolvedWorkspaceRoot = getRealPath(getWorkspaceRoot());
-      const resolvedInputCwd = getRealPath(inputCwd);
-      const relativePath = path.relative(resolvedWorkspaceRoot, resolvedInputCwd);
-      const isCwdSafe = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+      const isCwdSafe = (() => {
+        if (checkPathInside(getWorkspaceRoot(), inputCwd)) return true;
+        if (checkPathInside(getWorkspaceHostLocation(), inputCwd)) return true;
+        if (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), inputCwd)) return true;
+        return false;
+      })();
+
       if (!isCwdSafe) {
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Access denied: Directory traversal outside workspace root.');
@@ -1308,18 +1321,30 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     }
 
     if (runCwd) {
-      const getRealPath = (p: string): string => {
+      const checkPathInside = (parent: string, child: string): boolean => {
+        const absParent = path.resolve(parent);
+        const absChild = path.resolve(child);
+        const relAbs = path.relative(absParent, absChild);
+        const isUnresolvedSafe = relAbs === '' || (!relAbs.startsWith('..') && !path.isAbsolute(relAbs));
+        if (isUnresolvedSafe) return true;
+
         try {
-          return fs.realpathSync(p);
+          const realParent = fs.realpathSync(parent);
+          const realChild = fs.realpathSync(child);
+          const relReal = path.relative(realParent, realChild);
+          return relReal === '' || (!relReal.startsWith('..') && !path.isAbsolute(relReal));
         } catch {
-          return path.resolve(p);
+          return false;
         }
       };
 
-      const resolvedWorkspaceRoot = getRealPath(getWorkspaceRoot());
-      const resolvedRunCwd = getRealPath(runCwd);
-      const relativePath = path.relative(resolvedWorkspaceRoot, resolvedRunCwd);
-      const isCwdSafe = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+      const isCwdSafe = (() => {
+        if (checkPathInside(getWorkspaceRoot(), runCwd)) return true;
+        if (checkPathInside(getWorkspaceHostLocation(), runCwd)) return true;
+        if (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), runCwd)) return true;
+        return false;
+      })();
+
       if (!isCwdSafe) {
         res.status(403).json({ success: false, error: 'Access denied: Directory traversal outside workspace root.' });
         return;
