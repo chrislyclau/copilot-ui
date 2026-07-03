@@ -6,7 +6,7 @@ export interface GateConfig {
   readonly maxRetries: number;
   readonly sessionId: string;
   readonly model: string;
-  readonly apiKey: string;
+  readonly apiKey?: string;
   readonly cwd: string;
   readonly diagnosticScenario?: string;
   readonly replayTraceId?: string;

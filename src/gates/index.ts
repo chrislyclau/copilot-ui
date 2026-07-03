@@ -10,7 +10,8 @@ export interface GateResult {
 
 export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd?: string, externalSignal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   if (cwd) {
-    const checkDir = await getExecCommand()(`test -d '${cwd}'`, externalSignal);
+    const sanitizedCwd = cwd.replace(/'/g, "'\\''");
+    const checkDir = await getExecCommand()(`test -d '${sanitizedCwd}'`, externalSignal);
     if (checkDir.exitCode !== 0) {
       return { stdout: '', stderr: `Directory ${cwd} does not exist.` };
     }
@@ -18,10 +19,18 @@ export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd
 
   const execCommand = getExecCommand();
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const combinedSignal = externalSignal ? (AbortSignal as any).any([externalSignal, timeoutSignal]) : timeoutSignal;
+  
+  function combineSignals(s1: AbortSignal, s2: AbortSignal): AbortSignal {
+    const controller = new AbortController();
+    s1.addEventListener('abort', () => controller.abort(s1.reason), { once: true });
+    s2.addEventListener('abort', () => controller.abort(s2.reason), { once: true });
+    return controller.signal;
+  }
+
+  const combinedSignal = externalSignal ? combineSignals(externalSignal, timeoutSignal) : timeoutSignal;
 
   const result = await execCommand(
-    cwd ? `cd '${cwd}' && ${cmd}` : cmd,
+    cwd ? `cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}` : cmd,
     combinedSignal
   ).catch((err: any) => {
     if (timeoutSignal.aborted) {

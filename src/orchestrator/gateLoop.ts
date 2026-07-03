@@ -129,13 +129,13 @@ export const handleGateRunPermission = async (req: PermissionRequest): Promise<P
       return { kind: 'approve-once' };
     } else {
       writeLog(`[Security Check Failed] Denied tool execution outside of an active running session context: ${toolName}`);
-      return { kind: 'reject' } as any;
+      return { kind: 'reject' };
     }
   }
 
   // Default block for other tools
   writeLog(`[Security Check Failed] Blocked unknown or unauthorized tool: ${toolName}`);
-  return { kind: 'reject' } as any;
+  return { kind: 'reject' };
 };
 
 export const handleGateLoop = async (req: express.Request, res: express.Response) => {

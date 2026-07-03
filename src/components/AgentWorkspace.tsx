@@ -23,7 +23,8 @@ export function AgentWorkspace({ runWithGates, isGateLoopRunning, activeScenario
         maxRetries: 2,
         sessionId: activeScenarioId,
         model: 'gemini-3.1-pro-preview',
-        apiKey: 'dummy',
+        // FIXME: API Key is dummy, only for local/test runs
+        // apiKey: 'dummy',
         cwd: '.',
       });
       setPrompt('');

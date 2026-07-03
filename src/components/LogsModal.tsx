@@ -8,7 +8,7 @@ interface LogsModalProps {
 }
 
 export default function LogsModal({ isOpen, onClose, logs }: LogsModalProps) {
-  if (!isOpen) return undefined;
+  if (!isOpen) return null;
   
   const copyLogs = () => {
     navigator.clipboard.writeText(logs);
