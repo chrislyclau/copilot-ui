@@ -3,45 +3,45 @@ import { SessionEvent, ToolExecutionCompleteContent } from './copilotSdk/boundar
 import { ExtendedSessionEvent } from './types/events';
 
 export interface TelemetryUsage {
-  promptTokens?: number;
-  completionTokens?: number;
-  reasoningTokens?: number;
-  totalNanoAiu: number; // nano-AI Units (nanoAiu)
-  creditsCost: number; // Derived: totalNanoAiu * 10E-9
+  readonly promptTokens?: number;
+  readonly completionTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly totalNanoAiu: number; // nano-AI Units (nanoAiu)
+  readonly creditsCost: number; // Derived: totalNanoAiu * 10E-9
 }
 
 export interface CopilotEvent {
   // Pure, unmodified domain model conforming strictly to @github/copilot-sdk SessionEvent structure.
-  sessionEvent: ExtendedSessionEvent;
+  readonly sessionEvent: ExtendedSessionEvent;
 
   // View-model visualizer properties cleanly segregated from the SDK models.
-  title: string;
-  category: 'system' | 'user' | 'assistant' | 'tool' | 'permission' | 'error';
+  readonly title: string;
+  readonly category: 'system' | 'user' | 'assistant' | 'tool' | 'permission' | 'error';
   
   // Optional bundling / timeline streaming metadata, kept orthogonal to the standard event model.
-  isBundle?: boolean;
-  bundleType?: ExtendedSessionEvent['type'];
-  originalEvents?: CopilotEvent[];
+  readonly isBundle?: boolean;
+  readonly bundleType?: ExtendedSessionEvent['type'];
+  readonly originalEvents?: readonly CopilotEvent[];
 
   // Optional pre-calculated telemetry metadata to avoid app-level heuristics.
-  telemetryUsage?: TelemetryUsage;
+  readonly telemetryUsage?: TelemetryUsage;
 }
 
 export interface TurnData {
-  id: string;
-  taskLabel: string;
-  status: 'running' | 'completed' | 'failed';
-  events: any[];
-  commitSha?: string | null;
+  readonly id: string;
+  readonly taskLabel: string;
+  readonly status: 'running' | 'completed' | 'failed';
+  readonly events: readonly CopilotEvent[];
+  readonly commitSha?: string | undefined;
 }
 
 export interface Scenario {
-  id: string;
-  name: string;
-  description: string;
-  icon: string;
-  events: CopilotEvent[]; // Fallback flat events for backward compatibility
-  turns?: TurnData[];
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly icon: string;
+  readonly events: readonly CopilotEvent[]; // Fallback flat events for backward compatibility
+  readonly turns?: readonly TurnData[];
 }
 
 export const RAW_STANDARD_DEBUG: SessionEvent[] = [
@@ -770,13 +770,16 @@ export function deriveCopilotEvents(rawEvents: SessionEvent[]): CopilotEvent[] {
       category = 'system';
     }
 
-    const copEvt: CopilotEvent = {
+    const copEvtTemp = {
       sessionEvent: standardizedEvent,
       title,
       category
     };
 
-    copEvt.telemetryUsage = getEventTelemetryUsage(copEvt);
+    const copEvt: CopilotEvent = {
+      ...copEvtTemp,
+      telemetryUsage: getEventTelemetryUsage(copEvtTemp)
+    };
     return copEvt;
   });
 }

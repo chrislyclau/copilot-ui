@@ -7,22 +7,22 @@ import { CollapsedOthersRow } from './CollapsedOthersRow';
 import { EventCard } from './EventCard';
 
 interface ActionHistoryGroupProps {
-  id: string;
-  events: CopilotEvent[];
-  isExpanded: boolean;
-  toggleExpandGroup: () => void;
-  segmentActionHistory: (events: CopilotEvent[]) => SegmentedNode[];
-  expandedCollapsedGroups: Record<string, boolean>;
-  toggleCollapsedGroup: (id: string) => void;
-  focusedEventId: string | null;
-  setFocusedEventId: (id: string | null) => void;
-  expandedEvents: Record<string, boolean>;
-  toggleExpandCard: (id: string, e?: React.MouseEvent) => void;
-  cardInnerTabs: Record<string, 'details' | 'json' | 'stream'>;
-  setTab: (id: string, tab: 'details' | 'json' | 'stream') => void;
-  copiedText: string | null;
-  copyToClipboard: (text: string, label: string) => void;
-  resumeAsHuman?: (input: string) => any;
+  readonly id: string;
+  readonly events: readonly CopilotEvent[];
+  readonly isExpanded: boolean;
+  readonly toggleExpandGroup: () => void;
+  readonly segmentActionHistory: (events: readonly CopilotEvent[]) => readonly SegmentedNode[];
+  readonly expandedCollapsedGroups: Record<string, boolean | undefined>;
+  readonly toggleCollapsedGroup: (id: string) => void;
+  readonly focusedEventId: string | undefined;
+  readonly setFocusedEventId: (id: string | undefined) => void;
+  readonly expandedEvents: Record<string, boolean | undefined>;
+  readonly toggleExpandCard: (id: string, e?: React.MouseEvent) => void;
+  readonly cardInnerTabs: Record<string, 'details' | 'json' | 'stream' | undefined>;
+  readonly setTab: (id: string, tab: 'details' | 'json' | 'stream') => void;
+  readonly copiedText: string | undefined;
+  readonly copyToClipboard: (text: string, label: string) => void;
+  readonly resumeAsHuman?: (input: string) => unknown;
 }
 
 export function ActionHistoryGroup({

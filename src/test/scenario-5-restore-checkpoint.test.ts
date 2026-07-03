@@ -1,3 +1,4 @@
+import { getWorkspaceHostLocation } from "../workspace";
 import { describe, it, beforeAll, afterAll } from 'vitest';
 import assert from 'node:assert';
 import * as path from 'path';
@@ -36,7 +37,9 @@ describe('Scenario 5: Checkpoint restore success', () => {
 
   it('Scenario 5: Checkpoint restore success', { timeout: 30_000 }, async () => {
     const { serverPort } = serverHarness;
-    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'scen5-'));
+    const relativeCwd = 'scen5-' + Math.random().toString(36).substring(2, 8);
+    const hostCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
+    fs.mkdirSync(hostCwd, { recursive: true });
 
     try {
       // Set up a real git sandbox directly — no server session needed.
@@ -44,17 +47,17 @@ describe('Scenario 5: Checkpoint restore success', () => {
       await initializeWorkspace();
       const sandbox = getGitSandbox();
 
-      fs.writeFileSync(path.join(tempCwd, 'v.txt'), 'v1');
+      fs.writeFileSync(path.join(hostCwd, 'v.txt'), 'v1');
       const sha = (await sandbox.commitAllChangesAsync('initial')).trim();
 
       // Write an update and also add a new file that wasn't in v1
-      fs.writeFileSync(path.join(tempCwd, 'v.txt'), 'v2');
-      fs.writeFileSync(path.join(tempCwd, 'new_file.txt'), 'i_am_new');
+      fs.writeFileSync(path.join(hostCwd, 'v.txt'), 'v2');
+      fs.writeFileSync(path.join(hostCwd, 'new_file.txt'), 'i_am_new');
       await sandbox.commitAllChangesAsync('update');
 
       // Verify both files exist before restoring
-      assert.strictEqual(fs.readFileSync(path.join(tempCwd, 'v.txt'), 'utf8'), 'v2');
-      assert.strictEqual(fs.readFileSync(path.join(tempCwd, 'new_file.txt'), 'utf8'), 'i_am_new');
+      assert.strictEqual(fs.readFileSync(path.join(hostCwd, 'v.txt'), 'utf8'), 'v2');
+      assert.strictEqual(fs.readFileSync(path.join(hostCwd, 'new_file.txt'), 'utf8'), 'i_am_new');
 
       // Restore to the v1 commit, passing cwd directly (no session required).
       const res = await fetch(`http://127.0.0.1:${serverPort}/api/copilot/checkpoint/restore`, {
@@ -63,7 +66,7 @@ describe('Scenario 5: Checkpoint restore success', () => {
         body: JSON.stringify({
           commitSha: sha,
           taskLabel: 'Restore point',
-          cwd: tempCwd,
+          cwd: relativeCwd,
         }),
       });
 
@@ -72,14 +75,16 @@ describe('Scenario 5: Checkpoint restore success', () => {
       assert.ok(data.success, `Expected success: true, got ${JSON.stringify(data)}`);
 
       // Verify v.txt reflects restored content
-      const content = fs.readFileSync(path.join(tempCwd, 'v.txt'), 'utf8');
+      const content = fs.readFileSync(path.join(hostCwd, 'v.txt'), 'utf8');
       assert.strictEqual(content, 'v1', 'File content should reflect restored commit');
 
       // Verify that new_file.txt (which was added after the checkpoint) is deleted
-      const fileExists = fs.existsSync(path.join(tempCwd, 'new_file.txt'));
+      const fileExists = fs.existsSync(path.join(hostCwd, 'new_file.txt'));
       assert.strictEqual(fileExists, false, 'Files added after the checkpoint should be removed');
     } finally {
-      fs.rmSync(tempCwd, { recursive: true, force: true });
+      if (fs.existsSync(hostCwd)) {
+        fs.rmSync(hostCwd, { recursive: true, force: true });
+      }
     }
   });
 });

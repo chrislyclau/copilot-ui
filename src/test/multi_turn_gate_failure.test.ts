@@ -1,3 +1,4 @@
+import { getWorkspaceHostLocation } from "../workspace";
 import { describe, it, beforeAll, afterAll } from 'vitest';
 import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
@@ -23,11 +24,14 @@ describe('Multi-Turn Gate Failure Persistence Tests', () => {
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/multi_turn_gate_failure.yaml');
     
     // Set up a mock workspaces directory under the OS temp root
-    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-turn-'));
-    fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
+    const relativeCwd = 'multi-turn-' + Math.random().toString(36).substring(2, 8);
+    const hostCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
+    fs.mkdirSync(hostCwd, { recursive: true });
+    
+    fs.writeFileSync(path.join(hostCwd, '.git'), 'gitdir: /fake/path');
     
     // Write package.json with a custom lint command that triggers our turn-aware script
-    fs.writeFileSync(path.join(tempCwd, 'package.json'), JSON.stringify({
+    fs.writeFileSync(path.join(hostCwd, 'package.json'), JSON.stringify({
       name: 'mock-workspace',
       scripts: {
         lint: 'node lint.js'
@@ -35,7 +39,7 @@ describe('Multi-Turn Gate Failure Persistence Tests', () => {
     }, null, 2));
 
     // Write lint.js turn-aware compiler check simulator
-    fs.writeFileSync(path.join(tempCwd, 'lint.js'), `
+    fs.writeFileSync(path.join(hostCwd, 'lint.js'), `
       const fs = require('fs');
       const path = require('path');
       const countFile = path.join(__dirname, 'count.txt');
@@ -61,7 +65,7 @@ describe('Multi-Turn Gate Failure Persistence Tests', () => {
     try {
       await proxy.updateConfig({
         filePath: snapshotPath,
-        workDir: tempCwd,
+        workDir: hostCwd,
       });
       
       console.log('Sending request to /api/copilot/gate-run');
@@ -74,7 +78,7 @@ describe('Multi-Turn Gate Failure Persistence Tests', () => {
         body: JSON.stringify({
           prompt: 'Run the validation checks.',
           model: 'claude-sonnet-4.5',
-          cwd: tempCwd,
+          cwd: relativeCwd,
           gates: ['runLint'],
           maxRetries: 2
         })
@@ -112,8 +116,8 @@ describe('Multi-Turn Gate Failure Persistence Tests', () => {
       console.log('✓ Multi-Turn gate failure persistence verified!');
     } finally {
       // Clean up temporary workspace
-      if (fs.existsSync(tempCwd)) {
-        fs.rmSync(tempCwd, { recursive: true, force: true });
+      if (fs.existsSync(hostCwd)) {
+        fs.rmSync(hostCwd, { recursive: true, force: true });
       }
     }
   });

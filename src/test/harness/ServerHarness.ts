@@ -1,6 +1,7 @@
 import { CapiProxy } from './CapiProxy';
 import * as path from 'path';
 import * as fs from 'fs';
+import { initializeWorkspace } from '../../workspace';
 
 class ServerHarness {
   private serverProcess: any = null;
@@ -36,6 +37,8 @@ class ServerHarness {
     process.env.OPENAI_COMPAT_BASE_URL = this.proxyUrl;
     process.env.NODE_ENV = 'test';
     process.env.GEMINI_API_KEY = 'test-key';
+
+    await initializeWorkspace();
 
     try {
       // 3. Dynamic import of server.ts (it exports the Express app)

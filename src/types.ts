@@ -1,3 +1,25 @@
+import { CopilotEvent, TurnData } from './mockEvents';
+
+export interface GateConfig {
+  readonly prompt: string;
+  readonly gates: ReadonlyArray<'tests' | 'lint' | 'audit'>;
+  readonly maxRetries: number;
+  readonly sessionId: string;
+  readonly model: string;
+  readonly apiKey: string;
+  readonly cwd: string;
+  readonly diagnosticScenario?: string;
+  readonly replayTraceId?: string;
+  readonly simulateBackpressureDelayMs?: number;
+  readonly setScenarioTurns?: (scenarioId: string, turns: readonly TurnData[], events: ReadonlyArray<CopilotEvent>) => void;
+}
+
+declare global {
+  interface Window {
+    __addScenario?: (scenario: unknown) => void;
+  }
+}
+
 export type BooleanMap = ReadonlyArray<{ readonly key: string; readonly value: boolean }>;
 
 export function assertNever(x: never): never {

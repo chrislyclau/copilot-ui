@@ -4,6 +4,7 @@ import fs from 'fs';
 import { CopilotClient, SessionConfig, SdkProviderConfig, Tool } from '../copilotSdk/boundary';
 import { MODEL_TIERS } from '../config/models';
 import { SessionRecord, StateSnapshot } from '../types/session';
+import { AuditResult } from '../types/audit';
 import { getWorkspaceHostLocation, getExecCommand } from '../workspace';
 import { saveSession, deleteSession } from '../db/sessionStore';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
@@ -245,8 +246,9 @@ export async function getGlobalClient(cwd?: string): Promise<CopilotClient> {
           } else {
             throw new Error(makeDirResult.stderr);
           }
-        } catch (err: any) {
-          writeLog(`[SDK] Working directory ${cwd} does not exist and could not be created, falling back to ${DEFAULT_WORKSPACE_DIR}. Error: ${err.message}`);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          writeLog(`[SDK] Working directory ${cwd} does not exist and could not be created, falling back to ${DEFAULT_WORKSPACE_DIR}. Error: ${msg}`);
           finalCwd = DEFAULT_WORKSPACE_DIR;
         }
       }
@@ -350,7 +352,7 @@ export async function getCodeState(dir: string): Promise<string> {
   }
 }
 
-export async function runLlmAudit(promptStr: string, codeStateSummary: string, apiKey?: string): Promise<{ pass: boolean; findings: any[] }> {
+export async function runLlmAudit(promptStr: string, codeStateSummary: string, apiKey?: string, abortSignal?: AbortSignal): Promise<AuditResult> {
   const executionConfig = getAuditorExecutionConfig(apiKey);
   const systemPrompt = `You are an expert security auditor and code reviewer operating as an isolated quality assurance suite. Analyze the provided codebase and audit it for vulnerabilities, validation gate status, and functional readiness relative to the requirements.
 You MUST submit structured verification feedback, logic checks, and compiler gate status using the 'submit_audit_findings' tool immediately. Do NOT reply with standard conversational text; you MUST call the 'submit_audit_findings' tool.`;
@@ -363,7 +365,7 @@ You MUST submit structured verification feedback, logic checks, and compiler gat
     `;
 
   try {
-    const auditResult = await executeAuditSession<{ pass: boolean; findings: any[] }>(
+    const auditResult = await executeAuditSession<AuditResult>(
       DEFAULT_WORKSPACE_DIR,
       executionConfig,
       systemPrompt,
@@ -372,7 +374,8 @@ You MUST submit structured verification feedback, logic checks, and compiler gat
       {
         toolChoice: { type: 'function', function: { name: submitAuditFindingsTool.function.name } },
         allowOthers: false
-      }
+      },
+      abortSignal
     );
 
     if (auditResult) {
@@ -389,15 +392,16 @@ You MUST submit structured verification feedback, logic checks, and compiler gat
         }
       ]
     };
-  } catch (err: any) {
-    writeLog(`[runLlmAudit] Exception: ${err.message || err}`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    writeLog(`[runLlmAudit] Exception: ${msg}`);
     return {
       pass: false,
       findings: [
         {
           severity: 'critical',
           file: '',
-          description: `Auditor session crashed: ${err.message || err}`
+          description: `Auditor session crashed: ${msg}`
         }
       ]
     };

@@ -1,3 +1,4 @@
+import { getWorkspaceHostLocation } from "../workspace";
 import { describe, it, beforeAll, afterAll } from 'vitest';
 import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
@@ -22,11 +23,14 @@ describe('Stream Token Timing and Mutation Guard Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/stream_token_timing.yaml');
     
-    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'stream-timing-'));
-    fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
+    const relativeCwd = 'stream-timing-' + Math.random().toString(36).substring(2, 8);
+    const hostCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
+    fs.mkdirSync(hostCwd, { recursive: true });
+    
+    fs.writeFileSync(path.join(hostCwd, '.git'), 'gitdir: /fake/path');
     
     // Write package.json with exit 0 lint script so validation gate succeeds instantly
-    fs.writeFileSync(path.join(tempCwd, 'package.json'), JSON.stringify({
+    fs.writeFileSync(path.join(hostCwd, 'package.json'), JSON.stringify({
       name: 'mock-workspace',
       scripts: {
         lint: 'echo "Success" && exit 0'
@@ -36,7 +40,7 @@ describe('Stream Token Timing and Mutation Guard Tests', () => {
     try {
       await proxy.updateConfig({
         filePath: snapshotPath,
-        workDir: tempCwd,
+        workDir: hostCwd,
       });
 
       console.log('Sending request to /api/copilot/gate-run');
@@ -49,7 +53,7 @@ describe('Stream Token Timing and Mutation Guard Tests', () => {
         body: JSON.stringify({
           prompt: 'Modify index.html to add a div.',
           model: 'claude-sonnet-4.5',
-          cwd: tempCwd,
+          cwd: relativeCwd,
           gates: ['runLint'],
           maxRetries: 1
         })
@@ -85,8 +89,8 @@ describe('Stream Token Timing and Mutation Guard Tests', () => {
 
       console.log('✓ Stream token timing and mutation gate verification verified!');
     } finally {
-      if (fs.existsSync(tempCwd)) {
-        fs.rmSync(tempCwd, { recursive: true, force: true });
+      if (fs.existsSync(hostCwd)) {
+        fs.rmSync(hostCwd, { recursive: true, force: true });
       }
     }
   });

@@ -1,38 +1,43 @@
 import { useState, useCallback, useRef } from 'react';
 import { ModelTier, DEFAULT_ROLES_CONFIG, MODEL_TIERS } from '../config/models';
-import { CopilotEvent } from '../mockEvents';
+import { CopilotEvent, TurnData } from '../mockEvents';
 import { deriveEventMeta } from '../parser';
+import { GateConfig } from '../types';
+import { ExtendedSessionEvent } from '../types/events';
 
-export interface GateLoopConfig {
-  readonly prompt: string;
-  readonly gates: ReadonlyArray<'tests' | 'lint' | 'audit'>;
-  readonly maxRetries: number;
-  readonly sessionId: string;
-  readonly apiKey: string;
-  readonly model: string;
-  readonly cwd: string;
-  readonly diagnosticScenario?: string;
-  readonly replayTraceId?: string;
-  readonly simulateBackpressureDelayMs?: number;
-  readonly setScenarioTurns?: (scenarioId: string, turns: ReadonlyArray<unknown>, events: ReadonlyArray<CopilotEvent>) => void;
+interface HistoryPayload {
+  readonly turns: readonly {
+    readonly id: string;
+    readonly events: readonly unknown[];
+    readonly [key: string]: unknown;
+  }[];
+  readonly stateSnapshot?: {
+    readonly minValidSequenceId?: number;
+    readonly isRunning: boolean;
+    readonly retryCount?: number;
+    readonly currentTier?: ModelTier;
+    readonly awaitingHuman?: boolean;
+    readonly activeGate?: string;
+    readonly hasFailureState?: boolean;
+  };
 }
 
 export function useGateLoop(
   appendEventToScenario: (scenarioId: string, copilotEvent: CopilotEvent) => void,
-  setScenarioEvents?: (scenarioId: string, events: CopilotEvent[]) => void,
-  setScenarioTurns?: (scenarioId: string, turns: any[], events: CopilotEvent[]) => void
+  setScenarioEvents?: (scenarioId: string, events: readonly CopilotEvent[]) => void,
+  setScenarioTurns?: (scenarioId: string, turns: readonly TurnData[], events: readonly CopilotEvent[]) => void
 ) {
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState<'idle' | 'running' | 'complete' | 'shutdown' | 'error'>('idle');
   const [currentTier, setCurrentTier] = useState<ModelTier>(DEFAULT_ROLES_CONFIG.executorTiers?.[0]?.model || 'gemini-3.1-flash-lite');
   const [retryCount, setRetryCount] = useState(0);
-  const [activeGate, setActiveGate] = useState<'tests' | 'lint' | 'audit' | null>(null);
+  const [activeGate, setActiveGate] = useState<'tests' | 'lint' | 'audit' | undefined>(undefined);
   const [awaitingHuman, setAwaitingHuman] = useState(false);
   const [activeOutput, setActiveOutput] = useState<string>('');
-  const [activeReplayTraceId, setActiveReplayTraceId] = useState<string | null>(null);
+  const [activeReplayTraceId, setActiveReplayTraceId] = useState<string | undefined>(undefined);
   
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const activeSessionIdRef = useRef<string | null>(null);
+  const abortControllerRef = useRef<AbortController | undefined>(undefined);
+  const activeSessionIdRef = useRef<string | undefined>(undefined);
   const completedRef = useRef(false);
   const clientLogRef = useRef<string[]>([]);
 
@@ -51,7 +56,12 @@ export function useGateLoop(
     }).catch(() => {});
   }, []);
 
-  const executeStream = async (endpoint: string, payload: any, sessionId: string, setScenarioTurnsCb?: any) => {
+  const executeStream = async (
+    endpoint: string, 
+    payload: GateConfig | { readonly sessionId: string | undefined; readonly input: string }, 
+    sessionId: string, 
+    setScenarioTurnsCb?: (scenarioId: string, turns: readonly TurnData[], events: readonly CopilotEvent[]) => void
+  ) => {
     // Abort any existing in-flight run for this hook instance
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -59,10 +69,10 @@ export function useGateLoop(
     abortControllerRef.current = new AbortController();
 
     let hydrationSettled = !((setScenarioEvents || setScenarioTurns) && sessionId);
-    let pendingEventsQueue: any[] = [];
+    let pendingEventsQueue: readonly ExtendedSessionEvent[] = [];
     let minValidSeqIdFromSnapshot = 0;
 
-    const processLiveEvent = (data: any) => {
+    const processLiveEvent = (data: ExtendedSessionEvent) => {
       // Update active stream log line for Ambient Status Strip
       if (data.type === 'assistant.message_delta') {
         if (data.data?.deltaContent) {
@@ -71,7 +81,8 @@ export function useGateLoop(
       } else if (data.type === 'tool.execution_start') {
         setActiveOutput(`Running ${data.data?.toolName || 'tool'}...`);
       } else if (data.type === 'tool.result' || data.type === 'tool.execution_complete') {
-        const out = data.data?.stdout || data.data?.stderr || '';
+        const d = data.data as { readonly stdout?: string; readonly stderr?: string };
+        const out = d?.stdout || d?.stderr || '';
         if (out) {
           const lastLine = out.split('\n').map((l: string) => l.trim()).filter(Boolean).pop();
           if (lastLine) setActiveOutput(lastLine);
@@ -92,51 +103,51 @@ export function useGateLoop(
           const mappedGate = 
             data.data.gateName === 'runTests' ? 'tests' :
             data.data.gateName === 'runLint' ? 'lint' :
-            data.data.gateName === 'runAudit' ? 'audit' : null;
+            data.data.gateName === 'runAudit' ? 'audit' : undefined;
           setActiveGate(mappedGate);
         }
       } else if (data.type === 'loop.escalate_human') {
         setAwaitingHuman(true);
-        setActiveGate(null);
+        setActiveGate(undefined);
       } else if (data.type === 'loop.retry') {
-        if (data.data?.retryCount !== undefined) {
-          setRetryCount(data.data.retryCount);
+        if ((data.data as any)?.retryCount !== undefined) {
+          setRetryCount((data.data as any).retryCount);
         }
-        if (data.data?.nextModel) {
-          setCurrentTier(data.data.nextModel);
+        if ((data.data as any)?.nextModel) {
+          setCurrentTier((data.data as any).nextModel);
         }
-        setActiveGate(null);
+        setActiveGate(undefined);
       } else if (data.type === 'gate.result') {
-        if (data.data?.retryCount !== undefined) {
-          setRetryCount(data.data.retryCount);
+        if ((data.data as any)?.retryCount !== undefined) {
+          setRetryCount((data.data as any).retryCount);
         }
         setAwaitingHuman(false);
-        setActiveGate(null);
+        setActiveGate(undefined);
       } else if (data.type === 'loop.clarity_check_failed') {
         setIsRunning(false);
         setStatus('error');
-        setActiveGate(null);
+        setActiveGate(undefined);
         completedRef.current = true;
       } else if (data.type === 'loop.error') {
         setIsRunning(false);
         setStatus('error');
-        setActiveGate(null);
+        setActiveGate(undefined);
         completedRef.current = true;
       } else if (data.type === 'loop.complete' || data.type === 'session.idle' || data.type === 'session.shutdown') {
         setIsRunning(false);
         setStatus(data.type === 'loop.complete' ? 'complete' : data.type === 'session.idle' ? 'idle' : 'shutdown');
-        setActiveGate(null);
+        setActiveGate(undefined);
         completedRef.current = true;
       }
       
-      const { category, title } = deriveEventMeta(data.type || 'system.unknown', data.data);
+      const { category, title } = deriveEventMeta(data.type || 'system.unknown', (data as any).data);
       const copilotEvent: CopilotEvent = {
         sessionEvent: {
           id: data.id || `evt-${Math.random().toString(36).substring(7)}`,
           timestamp: data.timestamp || new Date().toISOString(),
           type: data.type || 'system.unknown',
-          data: data.data || {}
-        } as any,
+          data: (data as any).data || {}
+        } as ExtendedSessionEvent,
         title,
         category
       };
@@ -154,31 +165,33 @@ export function useGateLoop(
             signal: abortControllerRef.current!.signal
           });
           if (histRes.ok) {
-            const histPayload = await histRes.json();
-            if (histPayload && histPayload.turns && Array.isArray(histPayload.turns) && histPayload.turns.length > 0) {
+            const histPayload = (await histRes.json()) as HistoryPayload;
+            if (histPayload && histPayload.turns && histPayload.turns.length > 0) {
               logClient(`Active execution footprint detected. Hydrating ${histPayload.turns.length} turns from history.`);
               
               // Map turns and flatten events for backward compatibility
               const allFlattenedEvents: CopilotEvent[] = [];
-              const mappedTurns = histPayload.turns.map((turn: any) => {
-                const hydratedTurnEvents: CopilotEvent[] = (turn.events || [])
-                  .filter((item: any) => item && typeof item === 'object' && item.type)
-                  .map((data: any) => {
+              const mappedTurns: readonly TurnData[] = histPayload.turns.map((turn) => {
+                const hydratedTurnEvents: readonly CopilotEvent[] = (turn.events || [])
+                  .filter((item): item is { type: string; [key: string]: unknown } => 
+                    item !== null && typeof item === 'object' && 'type' in item
+                  )
+                  .map((data) => {
                     const { category, title } = deriveEventMeta(data.type, data.data);
-                    const ce = {
+                    const ce: CopilotEvent = {
                       sessionEvent: {
-                        id: data.id || `evt-${Math.random().toString(36).substring(7)}`,
-                        timestamp: data.timestamp || new Date().toISOString(),
+                        id: (data.id as string) || `evt-${Math.random().toString(36).substring(7)}`,
+                        timestamp: (data.timestamp as string) || new Date().toISOString(),
                         type: data.type,
                         data: data.data || {}
-                      } as any,
+                      } as ExtendedSessionEvent,
                       title,
                       category
                     };
                     allFlattenedEvents.push(ce);
                     return ce;
                   });
-                  return { ...turn, events: hydratedTurnEvents };
+                  return { ...turn, events: hydratedTurnEvents } as TurnData;
               });
               
               const turnsSetter = setScenarioTurnsCb || setScenarioTurns;
@@ -198,10 +211,10 @@ export function useGateLoop(
               if (snap.activeGate) {
                 const mappedGate = snap.activeGate === 'runTests' ? 'tests' :
                                    snap.activeGate === 'runLint' ? 'lint' :
-                                   snap.activeGate === 'runAudit' ? 'audit' : null;
+                                   snap.activeGate === 'runAudit' ? 'audit' : undefined;
                 setActiveGate(mappedGate as any);
               } else {
-                setActiveGate(null);
+                setActiveGate(undefined);
               }
               if (snap.hasFailureState) {
                 setStatus('error');
@@ -222,10 +235,10 @@ export function useGateLoop(
 
       hydrationSettled = true;
       if (pendingEventsQueue.length > 0) {
-        let eventsToFlush = pendingEventsQueue;
+        let eventsToFlush = [...pendingEventsQueue];
         if (minValidSeqIdFromSnapshot > 0) {
-          eventsToFlush = pendingEventsQueue.filter((ev: any) => {
-            const seq = ev?.sequenceId ?? ev?.data?.sequenceId;
+          eventsToFlush = eventsToFlush.filter((ev: ExtendedSessionEvent) => {
+            const seq = (ev as any)?.sequenceId ?? (ev as any)?.data?.sequenceId;
             return seq === undefined || seq >= minValidSeqIdFromSnapshot;
           });
         }
@@ -279,10 +292,10 @@ export function useGateLoop(
             }
 
             if (!hydrationSettled) {
-               pendingEventsQueue.push(data);
+               pendingEventsQueue = [...pendingEventsQueue, data as ExtendedSessionEvent];
                logClient(`Hydration active. Event queued.`);
             } else {
-               processLiveEvent(data);
+               processLiveEvent(data as ExtendedSessionEvent);
             }
           }
         }
@@ -297,24 +310,24 @@ export function useGateLoop(
       if (err.name !== 'AbortError') throw err;
     } finally {
       setIsRunning(false);
-      setActiveReplayTraceId(null);
+      setActiveReplayTraceId(undefined);
       if (!completedRef.current) {
         setStatus('shutdown');
       }
-      setActiveGate(null);
+      setActiveGate(undefined);
       logClient(`Finished streamEndpoint. Status set to: ${completedRef.current ? 'completed' : 'shutdown'}`);
     }
   };
 
-  const runWithGates = useCallback(async (config: GateLoopConfig) => {
+  const runWithGates = useCallback(async (config: GateConfig) => {
     logClient(`Starting gate loop run. config: ${JSON.stringify({ ...config, apiKey: config.apiKey ? 'REDACTED' : 'none' })}`);
     setIsRunning(true);
     setStatus('running');
     setRetryCount(0);
     setAwaitingHuman(false);
-    setActiveGate(null);
+    setActiveGate(undefined);
     completedRef.current = false;
-    setActiveReplayTraceId(config.replayTraceId || null);
+    setActiveReplayTraceId(config.replayTraceId || undefined);
     setCurrentTier((config.model as ModelTier) || DEFAULT_ROLES_CONFIG.executorTiers?.[0]?.model || 'gemini-3.1-flash-lite');
     activeSessionIdRef.current = config.sessionId;
     
@@ -329,7 +342,7 @@ export function useGateLoop(
     setStatus('running');
     setAwaitingHuman(false);
     completedRef.current = false;
-    setActiveReplayTraceId(null);
+    setActiveReplayTraceId(undefined);
     
     return executeStream('/api/copilot/gate-resume', { sessionId: activeSessionIdRef.current, input }, activeSessionIdRef.current);
   }, [logClient]);

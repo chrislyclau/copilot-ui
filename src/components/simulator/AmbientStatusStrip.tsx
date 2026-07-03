@@ -1,12 +1,12 @@
 import React from 'react';
 
 interface AmbientStatusStripProps {
-  isRunning: boolean;
-  currentTier: string;
-  retryCount: number;
-  activeGate: string | null;
-  awaitingHuman: boolean;
-  activeOutput?: string;
+  readonly isRunning: boolean;
+  readonly currentTier: string;
+  readonly retryCount: number;
+  readonly activeGate: string | undefined;
+  readonly awaitingHuman: boolean;
+  readonly activeOutput?: string;
 }
 
 export function AmbientStatusStrip({

@@ -20,7 +20,7 @@ describe('Server End-to-End Integration Tests', () => {
 
     // Create unique sessionId and tempCwd
     const sessionId = 'session-' + Math.random().toString(36).substring(2, 8);
-    const tempCwd = `/tmp/git-worktree-${sessionId}`;
+    const tempCwd = `git-worktree-${sessionId}`;
     const snapshotPath = process.cwd() + '/src/test/snapshots/gate_loop/single_retry_server_integration.yaml';
     
     const exec = getExecCommand();

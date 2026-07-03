@@ -8,25 +8,27 @@ export interface GateResult {
   durationMs: number;
 }
 
-export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd?: string): Promise<{ stdout: string; stderr: string }> {
+export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd?: string, externalSignal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   if (cwd) {
-    const checkDir = await getExecCommand()(`test -d '${cwd}'`);
+    const checkDir = await getExecCommand()(`test -d '${cwd}'`, externalSignal);
     if (checkDir.exitCode !== 0) {
       return { stdout: '', stderr: `Directory ${cwd} does not exist.` };
     }
   }
 
-
-
   const execCommand = getExecCommand();
-  const signal = AbortSignal.timeout(timeoutMs);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const combinedSignal = externalSignal ? (AbortSignal as any).any([externalSignal, timeoutSignal]) : timeoutSignal;
 
   const result = await execCommand(
     cwd ? `cd '${cwd}' && ${cmd}` : cmd,
-    signal
+    combinedSignal
   ).catch((err: any) => {
-    if (signal.aborted) {
+    if (timeoutSignal.aborted) {
       throw new Error(`Gate execution timed out after ${timeoutMs}ms`);
+    }
+    if (externalSignal?.aborted) {
+      throw new Error(`Gate execution aborted by external signal`);
     }
     throw err;
   });
@@ -42,36 +44,36 @@ export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
-export async function runTests(cwd: string = process.cwd()): Promise<GateResult> {
+export async function runTests(cwd: string = process.cwd(), abortSignal?: AbortSignal): Promise<GateResult> {
   const start = Date.now();
   try {
-    const { stdout } = await runWithTimeout(`npm run test -- --watch=false`, 30000, cwd);
+    const { stdout } = await runWithTimeout(`npm run test -- --watch=false`, 30000, cwd, abortSignal);
     return { gateName: 'runTests', success: true, output: stdout, durationMs: Date.now() - start };
   } catch (err: any) {
     return { gateName: 'runTests', success: false, output: err.stdout || err.message, durationMs: Date.now() - start };
   }
 }
 
-export async function runLint(cwd: string = process.cwd()): Promise<GateResult> {
+export async function runLint(cwd: string = process.cwd(), abortSignal?: AbortSignal): Promise<GateResult> {
   const start = Date.now();
   try {
-    const { stdout } = await runWithTimeout(`npm run lint`, 30000, cwd);
+    const { stdout } = await runWithTimeout(`npm run lint`, 30000, cwd, abortSignal);
     return { gateName: 'runLint', success: true, output: stdout, durationMs: Date.now() - start };
   } catch (err: any) {
     return { gateName: 'runLint', success: false, output: err.stdout || err.message, durationMs: Date.now() - start };
   }
 }
 
-export async function runGate(gateName: string, cwd: string): Promise<{ pass: boolean; feedback: string; durationMs: number }> {
+export async function runGate(gateName: string, cwd: string, abortSignal?: AbortSignal): Promise<{ pass: boolean; feedback: string; durationMs: number }> {
   let result: GateResult;
   const canonicalName = normalizeGateName(gateName);
   
   switch (canonicalName) {
     case 'runTests':
-      result = await runTests(cwd);
+      result = await runTests(cwd, abortSignal);
       break;
     case 'runLint':
-      result = await runLint(cwd);
+      result = await runLint(cwd, abortSignal);
       break;
     default:
       return { pass: false, feedback: `Unknown gate: ${gateName} (canonical: ${canonicalName})`, durationMs: 0 };

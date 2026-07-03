@@ -3,9 +3,9 @@ import { Database, Copy, Check, Layers } from 'lucide-react';
 import { CopilotEvent } from '../../mockEvents';
 
 interface JsonInspectorProps {
-  activeFocusEvent: CopilotEvent | null;
-  copiedText: string | null;
-  copyToClipboard: (text: string, label: string) => void;
+  readonly activeFocusEvent: CopilotEvent | undefined;
+  readonly copiedText: string | undefined;
+  readonly copyToClipboard: (text: string, label: string) => void;
 }
 
 export function JsonInspector({

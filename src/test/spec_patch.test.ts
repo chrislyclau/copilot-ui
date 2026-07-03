@@ -1,3 +1,4 @@
+import { getWorkspaceHostLocation } from "../workspace";
 import { describe, it, beforeAll, afterAll } from 'vitest';
 import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
@@ -22,14 +23,17 @@ describe('Spec Patch REST API Integration Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/spec_patch.yaml');
     
-    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-patch-'));
-    fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
+    const relativeCwd = 'spec-patch-' + Math.random().toString(36).substring(2, 8);
+    const hostCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
+    fs.mkdirSync(hostCwd, { recursive: true });
+    
+    fs.writeFileSync(path.join(hostCwd, '.git'), 'gitdir: /fake/path');
     
     // Initial empty architecture-spec.md
-    const specPath = path.join(tempCwd, 'architecture-spec.md');
+    const specPath = path.join(hostCwd, 'architecture-spec.md');
     fs.writeFileSync(specPath, '# Initial Architecture Spec\n', 'utf8');
 
-    fs.writeFileSync(path.join(tempCwd, 'package.json'), JSON.stringify({
+    fs.writeFileSync(path.join(hostCwd, 'package.json'), JSON.stringify({
       name: 'mock-spec-patch-workspace',
       scripts: {
         lint: 'echo "Lint Passed" && exit 0'
@@ -39,7 +43,7 @@ describe('Spec Patch REST API Integration Tests', () => {
     try {
       await proxy.updateConfig({
         filePath: snapshotPath,
-        workDir: tempCwd,
+        workDir: hostCwd,
       });
       
       const sessionId = 'test-spec-patch-session-123';
@@ -54,7 +58,7 @@ describe('Spec Patch REST API Integration Tests', () => {
         body: JSON.stringify({
           prompt: 'Help me build a server.',
           model: 'claude-sonnet-4.5',
-          cwd: tempCwd,
+          cwd: relativeCwd,
           sessionId,
           gates: ['runLint'],
           maxRetries: 1
@@ -111,8 +115,8 @@ describe('Spec Patch REST API Integration Tests', () => {
       console.log('✓ Spec Patch API integration test verified successfully!');
     } finally {
       // Clean up temporary workspace
-      if (fs.existsSync(tempCwd)) {
-        fs.rmSync(tempCwd, { recursive: true, force: true });
+      if (fs.existsSync(hostCwd)) {
+        fs.rmSync(hostCwd, { recursive: true, force: true });
       }
     }
   });

@@ -1,15 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Play, RefreshCw, CheckCircle2, AlertTriangle, Terminal, Cpu, HardDrive, ShieldCheck, HelpCircle, Copy, FileText } from 'lucide-react';
+import { Scenario, CopilotEvent, TurnData } from '../mockEvents';
+import { GateConfig } from '../types';
 
 interface DiagnosticsModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  getClientLog?: () => string[];
-  runWithGates?: (config: any) => Promise<void>;
-  activeScenarioId?: string;
-  setActiveScenarioId?: (id: string) => void;
-  setScenarioTurns?: (scenarioId: string, turns: any[], events: any[]) => void;
+  readonly isOpen: boolean;
+  readonly onClose: () => void;
+  readonly getClientLog?: () => readonly string[];
+  readonly runWithGates?: (config: GateConfig) => Promise<void>;
+  readonly activeScenarioId?: string;
+  readonly setActiveScenarioId?: (id: string) => void;
+  readonly setScenarioTurns?: (scenarioId: string, turns: readonly TurnData[], events: ReadonlyArray<CopilotEvent>) => void;
 }
 
 interface GateDiagResult {
@@ -24,7 +26,16 @@ interface DockerDiagResult {
   stdout?: string;
   exitCode?: number;
 }
-//...
+
+interface CopilotEventRecord {
+  readonly type?: string;
+  readonly timestamp?: string;
+  readonly data?: {
+    readonly content?: string;
+    readonly [key: string]: unknown;
+  };
+}
+
 export function DiagnosticsModal({ 
   isOpen, 
   onClose, 
@@ -36,49 +47,49 @@ export function DiagnosticsModal({
 }: DiagnosticsModalProps) {
   // Gate Diagnostics State
   const [gatesRunning, setGatesRunning] = useState(false);
-  const [gatesResult, setGatesResult] = useState<GateDiagResult | null>(null);
-  const [gatesError, setGatesError] = useState<string | null>(null);
+  const [gatesResult, setGatesResult] = useState<GateDiagResult | undefined>(undefined);
+  const [gatesError, setGatesError] = useState<string | undefined>(undefined);
 
   // CLI Diagnostic Script State
   const [cliScriptRunning, setCliScriptRunning] = useState(false);
-  const [cliScriptResult, setCliScriptResult] = useState<{ pass: boolean; durationMs: number; output?: string; errorOutput?: string; } | null>(null);
-  const [cliScriptError, setCliScriptError] = useState<string | null>(null);
+  const [cliScriptResult, setCliScriptResult] = useState<{ pass: boolean; durationMs: number; output?: string; errorOutput?: string; } | undefined>(undefined);
+  const [cliScriptError, setCliScriptError] = useState<string | undefined>(undefined);
 
   // Run Log Dump State
-  const [dumpedLogs, setDumpedLogs] = useState<{ server: string[], client: string[] } | null>(null);
+  const [dumpedLogs, setDumpedLogs] = useState<{ server: readonly string[], client: readonly string[] } | undefined>(undefined);
   const [dumpLogsRunning, setDumpLogsRunning] = useState(false);
 
   // Docker Diagnostics State
   const [dockerRunning, setDockerRunning] = useState(false);
-  const [dockerResult, setDockerResult] = useState<DockerDiagResult | null>(null);
-  const [dockerError, setDockerError] = useState<string | null>(null);
+  const [dockerResult, setDockerResult] = useState<DockerDiagResult | undefined>(undefined);
+  const [dockerError, setDockerError] = useState<string | undefined>(undefined);
 
   // SSE Smoke Test State
   const [sseRunning, setSseRunning] = useState(false);
-  const [sseEvents, setSseEvents] = useState<any[]>([]);
+  const [sseEvents, setSseEvents] = useState<readonly CopilotEventRecord[]>([]);
   const [sseStatus, setSseStatus] = useState<'idle' | 'running' | 'completed' | 'failed'>('idle');
 
   // SDK Connection Test State
   const [sdkRunning, setSdkRunning] = useState(false);
-  const [sdkLogs, setSdkLogs] = useState<string[]>([]);
-  const [sdkAnswer, setSdkAnswer] = useState<string | null>(null);
+  const [sdkLogs, setSdkLogs] = useState<readonly string[]>([]);
+  const [sdkAnswer, setSdkAnswer] = useState<string | undefined>(undefined);
   const [sdkConfirm, setSdkConfirm] = useState(false);
-  const [sdkError, setSdkError] = useState<string | null>(null);
+  const [sdkError, setSdkError] = useState<string | undefined>(undefined);
 
   // T5 - Live Copilot SSE Stream Test
   const [t5Running, setT5Running] = useState(false);
-  const [t5Events, setT5Events] = useState<any[]>([]);
+  const [t5Events, setT5Events] = useState<readonly CopilotEventRecord[]>([]);
   const [t5Prompt, setT5Prompt] = useState("Write a quick sum function in typescript and trigger standard checks using npx tsx.");
-  const [t5Error, setT5Error] = useState<string | null>(null);
+  const [t5Error, setT5Error] = useState<string | undefined>(undefined);
   const [t5Model, setT5Model] = useState("gemini-3.1-flash-lite");
   const [t5Key, setT5Key] = useState("");
   const [t5Confirm, setT5Confirm] = useState(false);
 
   // T6 - Gate-Run Scenario Test (Manual Test replication)
   const [t6Running, setT6Running] = useState(false);
-  const [t6Events, setT6Events] = useState<any[]>([]);
+  const [t6Events, setT6Events] = useState<readonly CopilotEventRecord[]>([]);
   const [t6Prompt, setT6Prompt] = useState("Run diagnostic checks");
-  const [t6Error, setT6Error] = useState<string | null>(null);
+  const [t6Error, setT6Error] = useState<string | undefined>(undefined);
   const [t6Scenario, setT6Scenario] = useState("replay");
   const [t6Model, setT6Model] = useState("gemini-3.1-flash-lite");
   const [t6Confirm, setT6Confirm] = useState(false);
@@ -88,20 +99,20 @@ export function DiagnosticsModal({
 
   // T7 - Proxy Dump State
   const [proxyRunning, setProxyRunning] = useState(false);
-  const [proxyLog, setProxyLog] = useState<string | null>(null);
-  const [proxyError, setProxyError] = useState<string | null>(null);
+  const [proxyLog, setProxyLog] = useState<string | undefined>(undefined);
+  const [proxyError, setProxyError] = useState<string | undefined>(undefined);
 
   // Handlers
   const handleCheckGates = async () => {
     setGatesRunning(true);
-    setGatesError(null);
+    setGatesError(undefined);
     try {
       const res = await fetch('/api/diagnostics/gates?type=ENVIRONMENT_INTEGRITY_CHECK');
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       const data = await res.json();
       setGatesResult(data);
-    } catch (err: any) {
-      setGatesError(err.message || String(err));
+    } catch (err: unknown) {
+      setGatesError(err instanceof Error ? err.message : String(err));
     } finally {
       setGatesRunning(false);
     }
@@ -109,7 +120,7 @@ export function DiagnosticsModal({
 
   const handleCheckCliScript = async () => {
     setCliScriptRunning(true);
-    setCliScriptError(null);
+    setCliScriptError(undefined);
     try {
       const res = await fetch('/api/diagnostics/cli-gate-script');
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
@@ -120,8 +131,8 @@ export function DiagnosticsModal({
         output: data.output,
         errorOutput: data.errorOutput
       });
-    } catch (err: any) {
-      setCliScriptError(err.message || String(err));
+    } catch (err: unknown) {
+      setCliScriptError(err instanceof Error ? err.message : String(err));
     } finally {
       setCliScriptRunning(false);
     }
@@ -129,14 +140,14 @@ export function DiagnosticsModal({
 
   const runBackendSanityTest = async () => {
     setDockerRunning(true);
-    setDockerError(null);
+    setDockerError(undefined);
     try {
       const res = await fetch('/api/diagnostics/docker?type=ENVIRONMENT_INTEGRITY_CHECK');
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       const data = await res.json();
       setDockerResult(data);
-    } catch (err: any) {
-      setDockerError(err.message || String(err));
+    } catch (err: unknown) {
+      setDockerError(err instanceof Error ? err.message : String(err));
     } finally {
       setDockerRunning(false);
     }
@@ -151,7 +162,7 @@ export function DiagnosticsModal({
 
     source.onmessage = (event) => {
       try {
-        const parsed = JSON.parse(event.data);
+        const parsed = JSON.parse(event.data) as CopilotEventRecord;
         setSseEvents((prev) => [...prev, parsed]);
         
         // If we get look.complete or session.idle, update state
@@ -174,9 +185,9 @@ export function DiagnosticsModal({
   const handleCheckSdk = async () => {
     setSdkConfirm(false);
     setSdkRunning(true);
-    setSdkError(null);
+    setSdkError(undefined);
     setSdkLogs([]);
-    setSdkAnswer(null);
+    setSdkAnswer(undefined);
 
     try {
       const res = await fetch('/api/copilot/test');
@@ -188,8 +199,8 @@ export function DiagnosticsModal({
       } else {
         setSdkError(data.error || 'Unknown integration error');
       }
-    } catch (err: any) {
-      setSdkError(err.message || String(err));
+    } catch (err: unknown) {
+      setSdkError(err instanceof Error ? err.message : String(err));
     } finally {
       setSdkRunning(false);
     }
@@ -198,7 +209,7 @@ export function DiagnosticsModal({
   const handleCheckT5 = async () => {
     setT5Confirm(false);
     setT5Running(true);
-    setT5Error(null);
+    setT5Error(undefined);
     setT5Events([]);
 
     try {
@@ -221,7 +232,7 @@ export function DiagnosticsModal({
       }
 
       if (!response.body) {
-        throw new Error('Response body is null or not readable');
+        throw new Error('Response body is undefined or not readable');
       }
 
       const reader = response.body.getReader();
@@ -239,7 +250,7 @@ export function DiagnosticsModal({
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             try {
-              const data = JSON.parse(line.slice(6));
+              const data = JSON.parse(line.slice(6)) as CopilotEventRecord;
               setT5Events((prev) => [...prev, data]);
             } catch (pErr) {
               console.warn('T5 JSON parse error:', pErr);
@@ -247,8 +258,8 @@ export function DiagnosticsModal({
           }
         }
       }
-    } catch (err: any) {
-      setT5Error(err.message || String(err));
+    } catch (err: unknown) {
+      setT5Error(err instanceof Error ? err.message : String(err));
     } finally {
       setT5Running(false);
     }
@@ -257,7 +268,7 @@ export function DiagnosticsModal({
   const handleCheckT6 = async () => {
     setT6Confirm(false);
     setT6Running(true);
-    setT6Error(null);
+    setT6Error(undefined);
     setT6Events([]);
 
     try {
@@ -270,7 +281,7 @@ export function DiagnosticsModal({
         },
         body: JSON.stringify({
           prompt: t6Prompt,
-          gates: ['tests', 'lint'],
+          gates: ['tests', 'lint'] as const,
           maxRetries: 2,
           apiKey: 'dummy',
           model: t6Model,
@@ -287,7 +298,7 @@ export function DiagnosticsModal({
       }
 
       if (!response.body) {
-        throw new Error('Response body is null or not readable');
+        throw new Error('Response body is undefined or not readable');
       }
 
       const reader = response.body.getReader();
@@ -305,7 +316,7 @@ export function DiagnosticsModal({
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             try {
-              const data = JSON.parse(line.slice(6));
+              const data = JSON.parse(line.slice(6)) as CopilotEventRecord;
               setT6Events((prev) => [...prev, data]);
             } catch (pErr) {
               console.warn('T6 JSON parse error:', pErr);
@@ -313,8 +324,8 @@ export function DiagnosticsModal({
           }
         }
       }
-    } catch (err: any) {
-      setT6Error(err.message || String(err));
+    } catch (err: unknown) {
+      setT6Error(err instanceof Error ? err.message : String(err));
     } finally {
       setT6Running(false);
     }
@@ -326,13 +337,13 @@ export function DiagnosticsModal({
       return;
     }
     setT6Confirm(false);
-    setT6Error(null);
+    setT6Error(undefined);
     onClose(); // Close the diagnostics modal
     try {
       const traceToUse = t6ReplayTraceId === 'custom' ? customTraceId : t6ReplayTraceId;
       
       const newScenarioId = `replay-sim-${Date.now()}`;
-      const newScenario: any = {
+      const newScenario: Scenario = {
         id: newScenarioId,
         name: `[Replay] ${t6Prompt.substring(0, 15)}...`,
         description: `Diagnostic Replay Trace: ${traceToUse}`,
@@ -340,8 +351,8 @@ export function DiagnosticsModal({
         events: []
       };
       
-      if (typeof (window as any).__addScenario === 'function') {
-         (window as any).__addScenario(newScenario);
+      if (typeof window.__addScenario === 'function') {
+         window.__addScenario(newScenario);
       }
       if (setActiveScenarioId) {
         setActiveScenarioId(newScenarioId);
@@ -349,18 +360,19 @@ export function DiagnosticsModal({
 
       await runWithGates({
         prompt: t6Prompt,
-        gates: ['tests', 'lint'],
+        gates: ['tests', 'lint'] as const,
         maxRetries: 2,
         sessionId: newScenarioId,
-        apiKey: 'dummy_key',
         model: t6Model,
+        apiKey: 'dummy_key',
+        cwd: '.',
         replayTraceId: traceToUse,
         simulateBackpressureDelayMs: backpressureDelay > 0 ? backpressureDelay : undefined,
         setScenarioTurns
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to run main app replay:", err);
-      setT6Error(err.message || 'Failed to start replay');
+      setT6Error(err instanceof Error ? err.message : 'Failed to start replay');
     }
   };
 
@@ -369,13 +381,13 @@ export function DiagnosticsModal({
     try {
       const res = await fetch('/api/diagnostics/last-run-log');
       const data = await res.json();
-      const serverLog = data.serverLog || [];
-      const clientLog = getClientLog ? getClientLog() : [];
+      const serverLog: readonly string[] = data.serverLog || [];
+      const clientLog: readonly string[] = getClientLog ? getClientLog() : [];
       setDumpedLogs({ server: serverLog, client: clientLog });
       
       const copyText = `--- SERVER LOG ---\n${serverLog.join('\n')}\n\n--- CLIENT LOG ---\n${clientLog.join('\n')}`;
       navigator.clipboard.writeText(copyText).catch(() => {});
-    } catch (err) {
+    } catch (err: unknown) {
       console.error(err);
     } finally {
       setDumpLogsRunning(false);
@@ -384,7 +396,7 @@ export function DiagnosticsModal({
 
   const handleDumpProxy = async () => {
     setProxyRunning(true);
-    setProxyError(null);
+    setProxyError(undefined);
     try {
       const res = await fetch('/api/diagnostics/proxy-log');
       const data = await res.json();
@@ -393,8 +405,8 @@ export function DiagnosticsModal({
       setProxyLog(data.log || '');
       
       navigator.clipboard.writeText(data.log || '').catch(() => {});
-    } catch (err: any) {
-      setProxyError(err.message || String(err));
+    } catch (err: unknown) {
+      setProxyError(err instanceof Error ? err.message : String(err));
     } finally {
       setProxyRunning(false);
     }
@@ -886,7 +898,7 @@ export function DiagnosticsModal({
                                 </div>
                               )}
                               <pre className="text-[8px] text-slate-400 overflow-x-auto select-all whitespace-pre bg-slate-50/50 dark:bg-slate-950/40 p-1 rounded mt-0.5">
-                                {JSON.stringify(evt.data || {}, null, 1)}
+                                {JSON.stringify(evt.data || {}, undefined, 1)}
                               </pre>
                             </div>
                           ))}
@@ -1088,7 +1100,7 @@ export function DiagnosticsModal({
                                </div>
                              )}
                              <pre className="text-[8px] text-slate-400 overflow-x-auto select-all whitespace-pre bg-slate-50/50 dark:bg-slate-950/40 p-1 rounded mt-0.5">
-                               {JSON.stringify(evt.data || {}, null, 1)}
+                               {JSON.stringify(evt.data || {}, undefined, 1)}
                              </pre>
                            </div>
                          ))}

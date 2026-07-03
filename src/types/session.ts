@@ -1,8 +1,5 @@
 import { ModelTier } from '../config/models';
-
-export interface CopilotSession {
-  readonly disconnect: () => Promise<void>;
-}
+import { CopilotSession } from '../copilotSdk/boundary';
 
 export interface TaskDecomposition {
   readonly version: number;
@@ -32,7 +29,19 @@ export interface CopilotEventData {
   readonly id: string;
   readonly timestamp: string;
   readonly type: string;
+  readonly sequenceId?: number;
   readonly data?: unknown;
+}
+
+export function getSequenceId(ev: CopilotEventData): number {
+  if (typeof ev.sequenceId === 'number') {
+    return ev.sequenceId;
+  }
+  if (ev.data && typeof ev.data === 'object' && 'sequenceId' in ev.data) {
+    const data = ev.data as { readonly sequenceId: number };
+    return data.sequenceId;
+  }
+  return 0;
 }
 
 export interface Turn {
@@ -41,6 +50,23 @@ export interface Turn {
   readonly status: 'running' | 'completed' | 'failed';
   readonly events: ReadonlyArray<CopilotEventData>;
   readonly commitSha?: string | undefined;
+}
+
+export interface TestSession {
+  readonly disconnect: () => Promise<void>;
+  readonly on: (cb: (event: CopilotEventData) => void) => () => void;
+  readonly send: {
+    (prompt: string): Promise<string>;
+    (options: { readonly prompt: string }): Promise<string>;
+  };
+  readonly sessionId: string;
+}
+
+export interface AppSession {
+  readonly disconnect: () => Promise<void>;
+  readonly on: (cb: (event: CopilotEventData) => void) => () => void;
+  readonly sessionId: string;
+  readonly sendAndWait: (args: { readonly prompt: string }, timeout: number) => Promise<void>;
 }
 
 export interface SessionRecord {
@@ -61,4 +87,5 @@ export interface SessionRecord {
   readonly turns: ReadonlyArray<Turn>;
   readonly diagnosticTrail?: ReadonlyArray<unknown>;
   readonly unsubscribe?: () => void;
+  readonly pendingPatchedSpec?: string;
 }

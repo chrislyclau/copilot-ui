@@ -3,12 +3,12 @@ import { Sparkles, Terminal, Layers } from 'lucide-react';
 import { Scenario } from '../../mockEvents';
 
 interface HeaderProps {
-  scenarios: Scenario[];
-  activeScenarioId: string;
-  setActiveScenarioId: (id: string) => void;
-  fetchLogs: () => void;
-  activeReplayTraceId?: string | null;
-  onOpenTerminal?: () => void;
+  readonly scenarios: readonly Scenario[];
+  readonly activeScenarioId: string;
+  readonly setActiveScenarioId: (id: string) => void;
+  readonly fetchLogs: () => void;
+  readonly activeReplayTraceId?: string | undefined;
+  readonly onOpenTerminal?: () => void;
 }
 
 export function Header({

@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
-import { PRESET_SCENARIOS, Scenario, CopilotEvent } from '../mockEvents';
+import { PRESET_SCENARIOS, Scenario, CopilotEvent, TurnData } from '../mockEvents';
 import { getBundledEvents } from '../parser';
 
 export function useScenarios() {
-  const [scenarios, setScenarios] = useState<Scenario[]>(PRESET_SCENARIOS);
+  const [scenarios, setScenarios] = useState<readonly Scenario[]>(PRESET_SCENARIOS);
   const [activeScenarioId, setActiveScenarioId] = useState<string>(PRESET_SCENARIOS[0]!.id);
 
   // Active scenario definition
@@ -23,7 +23,7 @@ export function useScenarios() {
   };
 
   const appendEventToScenario = (scenarioId: string, copilotEvent: CopilotEvent) => {
-    setScenarios(prev => prev.map(s => {
+    setScenarios(prev => prev.map((s): Scenario => {
       if (s.id === scenarioId) {
         const exists = s.events.some(e => e.sessionEvent.id === copilotEvent.sessionEvent.id);
         if (exists) return s;
@@ -36,8 +36,8 @@ export function useScenarios() {
     }));
   };
 
-  const setScenarioEvents = (scenarioId: string, events: CopilotEvent[]) => {
-    setScenarios(prev => prev.map(s => {
+  const setScenarioEvents = (scenarioId: string, events: readonly CopilotEvent[]) => {
+    setScenarios(prev => prev.map((s): Scenario => {
       if (s.id === scenarioId) {
         return {
           ...s,
@@ -48,8 +48,8 @@ export function useScenarios() {
     }));
   };
 
-  const setScenarioTurns = (scenarioId: string, turns: any[], events: CopilotEvent[]) => {
-    setScenarios(prev => prev.map(s => {
+  const setScenarioTurns = (scenarioId: string, turns: readonly TurnData[], events: readonly CopilotEvent[]) => {
+    setScenarios(prev => prev.map((s): Scenario => {
       if (s.id === scenarioId) {
         return {
           ...s,

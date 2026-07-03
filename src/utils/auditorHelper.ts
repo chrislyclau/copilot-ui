@@ -114,7 +114,8 @@ export async function executeAuditSession<T>(
   systemPrompt: string,
   tool: any,
   userPrompt: string,
-  responseRequirements: ResponseRequirement
+  responseRequirements: ResponseRequirement,
+  abortSignal?: AbortSignal
 ): Promise<T | null> {
   const client = new CopilotClient({
     workingDirectory,
@@ -123,6 +124,14 @@ export async function executeAuditSession<T>(
   });
 
   let result: T | null = null;
+
+  const abortPromise = new Promise<never>((_, reject) => {
+    if (abortSignal) {
+      const onAbort = () => reject(new Error('Auditor session aborted by client or timeout'));
+      if (abortSignal.aborted) onAbort();
+      else abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
 
   try {
     console.log('[executeAuditSession] starting client...');
@@ -139,7 +148,10 @@ export async function executeAuditSession<T>(
     console.log('[executeAuditSession] creating session...');
     const session = await client.createSession(sessionSettings as any);
     console.log('[executeAuditSession] sending and waiting for response...');
-    await session.sendAndWait({ prompt: userPrompt }, 60000);
+    await Promise.race([
+      session.sendAndWait({ prompt: userPrompt }, 60000),
+      abortPromise
+    ]);
     console.log('[executeAuditSession] disconnecting session...');
     await session.disconnect();
     

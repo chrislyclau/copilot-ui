@@ -2,7 +2,7 @@ import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditor
 import { submitSpecAuditTool } from '../config/tools';
 import { getGitSandbox, getExecCommand } from '../workspace';
 
-export async function runSpecAudit(cwd: string): Promise<{ pass: boolean; feedback: string }> {
+export async function runSpecAudit(cwd: string, abortSignal?: AbortSignal): Promise<{ pass: boolean; feedback: string }> {
   const targetCwd = cwd;
   const executionConfig = getAuditorExecutionConfig();
 
@@ -24,7 +24,8 @@ export async function runSpecAudit(cwd: string): Promise<{ pass: boolean; feedba
     // 2. Read architecture-spec.md
     let spec = '';
     const execResult = await getExecCommand()(
-      targetCwd ? `cd '${targetCwd}' && cat architecture-spec.md` : 'cat architecture-spec.md'
+      targetCwd ? `cd '${targetCwd}' && cat architecture-spec.md` : 'cat architecture-spec.md',
+      abortSignal
     );
     if (execResult.exitCode === 0) {
       spec = execResult.stdout;
@@ -57,7 +58,8 @@ You must not answer conversationally and must strictly invoke 'submit_spec_audit
       {
         toolChoice: { type: 'function', function: { name: submitSpecAuditTool.function.name } },
         allowOthers: false
-      }
+      },
+      abortSignal
     );
 
     if (auditResult) {

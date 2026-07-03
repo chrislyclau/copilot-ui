@@ -4,12 +4,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { CopilotEvent } from '../../mockEvents';
 
 interface CollapsedOthersRowProps {
-  id: string;
-  collapsedEvents: CopilotEvent[];
-  isExpanded: boolean;
-  toggleExpand: () => void;
-  focusedEventId: string | null;
-  setFocusedEventId: (id: string) => void;
+  readonly id: string;
+  readonly collapsedEvents: readonly CopilotEvent[];
+  readonly isExpanded: boolean;
+  readonly toggleExpand: () => void;
+  readonly focusedEventId: string | undefined;
+  readonly setFocusedEventId: (id: string | undefined) => void;
 }
 
 export function CollapsedOthersRow({

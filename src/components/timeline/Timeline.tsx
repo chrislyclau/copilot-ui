@@ -8,19 +8,19 @@ import { FilterBar } from '../filters/FilterBar';
 import { useTimeline } from '../../hooks/useTimeline';
 
 interface TimelineProps {
-  activeScenarioId: string;
-  bundledEvents: CopilotEvent[];
-  filteredEvents: CopilotEvent[];
-  turnsData?: TurnData[];
-  searchQuery: string;
-  setSearchQuery: (query: string) => void;
-  selectedCategory: string;
-  setSelectedCategory: (category: string) => void;
-  copiedText: string | null;
-  copyToClipboard: (text: string, label: string) => void;
-  onFocusedEventIdChange: (id: string | null) => void;
-  resumeAsHuman?: (input: string) => any;
-  isGateLoopRunning?: boolean;
+  readonly activeScenarioId: string;
+  readonly bundledEvents: readonly CopilotEvent[];
+  readonly filteredEvents: readonly CopilotEvent[];
+  readonly turnsData?: readonly TurnData[];
+  readonly searchQuery: string;
+  readonly setSearchQuery: (query: string) => void;
+  readonly selectedCategory: string;
+  readonly setSelectedCategory: (category: string) => void;
+  readonly copiedText: string | undefined;
+  readonly copyToClipboard: (text: string, label: string) => void;
+  readonly onFocusedEventIdChange: (id: string | undefined) => void;
+  readonly resumeAsHuman?: (input: string) => unknown;
+  readonly isGateLoopRunning?: boolean;
 }
 
 export function Timeline({

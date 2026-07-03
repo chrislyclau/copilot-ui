@@ -3,13 +3,13 @@ import { FileCode, Activity } from 'lucide-react';
 import Markdown from './Markdown';
 
 interface GitFileStat {
-  file: string;
-  added: number;
-  removed: number;
+  readonly file: string;
+  readonly added: number;
+  readonly removed: number;
 }
 
 export function VerificationFrame() {
-  const [diffData, setDiffData] = useState<{ diff: string, files: GitFileStat[] } | null>(null);
+  const [diffData, setDiffData] = useState<{ readonly diff: string, readonly files: readonly GitFileStat[] } | undefined>(undefined);
   const [showFullDiff, setShowFullDiff] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 

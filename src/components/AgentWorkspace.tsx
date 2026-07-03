@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Send, Terminal, AlertCircle } from 'lucide-react';
 import { VerificationFrame } from './VerificationFrame';
+import { GateConfig } from '../types';
 
 interface AgentWorkspaceProps {
-  runWithGates: (config: any) => Promise<void>;
+  runWithGates: (config: GateConfig) => Promise<void>;
   isGateLoopRunning: boolean;
   activeScenarioId: string;
 }
@@ -22,10 +23,16 @@ export function AgentWorkspace({ runWithGates, isGateLoopRunning, activeScenario
         maxRetries: 2,
         sessionId: activeScenarioId,
         model: 'gemini-3.1-pro-preview',
+        apiKey: 'dummy',
+        cwd: '.',
       });
       setPrompt('');
-    } catch (err: any) {
-      setErrorMsg(err.message || 'An error occurred during execution.');
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setErrorMsg(err.message);
+      } else {
+        setErrorMsg('An error occurred during execution.');
+      }
     }
   };
 

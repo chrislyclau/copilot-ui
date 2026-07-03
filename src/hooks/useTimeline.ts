@@ -1,49 +1,50 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { CopilotEvent, TurnData } from '../mockEvents';
+import { ExtendedSessionEvent } from '../types/events';
 
 export interface TurnNode {
-  type: 'turn';
-  id: string;
-  taskLabel: string;
-  commitSha: string | null;
-  status: 'running' | 'completed' | 'failed';
-  events: CopilotEvent[];
-  nodes: TimelineNode[];
+  readonly type: 'turn';
+  readonly id: string;
+  readonly taskLabel: string;
+  readonly commitSha: string | undefined;
+  readonly status: 'running' | 'completed' | 'failed';
+  readonly events: readonly CopilotEvent[];
+  readonly nodes: readonly TimelineNode[];
 }
 
 export interface ActionHistoryGroupNode {
-  type: 'action_history';
-  id: string;
-  events: CopilotEvent[];
+  readonly type: 'action_history';
+  readonly id: string;
+  readonly events: readonly CopilotEvent[];
 }
 
 export interface ConversationalNode {
-  type: 'conversational';
-  id: string;
-  event: CopilotEvent;
+  readonly type: 'conversational';
+  readonly id: string;
+  readonly event: CopilotEvent;
 }
 
 export type TimelineNode = ConversationalNode | ActionHistoryGroupNode;
 
 export interface SegmentedNode {
-  id: string;
-  type: 'thinking' | 'tool' | 'collapsed';
-  event?: CopilotEvent;
-  events?: CopilotEvent[];
+  readonly id: string;
+  readonly type: 'thinking' | 'tool' | 'collapsed';
+  readonly event?: CopilotEvent;
+  readonly events?: readonly CopilotEvent[];
 }
 
 export function useTimeline(
   activeScenarioId: string,
-  bundledEvents: CopilotEvent[],
-  filteredEvents: CopilotEvent[],
-  turnsData: TurnData[] = []
+  bundledEvents: readonly CopilotEvent[],
+  filteredEvents: readonly CopilotEvent[],
+  turnsData: readonly TurnData[] = []
 ) {
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [expandedActionHistories, setExpandedActionHistories] = useState<Record<string, boolean>>({});
   const [expandedCollapsedGroups, setExpandedCollapsedGroups] = useState<Record<string, boolean>>({});
   const [expandedTurns, setExpandedTurns] = useState<Record<string, boolean>>({});
-  const [focusedEventId, setFocusedEventId] = useState<string | null>(null);
-  const [cardInnerTabs, setCardInnerTabs] = useState<Record<string, 'details' | 'json' | 'stream'>>({});
+  const [focusedEventId, setFocusedEventId] = useState<string | undefined>(undefined);
+  const [cardInnerTabs, setCardInnerTabs] = useState<Record<string, 'details' | 'json' | 'stream' | undefined>>({});
 
   const lastStatusesRef = useRef<Record<string, 'running' | 'completed' | 'failed'>>({});
 
@@ -70,7 +71,7 @@ export function useTimeline(
     if (bundledEvents.length > 0) {
       setFocusedEventId(bundledEvents[0]!.sessionEvent.id);
     } else {
-      setFocusedEventId(null);
+      setFocusedEventId(undefined);
     }
   }, [activeScenarioId, bundledEvents]);
 
@@ -84,7 +85,7 @@ export function useTimeline(
   };
 
   const turns = useMemo(() => {
-    const buildNodesForTurn = (events: CopilotEvent[]): TimelineNode[] => {
+    const buildNodesForTurn = (events: readonly CopilotEvent[]): readonly TimelineNode[] => {
       let history: CopilotEvent[] = [];
       const nodes: TimelineNode[] = [];
       const flush = () => {
@@ -134,7 +135,7 @@ export function useTimeline(
         type: 'turn',
         id: t.id,
         taskLabel: t.taskLabel,
-        commitSha: t.commitSha || null,
+        commitSha: t.commitSha || undefined,
         status: t.status,
         events: t.events,
         nodes: buildNodesForTurn(t.events)
@@ -143,44 +144,49 @@ export function useTimeline(
 
     // Fallback to inference logic for flat event streams
     const turnList: TurnNode[] = [];
-    let currentTurn: TurnNode | null = null;
     let turnCounter = 1;
 
+    let accumulatedEvents: CopilotEvent[] = [];
+    let taskLabel = 'Processing Request...';
+    let commitSha: string | undefined = undefined;
+    let status: 'running' | 'completed' | 'failed' = 'running';
+    let hasActiveTurn = false;
+
     const finalizeTurn = () => {
-      if (currentTurn) {
-        currentTurn.nodes = buildNodesForTurn(currentTurn.events);
-        turnList.push(currentTurn);
-        currentTurn = null;
+      if (hasActiveTurn) {
+        turnList.push({
+          type: 'turn',
+          id: `turn-${turnCounter++}`,
+          taskLabel,
+          commitSha,
+          status,
+          events: [...accumulatedEvents],
+          nodes: buildNodesForTurn(accumulatedEvents)
+        });
+        accumulatedEvents = [];
+        taskLabel = 'Processing Request...';
+        commitSha = undefined;
+        status = 'running';
+        hasActiveTurn = false;
       }
     };
 
     filteredEvents.forEach(evt => {
       const type = evt.sessionEvent.type;
-
-      if (!currentTurn) {
-        currentTurn = {
-          type: 'turn',
-          id: `turn-${turnCounter++}`,
-          taskLabel: 'Processing Request...',
-          commitSha: null,
-          status: 'running',
-          events: [],
-          nodes: []
-        };
-      }
-
-      currentTurn.events.push(evt);
+      hasActiveTurn = true;
+      accumulatedEvents.push(evt);
 
       if (type === 'TURN_COMPLETED') {
-        const data = (evt.sessionEvent as any).data;
-        if (data) {
-          if (data.taskLabel) currentTurn.taskLabel = data.taskLabel;
-          if (data.commitSha) currentTurn.commitSha = data.commitSha;
-          currentTurn.status = 'completed';
+        const data = (evt.sessionEvent as ExtendedSessionEvent).data;
+        if (data && typeof data === 'object' && 'taskLabel' in data) {
+          const d = data as { readonly taskLabel?: string; readonly commitSha?: string };
+          if (d.taskLabel) taskLabel = d.taskLabel;
+          if (d.commitSha) commitSha = d.commitSha;
+          status = 'completed';
         }
         finalizeTurn();
       } else if (type === 'loop.escalate_human' || type === 'loop.error') {
-        currentTurn.status = 'failed';
+        status = 'failed';
         finalizeTurn();
       }
     });
@@ -243,7 +249,7 @@ export function useTimeline(
     }
   }, [turns]);
 
-  const segmentActionHistory = (events: CopilotEvent[]) => {
+  const segmentActionHistory = (events: readonly CopilotEvent[]) => {
     const nodes: SegmentedNode[] = [];
     let currentCollapsed: CopilotEvent[] = [];
 

@@ -28,18 +28,18 @@ import { parseEvent, extractAssistantText } from '../../parser';
 import Markdown from '../Markdown';
 
 interface EventCardProps {
-  event: CopilotEvent;
-  idx: number;
-  isNested?: boolean;
-  focusedEventId: string | null;
-  setFocusedEventId: (id: string | null) => void;
-  isExpanded: boolean;
-  toggleExpand: (id: string, e?: React.MouseEvent) => void;
-  innerTab: 'details' | 'json' | 'stream';
-  setTab: (id: string, tab: 'details' | 'json' | 'stream') => void;
-  copiedText: string | null;
-  copyToClipboard: (text: string, label: string) => void;
-  resumeAsHuman?: (input: string) => any;
+  readonly event: CopilotEvent;
+  readonly idx: number;
+  readonly isNested?: boolean;
+  readonly focusedEventId: string | undefined;
+  readonly setFocusedEventId: (id: string | undefined) => void;
+  readonly isExpanded: boolean;
+  readonly toggleExpand: (id: string, e?: React.MouseEvent) => void;
+  readonly innerTab: 'details' | 'json' | 'stream' | undefined;
+  readonly setTab: (id: string, tab: 'details' | 'json' | 'stream') => void;
+  readonly copiedText: string | undefined;
+  readonly copyToClipboard: (text: string, label: string) => void;
+  readonly resumeAsHuman?: (input: string) => unknown;
 }
 
 export function EventCard({
@@ -57,7 +57,7 @@ export function EventCard({
   resumeAsHuman,
 }: EventCardProps) {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
-  const [submitError, setSubmitError] = React.useState<string | null>(null);
+  const [submitError, setSubmitError] = React.useState<string | undefined>(undefined);
   const normalizedType = event.sessionEvent.type;
   const eventData = (event.sessionEvent.data || {}) as any;
   const isFocused = event.sessionEvent.id === focusedEventId;
@@ -515,7 +515,7 @@ export function EventCard({
                             const input = (event as any).humanInput || '';                
                             if (resumeAsHuman) {
                               setIsSubmitting(true);
-                              setSubmitError(null);
+                              setSubmitError(undefined);
                               Promise.resolve(resumeAsHuman(input))
                                 .then(() => {
                                   setIsSubmitting(false);

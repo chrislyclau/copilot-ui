@@ -1,3 +1,4 @@
+import { getWorkspaceHostLocation } from "../workspace";
 import { describe, it, beforeAll, afterAll } from 'vitest';
 import assert from 'node:assert';
 import { serverHarness } from './harness/ServerHarness';
@@ -23,7 +24,10 @@ describe('Spec-Gate Auditor Validation Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/spec_gate_audit_failure.yaml');
     
-    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-gate-'));
+    // Use getWorkspaceHostLocation to create directory on host, and relative path for the API
+    const relativeCwd = 'spec-gate-' + Math.random().toString(36).substring(2, 8);
+    const hostCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
+    fs.mkdirSync(hostCwd, { recursive: true });
 
     // Initialize git and commit a baseline to simulate active changes
     console.log('Initializing local mock git structure inside test workspace...');
@@ -31,16 +35,16 @@ describe('Spec-Gate Auditor Validation Tests', () => {
     await initializeWorkspace();
     const sandbox = getGitSandbox();
     
-    fs.writeFileSync(path.join(tempCwd, 'architecture-spec.md'), 'Spec: Must conform to specs.');
-    fs.writeFileSync(path.join(tempCwd, 'temp.txt'), 'baseline state');
+    fs.writeFileSync(path.join(hostCwd, 'architecture-spec.md'), 'Spec: Must conform to specs.');
+    fs.writeFileSync(path.join(hostCwd, 'temp.txt'), 'baseline state');
     
     await sandbox.commitAllChangesAsync("initial specs commit");
     
     // Make a modification to create unstaged changes (meaning git diff is non-empty)
-    fs.writeFileSync(path.join(tempCwd, 'temp.txt'), 'baseline state - modified with unstaged edits');
+    fs.writeFileSync(path.join(hostCwd, 'temp.txt'), 'baseline state - modified with unstaged edits');
 
     // Write package.json with exit 0 lint script so compilation check passes instantly
-    fs.writeFileSync(path.join(tempCwd, 'package.json'), JSON.stringify({
+    fs.writeFileSync(path.join(hostCwd, 'package.json'), JSON.stringify({
       name: 'mock-spec-workspace',
       scripts: {
         lint: 'echo "Lint Passed" && exit 0'
@@ -50,7 +54,7 @@ describe('Spec-Gate Auditor Validation Tests', () => {
     try {
       await proxy.updateConfig({
         filePath: snapshotPath,
-        workDir: tempCwd,
+        workDir: hostCwd,
       });
 
       console.log('Sending request to /api/copilot/gate-run with Spec Gate auditing enabled');
@@ -63,7 +67,7 @@ describe('Spec-Gate Auditor Validation Tests', () => {
         body: JSON.stringify({
           prompt: 'Implement features conforming to architecture spec.',
           model: 'claude-sonnet-4.5',
-          cwd: tempCwd,
+          cwd: relativeCwd,
           gates: ['runLint'],
           maxRetries: 1
         })
@@ -99,8 +103,8 @@ describe('Spec-Gate Auditor Validation Tests', () => {
 
       console.log('✓ Spec-Gate Auditor integration test validated successfully!');
     } finally {
-      if (fs.existsSync(tempCwd)) {
-        fs.rmSync(tempCwd, { recursive: true, force: true });
+      if (fs.existsSync(hostCwd)) {
+        fs.rmSync(hostCwd, { recursive: true, force: true });
       }
     }
   });

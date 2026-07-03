@@ -3,13 +3,13 @@ import { Search } from 'lucide-react';
 import { CopilotEvent } from '../../mockEvents';
 
 interface FilterBarProps {
-  searchQuery: string;
-  setSearchQuery: (query: string) => void;
-  expandAll: () => void;
-  collapseAll: () => void;
-  selectedCategory: string;
-  setSelectedCategory: (cat: string) => void;
-  events: CopilotEvent[];
+  readonly searchQuery: string;
+  readonly setSearchQuery: (query: string) => void;
+  readonly expandAll: () => void;
+  readonly collapseAll: () => void;
+  readonly selectedCategory: string;
+  readonly setSelectedCategory: (cat: string) => void;
+  readonly events: readonly CopilotEvent[];
 }
 
 export function FilterBar({

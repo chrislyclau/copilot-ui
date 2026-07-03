@@ -61,7 +61,8 @@ export type { CopilotCreateSessionOptions };
 import { DEFAULT_ROLES_CONFIG } from './config/models';
 import { runGate, runTests, runLint, runWithTimeout } from './gates';
 import { MODEL_TIERS, getNextTier } from './config/models';
-import { SessionRecord, StateSnapshot, CopilotEventData, Turn } from './types/session';
+import { SessionRecord, StateSnapshot, CopilotEventData, Turn, getSequenceId, TestSession, AppSession } from './types/session';
+import { ExecutionConfig, ProviderConfig } from './utils/providerRegistry';
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from './utils/prompt';
 import { makeDockerToolHandler } from './utils/toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from './config/tools';
@@ -186,16 +187,16 @@ function setupEnvWatcherWithBackoff(delay: number = 1000) {
   try {
     if (fs.existsSync(envPath)) {
       if (envWatcher) {
-        try { (envWatcher as any).close(); } catch (_) {}
+        try { envWatcher.close(); } catch (_) {}
       }
       envWatcher = fs.watch(envPath, (eventType) => {
         if (eventType === 'change') {
           rebuildSensitiveValuesCache();
         }
       });
-      envWatcher.on('error', (err: any) => {
-        writeLog(`[Watcher] Env watcher encountered error: ${err?.message || err}. Reconnecting with backoff...`);
-        try { if (envWatcher) { (envWatcher as any).close(); } } catch (_) {}
+      envWatcher.on('error', (err: Error) => {
+        writeLog(`[Watcher] Env watcher encountered error: ${err?.message || String(err)}. Reconnecting with backoff...`);
+        try { if (envWatcher) { envWatcher.close(); } } catch (_) {}
         envWatcher = null;
         const nextDelay = Math.min(delay * 2, 30000);
         setTimeout(() => setupEnvWatcherWithBackoff(nextDelay), delay);
@@ -205,8 +206,8 @@ function setupEnvWatcherWithBackoff(delay: number = 1000) {
       const nextDelay = Math.min(delay * 2, 30000);
       setTimeout(() => setupEnvWatcherWithBackoff(nextDelay), delay);
     }
-  } catch (err: any) {
-    writeLog(`[Watcher] Exception establishing env watcher: ${err?.message || err}. Retry in ${delay}ms`);
+  } catch (err: unknown) {
+    writeLog(`[Watcher] Exception establishing env watcher: ${err instanceof Error ? err.message : String(err)}. Retry in ${delay}ms`);
     const nextDelay = Math.min(delay * 2, 30000);
     setTimeout(() => setupEnvWatcherWithBackoff(nextDelay), delay);
   }
@@ -241,17 +242,26 @@ stopSessionGarbageCollector = startSessionGarbageCollector({
 
 // Intercept stderr to capture subprocess crashes
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
-process.stderr.write = function (chunk: any, encoding?: any, callback?: any): boolean {
+process.stderr.write = function (
+  chunk: string | Uint8Array,
+  encoding?: BufferEncoding | ((err: Error | null | undefined) => void),
+  callback?: (err: Error | null | undefined) => void
+): boolean {
   const str = chunk.toString();
   if (str.trim()) {
     writeLog(`[STDERR] ${str.trim()}`);
   }
+  
+  if (typeof encoding === 'function') {
+    return originalStderrWrite(chunk, encoding);
+  }
+  
   return originalStderrWrite(chunk, encoding, callback);
 };
 
 // Intercept console.log
 const originalLog = console.log;
-console.log = function(...args: any[]) {
+console.log = function(...args: unknown[]) {
   const message = args.map(arg => 
     typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
   ).join(' ');
@@ -261,10 +271,14 @@ console.log = function(...args: any[]) {
   return originalLog.apply(console, [sanitizedMessage]);
 };
 
+function isStreamError(err: unknown): err is Error & { code?: string } {
+  return err instanceof Error && typeof (err as unknown as Record<string, unknown>).code === 'string';
+}
+
 // Gracefully handle stream destruction crashes from underlying SDKs or third-party dependency libraries
-process.on('uncaughtException', (err: any) => {
+process.on('uncaughtException', (err: Error) => {
   if (err && (
-    err.code === 'ERR_STREAM_DESTROYED' || 
+    (isStreamError(err) && err.code === 'ERR_STREAM_DESTROYED') || 
     err.message?.includes('stream was destroyed') || 
     err.message?.includes('write after end') ||
     err.message?.includes('Cannot call write')
@@ -275,17 +289,20 @@ process.on('uncaughtException', (err: any) => {
   writeLog(`[Unhandled Exception]: ${err?.stack || err}`);
 });
 
-process.on('unhandledRejection', (reason: any) => {
-  if (reason && (
-    (reason as any).code === 'ERR_STREAM_DESTROYED' || 
-    (reason as any).message?.includes('stream was destroyed') || 
-    (reason as any).message?.includes('write after end') ||
-    (reason as any).message?.includes('Cannot call write')
-  )) {
-    writeLog(`[Gracefully swallowed background stream rejection error]: ${(reason as any).message || reason}`);
+process.on('unhandledRejection', (reason: unknown) => {
+  const err = reason instanceof Error ? reason : null;
+  const message = (err?.message || (typeof reason === 'string' ? reason : '')) as string;
+
+  if (
+    (isStreamError(reason) && reason.code === 'ERR_STREAM_DESTROYED') || 
+    message.includes('stream was destroyed') || 
+    message.includes('write after end') ||
+    message.includes('Cannot call write')
+  ) {
+    writeLog(`[Gracefully swallowed background stream rejection error]: ${message}`);
     return;
   }
-  writeLog(`[Unhandled Rejection]: ${reason?.stack || reason}`);
+  writeLog(`[Unhandled Rejection]: ${reason instanceof Error ? reason.stack : reason}`);
 });
 
 export const app = express();
@@ -320,7 +337,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
           if (bodyData) {
             const data = JSON.parse(bodyData);
             if (data && Array.isArray(data.messages)) {
-              data.messages.forEach((m: any) => {
+              data.messages.forEach((m: { refusal?: unknown; parsed?: unknown }) => {
                 if ('refusal' in m) delete m.refusal;
                 if ('parsed' in m) delete m.parsed;
               });
@@ -409,8 +426,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         stderr,
         currentCwd: terminalSessions[sessionId] || currentCwd,
       });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -419,7 +436,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     try {
       const logs = fs.readFileSync(LOG_FILE, 'utf8');
       res.type('text/plain').send(logs);
-    } catch (err) {
+    } catch (err: unknown) {
       res.status(500).send('Error reading logs');
     }
   });
@@ -432,9 +449,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         writeLog(`[FRONTEND] ${message}`);
       }
       res.json({ success: true });
-    } catch (err: any) {
-      writeLog(`[Server] Error writing client log: ${err.message}`);
-      res.status(500).json({ success: false, error: err.message });
+    } catch (err: unknown) {
+      writeLog(`[Server] Error writing client log: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -455,9 +472,10 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       } else {
         res.json({ success: true, log: 'No proxy logs available.' });
       }
-    } catch (err: any) {
-      writeLog(`[API /test/gemini] Exception: ${err.message || err}`);
-      res.status(500).json({ success: false, error: err.message });
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      writeLog(`[API /test/gemini] Exception: ${errorMessage}`);
+      res.status(500).json({ success: false, error: errorMessage });
     }
   });
 
@@ -481,15 +499,16 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       });
 
       res.json({ success: true, diff: diffStdout, files });
-    } catch (err: any) {
-      writeLog(`[API /git/diff] Error: ${err.message || err}`);
-      res.status(500).json({ success: false, diff: '', files: [], error: err.message });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeLog(`[API /git/diff] Error: ${msg}`);
+      res.status(500).json({ success: false, diff: '', files: [], error: msg });
     }
   });
 
   app.get('/api/copilot/test', async (req, res) => {
-    let testSession: any = null;
-    let testClient: any = null;
+    let testSession: TestSession | null = null;
+    let testClient: CopilotClient | null = null;
     try {
       const { apiKey, model } = req.query;
       const keyToUse = (apiKey as string) || process.env.GEMINI_API_KEY;
@@ -531,25 +550,30 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       testSession = await testClient.createSession({
         model: executionConfig.model,
-        ...(executionConfig.provider ? { provider: executionConfig.provider as any } : {}),
+        ...(executionConfig.provider ? { provider: executionConfig.provider } : {}),
         streaming: true,
       });
-      addLine(`✓ Test session created successfully. Session ID: ${testSession.sessionId}`);
+      if (testSession) {
+        addLine(`✓ Test session created successfully. Session ID: ${testSession.sessionId}`);
+      }
 
       addLine("Sending probe message: 'What is 2+2?'");
       
       let answer = "";
+      if (!testSession) throw new Error("testSession is null");
+      const currentTestSession = testSession;
+
       const done = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("Timeout waiting for response delta"));
         }, 12000);
 
-        testSession.on((event: any) => {
+        currentTestSession.on((event: CopilotEventData) => {
           if (event.type === 'assistant.message') {
-            answer = event.data.content || "";
+            answer = (event.data as { content?: string })?.content || "";
             addLine(`[EVENT] assistant.message: "${answer}"`);
           } else if (event.type === 'assistant.message_delta') {
-            if (event.data.deltaContent) {
+            if ((event.data as { deltaContent?: string })?.deltaContent) {
               // limit delta noise
             }
           } else {
@@ -564,25 +588,27 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         });
       });
 
-      await testSession.send({ prompt: "What is 2+2?" });
+      await currentTestSession.send({ prompt: "What is 2+2?" });
       await done;
 
       addLine("Disconnecting session & shutting down subprocess...");
-      await testSession.disconnect();
+      await currentTestSession.disconnect();
       testSession = null;
       await testClient.stop();
       testClient = null;
       addLine("✓ Clean test run complete.");
 
       res.json({ success: true, logs: outputLines, answer });
-    } catch (err: any) {
-      writeLog(`[TEST-SDK] Error carrying out integration test: ${err.stack || err}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : '';
+      writeLog(`[TEST-SDK] Error carrying out integration test: ${stack || msg}`);
       res.json({ 
         success: false, 
-        error: err.message || err,
+        error: msg,
         logs: [
-          `❌ RUNTIME EXCEPTION: ${err.message || err}`,
-          err.stack || ''
+          `❌ RUNTIME EXCEPTION: ${msg}`,
+          stack || ''
         ]
       });
     } finally {
@@ -625,8 +651,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         // Run actual subprocess checks
         testRes = await runTests(runCwd);
         lintRes = await runLint(runCwd);
-      } catch (err: any) {
-        writeLog(`[DIAGNOSTICS] File-system write-check or gate sub-process run failed: "${err.message || err}". Falling back to memory-safe mock workspace metrics to avert 500 status timeouts.`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        writeLog(`[DIAGNOSTICS] File-system write-check or gate sub-process run failed: "${msg}". Falling back to memory-safe mock workspace metrics to avert 500 status timeouts.`);
         fallbackUsed = true;
         testRes = {
           success: true,
@@ -646,7 +673,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         runLint: { pass: lintRes.success, output: lintRes.output, durationMs: lintRes.durationMs },
         fallbackUsed
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       writeLog(`[DIAGNOSTICS] Error running gate diagnostics layout: ${err}`);
       res.json({
         runWithTimeout: { pass: false, durationMs: 0 },
@@ -675,7 +702,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       const execCommand = getExecCommand();
       const result = await execCommand('npx tsx scripts/diagnose-gates.ts');
       if (result.exitCode !== 0) {
-        const err: any = new Error(`Command failed with exit code ${result.exitCode}`);
+        const err = new Error(`Command failed with exit code ${result.exitCode}`) as Error & { stdout?: string; stderr?: string };
         err.stdout = result.stdout;
         err.stderr = result.stderr;
         throw err;
@@ -690,14 +717,15 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         errorOutput: stderr,
         durationMs: Date.now() - start
       });
-    } catch (err: any) {
-      writeLog(`[DIAGNOSTICS] CLI Gate Script check failed: ${err.message || err}`);
-      if (err.stdout) writeLog(`[CLI STDOUT (FAIL)] ${err.stdout.trim()}`);
-      if (err.stderr) writeLog(`[CLI STDERR (FAIL)] ${err.stderr.trim()}`);
+    } catch (err: unknown) {
+      const error = err as Error & { stdout?: string; stderr?: string };
+      writeLog(`[DIAGNOSTICS] CLI Gate Script check failed: ${error.message || error}`);
+      if (error.stdout) writeLog(`[CLI STDOUT (FAIL)] ${error.stdout.trim()}`);
+      if (error.stderr) writeLog(`[CLI STDERR (FAIL)] ${error.stderr.trim()}`);
       res.json({
         success: false,
-        output: err.stdout || '',
-        errorOutput: err.stderr || err.message,
+        output: error.stdout || '',
+        errorOutput: error.stderr || error.message,
         durationMs: Date.now() - start
       });
     }
@@ -721,14 +749,15 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         exitCode: result.exitCode,
         durationMs
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       const durationMs = Date.now() - start;
-      writeLog(`[DIAGNOSTICS] Error running exec diagnostics: ${err}`);
+      const error = err as Error & { code?: string };
+      writeLog(`[DIAGNOSTICS] Error running exec diagnostics: ${error}`);
       res.json({
         pass: false,
         stdout: '',
-        exitCode: err.code === 'ENOENT' ? 127 : -1,
-        error: err.message || 'Workspace runner unreachable',
+        exitCode: error.code === 'ENOENT' ? 127 : -1,
+        error: error.message || 'Workspace runner unreachable',
         durationMs
       });
     }
@@ -775,19 +804,27 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
   // Real GitHub Copilot SDK Execution with Gemini API Integration (BYOK) - switched to POST
   app.post('/api/copilot/run', async (req, res) => {
-    let session: any = null;
+    let session: AppSession | null = null;
     let unsubscribe: (() => void) | null = null;
+
+    const abortController = new AbortController();
+    const abortPromise = new Promise<never>((_, reject) => {
+      const onAbort = () => reject(new Error('Operation aborted by client or timeout'));
+      if (abortController.signal.aborted) onAbort();
+      else abortController.signal.addEventListener('abort', onAbort, { once: true });
+    });
 
     // Handle early client disconnect
     let isRequestClosed = false;
     const cleanup = async () => {
       isRequestClosed = true;
+      abortController.abort();
       sseResToSessionId.delete(res);
       if (unsubscribe) {
         try {
           unsubscribe();
         } catch (e) {
-          writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${e instanceof Error ? e.message : e}`);
+          writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${e instanceof Error ? e.message : String(e)}`);
         }
         unsubscribe = null;
       }
@@ -803,7 +840,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
           session = null;
         }
       } catch (e) {
-        writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${e instanceof Error ? e.message : e}`);
+        writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${e instanceof Error ? e.message : String(e)}`);
       }
     };
 
@@ -878,7 +915,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       const sessionOptions: CopilotCreateSessionOptions = {
         model: executionConfig.model,
-        ...(executionConfig.provider ? { provider: executionConfig.provider as any } : {}),
+        ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}),
         onPermissionRequest: handleGateRunPermission,
         streaming: true,
       };
@@ -891,11 +928,11 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
           client,
           sessionOptions
         );
-        session = record.copilotSession;
+        session = record.copilotSession as unknown as AppSession;
         writeLog(`[SDK] Using session from getOrCreateSession for id: ${sessionId}`);
       } else {
-        session = await client.createSession(sessionOptions as any);
-        writeLog(`[SDK] session created or reused, id: ${session.sessionId}`);
+        session = (await client.createSession(sessionOptions)) as unknown as AppSession;
+        writeLog(`[SDK] session created or reused, id: ${session?.sessionId}`);
       }
 
       if (isRequestClosed) return;
@@ -910,7 +947,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         }
       }, 15000);
 
-      unsubscribe = session.on(async (event: any) => {
+      if (!session) throw new Error('Failed to initialize session');
+      unsubscribe = session.on(async (event: CopilotEventData) => {
         try {
           writeLog(`[SDK] event received: ${event.type} | res.writableEnded: ${res.writableEnded} | res.destroyed: ${res.destroyed}`);
           if (res.writableEnded || res.destroyed) {
@@ -921,7 +959,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
             return;
           }
           await secureWrite(res, `data: ${JSON.stringify(event)}\n\n`);
-          if (event.type === 'session.idle' || event.type === 'session.shutdown') {
+          if (event.type === 'session.idle' || event.type === 'session.error' || event.type === 'session.shutdown') {
             if (unsubscribe) {
               unsubscribe();
               unsubscribe = null;
@@ -931,14 +969,17 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
               await flushSseAndEnd(res);
             }
           }
-        } catch (streamErr: any) {
+        } catch (streamErr: unknown) {
           // background exceptions handled gracefully
-          writeLog(`[SDK] Error in listener write: ${streamErr?.message || streamErr}`);
+          writeLog(`[SDK] Error in listener write: ${streamErr instanceof Error ? streamErr.message : String(streamErr)}`);
         }
       });
 
       // Dispatch request and reliably await full Turn completion
-      await session.sendAndWait({ prompt: promptStr }, 600000);
+      await Promise.race([
+        session.sendAndWait({ prompt: promptStr }, 600000),
+        abortPromise
+      ]);
       writeLog(`[SDK] sendAndWait() resolved | res.writableEnded: ${res.writableEnded}`);
 
       // Pause briefly (500ms) to allow any final telemetry or event signals to flush
@@ -950,7 +991,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         try {
           unsubscribe();
         } catch (unsubErr) {
-          writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${unsubErr instanceof Error ? unsubErr.message : unsubErr}`);
+          writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${unsubErr instanceof Error ? unsubErr.message : String(unsubErr)}`);
         }
         unsubscribe = null;
       }
@@ -960,15 +1001,16 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         await flushSseAndEnd(res);
       }
 
-    } catch (e: any) {
-      writeLog(`[SDK] Error running real SDK: ${e?.stack || e}`);
+    } catch (e: unknown) {
+      const error = e as Error & { stack?: string };
+      writeLog(`[SDK] Error running real SDK: ${error?.stack || error}`);
       // If client-level error, reset it so next request rebuilds
       await resetGlobalClient();
       if (unsubscribe) {
         try {
           unsubscribe();
         } catch (unsubErr) {
-          writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${unsubErr instanceof Error ? unsubErr.message : unsubErr}`);
+          writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${unsubErr instanceof Error ? unsubErr.message : String(unsubErr)}`);
         }
         unsubscribe = null;
       }
@@ -978,14 +1020,14 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
           session = null;
         }
       } catch (discErr) {
-        writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${discErr instanceof Error ? discErr.message : discErr}`);
+        writeLog(`[GateLoop Cleanup Warning] Failed to tear down session: ${discErr instanceof Error ? discErr.message : String(discErr)}`);
       }
       try {
         if (!res.destroyed && !res.writableEnded) {
           try {
             await secureWrite(res, `data: ${JSON.stringify({
               type: 'session.error',
-              data: { message: e.message || 'Error occurred while running actual GitHub Copilot SDK.' }
+              data: { message: error.message || 'Error occurred while running actual GitHub Copilot SDK.' }
             })}\n\n`);
             await flushSseAndEnd(res);
           } catch (streamErr) {
@@ -1020,15 +1062,19 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
     const turns = session.turns ? [...session.turns] : [];
     // SYS-REQ-019: Transform nested turns into backwards-compatible flat auditTrail for client compatibility
-    const auditTrail = turns.flatMap((t: any) => t.events || []).sort((a: any, b: any) => (a.sequenceId || 0) - (b.sequenceId || 0));
+    const auditTrail = turns.flatMap((t: Turn) => t.events || []).sort((a: CopilotEventData, b: CopilotEventData) => {
+      const seqA = getSequenceId(a);
+      const seqB = getSequenceId(b);
+      return seqA - seqB;
+    });
 
     // The frontend may still want diagnosticTrail inside a fallback turn if needed
     // or just separately. Let's just pass diagTrail down separately or embed it.
-    const diagTrail = session.diagnosticTrail ? session.diagnosticTrail.map((ev: any) => {
-      const copy = { ...ev };
-      copy.telemetry_loss = true;
-      if (copy.data) {
-        copy.data = { ...copy.data, telemetry_loss: true };
+    const diagTrail = session.diagnosticTrail ? session.diagnosticTrail.map((ev: unknown) => {
+      const copy = { ...(ev as Record<string, unknown>) };
+      (copy as Record<string, unknown>).telemetry_loss = true;
+      if (copy.data && typeof copy.data === 'object') {
+        copy.data = { ...(copy.data as Record<string, unknown>), telemetry_loss: true };
       } else {
         copy.data = { telemetry_loss: true };
       }
@@ -1051,9 +1097,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       const escalations = getEscalations();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ escalations }));
-    } catch (e: any) {
+    } catch (e: unknown) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: e.message }));
+      res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
     }
   });
 
@@ -1062,9 +1108,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       const sessions = getAllSessions();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ sessions }));
-    } catch (e: any) {
+    } catch (e: unknown) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: e.message }));
+      res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
     }
   });
 
@@ -1087,13 +1133,17 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     }
 
     const turns = session.turns ? [...session.turns] : [];
-    const auditTrail = turns.flatMap((t: any) => t.events || []).sort((a: any, b: any) => (a.sequenceId || 0) - (b.sequenceId || 0));
+    const auditTrail = turns.flatMap((t: Turn) => t.events || []).sort((a: CopilotEventData, b: CopilotEventData) => {
+      const seqA = getSequenceId(a);
+      const seqB = getSequenceId(b);
+      return seqA - seqB;
+    });
 
-    const diagTrail = session.diagnosticTrail ? session.diagnosticTrail.map((ev: any) => {
-      const copy = { ...ev };
-      copy.telemetry_loss = true;
-      if (copy.data) {
-        copy.data = { ...copy.data, telemetry_loss: true };
+    const diagTrail = session.diagnosticTrail ? session.diagnosticTrail.map((ev: unknown) => {
+      const copy = { ...(ev as Record<string, unknown>) };
+      (copy as Record<string, unknown>).telemetry_loss = true;
+      if (copy.data && typeof copy.data === 'object') {
+        copy.data = { ...(copy.data as Record<string, unknown>), telemetry_loss: true };
       } else {
         copy.data = { telemetry_loss: true };
       }
@@ -1141,8 +1191,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       writeLog(`[SpecPatch] Aborting in-flight LLM request thread for session: ${sessionId}`);
       try {
         activeLocks.get(sessionId)?.abort();
-      } catch (err: any) {
-        writeLog(`[SpecPatch] Error calling abort: ${err.message}`);
+      } catch (err: unknown) {
+        writeLog(`[SpecPatch] Error calling abort: ${err instanceof Error ? err.message : String(err)}`);
       }
       activeLocks.delete(sessionId);
     }
@@ -1156,9 +1206,12 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         throw new Error(`Command exited with code ${writeResult.exitCode}: ${writeResult.stderr}`);
       }
       writeLog(`[SpecPatch] Successfully updated architecture-spec.md with patched spec.`);
-      (session as any).pendingPatchedSpec = finalSpec;
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: `Failed to write spec: ${err.message}` });
+      const record = activeSessions.get(sessionId);
+      if (record) {
+        activeSessions.set(sessionId, { ...record, pendingPatchedSpec: finalSpec });
+      }
+    } catch (err: unknown) {
+      res.status(500).json({ success: false, error: `Failed to write spec: ${err instanceof Error ? err.message : String(err)}` });
       return;
     }
 
@@ -1198,8 +1251,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       writeLog(`[Panic] Aborting live LLM request thread for session: ${sessionId}`);
       try {
         activeLocks.get(sessionId)?.abort();
-      } catch (err: any) {
-        writeLog(`[Panic] Error calling abort: ${err.message}`);
+      } catch (err: unknown) {
+        writeLog(`[Panic] Error calling abort: ${err instanceof Error ? err.message : String(err)}`);
       }
       activeLocks.delete(sessionId);
     }
@@ -1220,7 +1273,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       return;
     }
 
-    let runCwd: string | undefined = explicitCwd;
+    let runCwd: string | undefined = explicitCwd 
+      ? path.join(getWorkspaceRoot(), path.normalize(explicitCwd).replace(/^(\.\.(\/|\\|$))+/, ''))
+      : undefined;
 
     if (!runCwd) {
       // Session-based path: sessionId is required when no explicit cwd is given.
@@ -1267,8 +1322,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       await getGitSandbox().restoreCheckpointAsync(commitSha, commitMessage);
 
       res.json({ success: true, message: 'Checkpoint restored successfully.' });
-    } catch (err: any) {
-      writeLog(`[Checkpoint] Error restoring checkpoint: ${err.message || err}`);
-      res.status(500).json({ success: false, error: `Failed to restore checkpoint: ${err.message}` });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeLog(`[Checkpoint] Error restoring checkpoint: ${msg}`);
+      res.status(500).json({ success: false, error: `Failed to restore checkpoint: ${msg}` });
     }
   });

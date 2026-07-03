@@ -346,7 +346,9 @@ export const parseEvent = (event: CopilotEvent): ParsedEventPayload => {
 /**
  * Bundles consecutive assistant delta/streaming delta events into a unified assistant.message event.
  */
-export const getBundledEvents = (events: CopilotEvent[]): CopilotEvent[] => {
+export const getBundledEvents = (
+  events: readonly CopilotEvent[]
+): readonly CopilotEvent[] => {
   if (!events || events.length === 0) return [];
   const result: CopilotEvent[] = [];
   let currentBundle: CopilotEvent[] = [];

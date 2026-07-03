@@ -4,6 +4,7 @@ import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { getWorkspaceHostLocation } from '../workspace';
 
 describe('Checkpoint Guard REST API Integration Tests', () => {
   beforeAll(async () => {
@@ -22,10 +23,13 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/panic_stop.yaml');
     
-    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'checkpoint-'));
-    fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
+    const relativeCwd = 'checkpoint-' + Math.random().toString(36).substring(2, 8);
+    const hostCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
+    fs.mkdirSync(hostCwd, { recursive: true });
     
-    fs.writeFileSync(path.join(tempCwd, 'package.json'), JSON.stringify({
+    fs.writeFileSync(path.join(hostCwd, '.git'), 'gitdir: /fake/path');
+    
+    fs.writeFileSync(path.join(hostCwd, 'package.json'), JSON.stringify({
       name: 'mock-checkpoint-workspace',
       scripts: {
         lint: 'echo "Lint Passed" && exit 0'
@@ -35,7 +39,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
     try {
       await proxy.updateConfig({
         filePath: snapshotPath,
-        workDir: tempCwd,
+        workDir: hostCwd,
       });
       
       const sessionId = 'test-checkpoint-session-123';
@@ -50,7 +54,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
         body: JSON.stringify({
           prompt: 'Help me build a server.',
           model: 'claude-sonnet-4.5',
-          cwd: tempCwd,
+          cwd: relativeCwd,
           sessionId,
           gates: ['runLint'],
           maxRetries: 1
@@ -101,8 +105,8 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
       console.log('Finished streaming loop.');
     } finally {
       // Clean up temporary workspace
-      if (fs.existsSync(tempCwd)) {
-        fs.rmSync(tempCwd, { recursive: true, force: true });
+      if (fs.existsSync(hostCwd)) {
+        fs.rmSync(hostCwd, { recursive: true, force: true });
       }
     }
   });

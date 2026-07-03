@@ -33,7 +33,7 @@ export default function App() {
   } = useScenarios();
 
   React.useEffect(() => {
-    (window as any).__addScenario = addScenario;
+    window.__addScenario = addScenario as (scenario: unknown) => void;
   }, [addScenario]);
 
   // Unified gate-loop orchestration hook
@@ -67,7 +67,7 @@ export default function App() {
   const { copiedText, copyToClipboard } = useClipboard();
   
   // Focused event ID state lifted from Timeline
-  const [focusedEventId, setFocusedEventId] = useState<string | null>(null);
+  const [focusedEventId, setFocusedEventId] = useState<string | undefined>(undefined);
 
   // Filtered Events based on search queries and active selection
   const filteredEvents = useMemo(() => {
@@ -103,7 +103,7 @@ export default function App() {
 
   // Currently focused event for inspection pane
   const activeFocusEvent = useMemo(() => {
-    return bundledEvents.find(e => e.sessionEvent.id === focusedEventId) || null;
+    return bundledEvents.find(e => e.sessionEvent.id === focusedEventId) || undefined;
   }, [bundledEvents, focusedEventId]);
 
   if (showTerminal) {

@@ -1,5 +1,7 @@
 export { CopilotClient } from '@github/copilot-sdk';
 export type {
+  CopilotSession,
+  PermissionRequest,
   AssistantMessageDeltaEvent,
   AssistantReasoningDeltaEvent,
   AssistantStreamingDeltaEvent,
@@ -9,4 +11,5 @@ export type {
   SessionEvent,
   Tool,
   ToolExecutionCompleteContent,
+  ToolExecutionCompleteEvent,
 } from '@github/copilot-sdk';
