@@ -107,7 +107,7 @@ describe('Compliance and Security Gating', () => {
     process.env.NODE_ENV = 'production';
     try {
       const dangerousRes = await handleGateRunPermission({ toolName: 'rm_rf_root' });
-      expect(dangerousRes.kind).toBe('deny');
+      expect(dangerousRes.kind).toBe('reject');
       expect(dangerousRes.reason).toContain('not authorized');
     } finally {
       process.env.NODE_ENV = oldNodeEnv;

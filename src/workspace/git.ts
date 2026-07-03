@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as fs from "fs";
 
 export type ExecCommand = (
     command: string,
@@ -227,7 +228,26 @@ export class GitSandbox {
             );
         }
 
+        // Get the list of files added between commitSha and HEAD.
+        // If git diff fails (e.g. if the commitSha is not found, or HEAD doesn't exist), we gracefully handle it.
+        let addedFiles: string[] = [];
+        try {
+            const addedFilesStr = await this.git(["diff", "--name-only", "--diff-filter=A", commitSha, "HEAD"]);
+            addedFiles = addedFilesStr.split("\n").map(f => f.trim()).filter(Boolean);
+        } catch (err) {
+            // Ignore error or log it if necessary
+        }
+
         await this.git(["checkout", commitSha, "--", "."]);
+
+        // Delete any files added after the target commit.
+        for (const file of addedFiles) {
+            const filePath = path.join(this.workTree, file);
+            if (fs.existsSync(filePath)) {
+                fs.rmSync(filePath, { recursive: true, force: true });
+            }
+        }
+
         // Remove untracked files/directories added after commitSha so the
         // working tree is an exact mirror of the snapshot, not just a partial overlay.
         await this.git(["clean", "-fd"]);

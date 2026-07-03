@@ -4,6 +4,7 @@ import { serverHarness } from './harness/ServerHarness';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { getWorkspaceHostLocation } from "../workspace";
 
 describe('Model Escalation Integration Tests', () => {
   beforeAll(async () => {
@@ -22,8 +23,10 @@ describe('Model Escalation Integration Tests', () => {
 
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/model_escalation.yaml');
     
-    // Set up a mock workspaces directory under the OS temp root
-    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'escalation-'));
+    // Set up a mock workspaces directory under the OS temp root via workspace host location
+    const relativeCwd = 'escalation-' + Math.random().toString(36).substring(2, 8);
+    const tempCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
+    fs.mkdirSync(tempCwd, { recursive: true });
     fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
     
     // Write package.json with custom check-counter lint script
@@ -76,7 +79,7 @@ describe('Model Escalation Integration Tests', () => {
         body: JSON.stringify({
           prompt: 'Perform model escalation check.',
           model: 'gemini-3.1-flash-lite',
-          cwd: tempCwd,
+          cwd: relativeCwd,
           gates: ['runLint'],
           maxRetries: 1 // 1 retry on baseline, then escalate
         })
