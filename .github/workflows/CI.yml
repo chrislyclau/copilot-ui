@@ -1,0 +1,31 @@
+name: PR tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  test:
+    name: Run tests on PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Run typecheck & lint
+        run: npm run lint
+        # optional: make this conditional if you prefer lint not to block tests:
+        # continue-on-error: true
+
+      - name: Run tests
+        run: npm test
