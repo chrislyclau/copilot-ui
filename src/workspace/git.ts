@@ -134,15 +134,12 @@ export class GitSandbox {
      * inside the container in docker mode rather than on the host.
      *
      * Guards against partial initialisation by checking for the git HEAD file.
-     * Throws if called more than once on the same instance.
+     * Safe to call repeatedly on the same instance.
      */
     private async _initializeGitSandboxAsync(): Promise<void> {
         if (this.initialized) {
-            throw new Error(
-                "GitSandbox: initializeGitSandboxAsync() has already been called on this instance."
-            );
+            return;
         }
-        this.initialized = true;
 
         // A valid git repo always has a HEAD file. Checking for it (rather than
         // just the directory) avoids silently skipping a previously interrupted init.
@@ -171,6 +168,8 @@ export class GitSandbox {
                 "Sandbox Baseline (pre-existing files)"
             ]);
         }
+
+        this.initialized = true;
     }
 
     /**
