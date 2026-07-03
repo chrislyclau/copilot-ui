@@ -8,6 +8,8 @@ jobs:
   test:
     name: Run tests on PR
     runs-on: ubuntu-latest
+    env:
+      AI_STUDIO: true
 
     steps:
       - name: Checkout repository
