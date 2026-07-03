@@ -27,9 +27,9 @@ describe('Spec-Gate Auditor Validation Tests', () => {
 
     // Initialize git and commit a baseline to simulate active changes
     console.log('Initializing local mock git structure inside test workspace...');
+    // initializeWorkspace() creates and initializes the shared GitSandbox.
     await initializeWorkspace();
     const sandbox = getGitSandbox();
-    await sandbox.initializeGitSandboxAsync();
     
     fs.writeFileSync(path.join(tempCwd, 'architecture-spec.md'), 'Spec: Must conform to specs.');
     fs.writeFileSync(path.join(tempCwd, 'temp.txt'), 'baseline state');
