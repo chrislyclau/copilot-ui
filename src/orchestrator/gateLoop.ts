@@ -489,10 +489,18 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         });
         
         writeLog(`[Ambiguity] Sending request to ambiguity checker...`);
-        await sessionAsAny.sendAndWait({
-          prompt: formatClarityCheckPrompt(promptStr),
-          tool_choice: { type: 'function', function: { name: 'submit_clarity_check' } }
-        }, 20000);
+        const clarityAbortHandler = () => {
+          sessionAsAny.disconnect().catch(() => {});
+        };
+        abortController.signal.addEventListener('abort', clarityAbortHandler);
+        try {
+          await sessionAsAny.sendAndWait({
+            prompt: formatClarityCheckPrompt(promptStr),
+            tool_choice: { type: 'function', function: { name: 'submit_clarity_check' } }
+          }, 20000);
+        } finally {
+          abortController.signal.removeEventListener('abort', clarityAbortHandler);
+        }
         writeLog(`[Ambiguity] sendAndWait finished. clarityData is: ${JSON.stringify(clarityData)}`);
         unsub();
         await claritySession.disconnect();
@@ -555,11 +563,19 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
 
         const classificationPrompt = `Analyze the following user prompt for a code generation task and initialize the workspace blueprint: "${promptStr}"`;
 
-        // Force the tool choice to guarantee a structured plan
-        await sessionAsAny.sendAndWait({ 
-          prompt: classificationPrompt,
-          tool_choice: { type: 'function', function: { name: 'initialize_blueprint' } }
-        } as any, 30000);
+        const classificationAbortHandler = () => {
+          sessionAsAny.disconnect().catch(() => {});
+        };
+        abortController.signal.addEventListener('abort', classificationAbortHandler);
+        try {
+          // Force the tool choice to guarantee a structured plan
+          await sessionAsAny.sendAndWait({ 
+            prompt: classificationPrompt,
+            tool_choice: { type: 'function', function: { name: 'initialize_blueprint' } }
+          } as any, 30000);
+        } finally {
+          abortController.signal.removeEventListener('abort', classificationAbortHandler);
+        }
         
         unsub();
 
@@ -823,74 +839,6 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         // Setup streaming event listener for current session
         assistantMessage = '';
         try {
-          const pDone = new Promise<void>((resolve, reject) => {
-            unsubscribe = session.on(async (event: any) => {
-              if (sessionId && activeSessions.has(sessionId)) {
-                const sRec = activeSessions.get(sessionId)!;
-                activeSessions.set(sessionId, {
-                  ...sRec,
-                  unsubscribe: unsubscribe || undefined
-                });
-              }
-              try {
-                if (res.writableEnded || res.destroyed || isRequestClosed) {
-                  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                  reject(new Error('SSE stream connection terminated or closed'));
-                  return;
-                }
-
-                if (event.type === 'tool.user_requested') {
-                  toolWasCalledInThisTurn = true;
-                }
-
-                if (event.type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
-                  const sRec = activeSessions.get(sessionId)!;
-                  const toolName = event.data?.toolName || 'unknown';
-                  const output = event.data?.stdout || event.data?.stderr || event.data?.output || '';
-                  activeSessions.set(sessionId, {
-                      ...sRec,
-                      conversationHistory: [
-                          ...(sRec.conversationHistory || []),
-                          { role: 'user', content: `[System (Tool Result): ${toolName}]\n${output}` }
-                      ]
-                  });
-                }
-
-                // Aggregate assistant message content
-                if (event.type === 'assistant.message') {
-                  assistantMessage += event.data.content || '';
-                } else if (event.type === 'assistant.message_delta') {
-                  assistantMessage += event.data.deltaContent || event.data.content || '';
-                }
-
-                // Step 2: Emit all SDK events to client
-                await secureWrite(res, `data: ${JSON.stringify(event)}\n\n`, isRequestClosed);
-
-                if (event.type === 'session.idle' || event.type === 'session.shutdown') {
-                  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                  resolve();
-                } else if (event.type === 'session.error') {
-                  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                  reject(new Error(event.data.message));
-                }
-              } catch (err: any) {
-                writeLog(`[GateLoop] Error forwarding event: ${err.message}`);
-                reject(err);
-              }
-            });
-          });
-
-          writeLog(`[GateLoop] Session started. Sending prompt: "${currentPrompt.substring(0, 60)}..."`);
-          
-          // Push user message to history ONLY on first iteration 
-          if (loopCycleCounter === 1 && sessionId && activeSessions.has(sessionId)) {
-            const sRec = activeSessions.get(sessionId)!;
-            activeSessions.set(sessionId, {
-              ...sRec,
-              conversationHistory: [...(sRec.conversationHistory || []), { role: 'user', content: promptStr }]
-            });
-          }
-
           if (isDiagnostic) {
             // Emit mock text chunk and idle event to satisfy client UI/Timeline
             let content = '';
@@ -950,16 +898,103 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             await secureWrite(res, `data: ${JSON.stringify(idleEvent)}\n\n`, isRequestClosed);
             writeLog(`[GateLoop][Diagnostic] Emitted response: ${content}`);
           } else {
+            const pDone = new Promise<void>((resolve, reject) => {
+              const onAbort = () => {
+                if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                reject(new Error('Operation aborted by client or timeout'));
+              };
+              abortController.signal.addEventListener('abort', onAbort);
+
+              unsubscribe = session.on(async (event: any) => {
+                if (sessionId && activeSessions.has(sessionId)) {
+                  const sRec = activeSessions.get(sessionId)!;
+                  activeSessions.set(sessionId, {
+                    ...sRec,
+                    unsubscribe: unsubscribe || undefined
+                  });
+                }
+                try {
+                  if (res.writableEnded || res.destroyed || isRequestClosed || abortController.signal.aborted) {
+                    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                    abortController.signal.removeEventListener('abort', onAbort);
+                    reject(new Error('SSE stream connection terminated or closed'));
+                    return;
+                  }
+
+                  if (event.type === 'tool.user_requested') {
+                    toolWasCalledInThisTurn = true;
+                  }
+
+                  if (event.type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
+                    const sRec = activeSessions.get(sessionId)!;
+                    const toolName = event.data?.toolName || 'unknown';
+                    const output = event.data?.stdout || event.data?.stderr || event.data?.output || '';
+                    activeSessions.set(sessionId, {
+                        ...sRec,
+                        conversationHistory: [
+                            ...(sRec.conversationHistory || []),
+                            { role: 'user', content: `[System (Tool Result): ${toolName}]\n${output}` }
+                        ]
+                    });
+                  }
+
+                  // Aggregate assistant message content
+                  if (event.type === 'assistant.message') {
+                    assistantMessage += event.data.content || '';
+                  } else if (event.type === 'assistant.message_delta') {
+                    assistantMessage += event.data.deltaContent || event.data.content || '';
+                  }
+
+                  // Step 2: Emit all SDK events to client
+                  await secureWrite(res, `data: ${JSON.stringify(event)}\n\n`, isRequestClosed);
+
+                  if (event.type === 'session.idle' || event.type === 'session.shutdown') {
+                    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                    abortController.signal.removeEventListener('abort', onAbort);
+                    resolve();
+                  } else if (event.type === 'session.error') {
+                    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                    abortController.signal.removeEventListener('abort', onAbort);
+                    reject(new Error(event.data.message));
+                  }
+                } catch (err: any) {
+                  writeLog(`[GateLoop] Error forwarding event: ${err.message}`);
+                  abortController.signal.removeEventListener('abort', onAbort);
+                  reject(err);
+                }
+              });
+            });
+
+            writeLog(`[GateLoop] Session started. Sending prompt: "${currentPrompt.substring(0, 60)}..."`);
+            
+            // Push user message to history ONLY on first iteration 
+            if (loopCycleCounter === 1 && sessionId && activeSessions.has(sessionId)) {
+              const sRec = activeSessions.get(sessionId)!;
+              activeSessions.set(sessionId, {
+                ...sRec,
+                conversationHistory: [...(sRec.conversationHistory || []), { role: 'user', content: promptStr }]
+              });
+            }
+
+            const abortPromise = new Promise<never>((_, reject) => {
+              const onAbort = () => reject(new Error('Operation aborted by client or timeout'));
+              if (abortController.signal.aborted) onAbort();
+              else abortController.signal.addEventListener('abort', onAbort, { once: true });
+            });
+
             writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`);
-            await session.sendAndWait({ prompt: currentPrompt }, 600000);
+            await Promise.race([
+              session.sendAndWait({ prompt: currentPrompt }, 600000),
+              abortPromise
+            ]);
             writeLog(`[SESSION] sendAndWait finished.`);
             // Wait for session.idle / turn completion
             writeLog(`[SESSION] Awaiting pDone resolution`);
             try {
-              await pDone;
+              await Promise.race([pDone, abortPromise]);
               writeLog(`[SESSION] pDone resolved successfully`);
             } catch (pErr: any) {
-              writeLog(`[GateLoop] Stream delivery broken during execution: ${pErr.message}. Aborting loop.`);
+              writeLog(`[GateLoop] Stream delivery broken or aborted during execution: ${pErr.message}. Aborting loop.`);
               break;
             }
 
