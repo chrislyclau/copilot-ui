@@ -123,11 +123,13 @@ export async function getOrCreateSession(
   const safeModelTier = (MODEL_TIERS.includes(currentModel) ? currentModel : MODEL_TIERS[0]) || 'gemini-3.1-flash-lite';
 
   if (existing) {
-    if (existing.currentModel !== currentModel || existing.cwd !== cwd) {
-      writeLog(`[Session] Context mismatch detected for ${sessionId}. Recreating session context.`);
+    if (existing.currentModel !== currentModel || existing.cwd !== cwd || !existing.copilotSession) {
+      writeLog(`[Session] Context mismatch or missing copilotSession detected for ${sessionId}. Recreating session context.`);
       try {
         existing.unsubscribe?.();
-        await existing.copilotSession.disconnect();
+        if (existing.copilotSession) {
+          await existing.copilotSession.disconnect();
+        }
       } catch (err) {
         writeLog(`[Session] Error disconnecting outdated session ${sessionId}: ${err}`);
       }

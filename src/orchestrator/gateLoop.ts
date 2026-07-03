@@ -86,25 +86,41 @@ function pruneConversationHistory(history: ReadonlyArray<{ role: 'user' | 'assis
 }
 
 // Least-privilege permission evaluator for incoming commands and tools
-const handleGateRunPermission = async (req: any): Promise<PermissionRequestResult> => {
+export const handleGateRunPermission = async (req: any): Promise<PermissionRequestResult> => {
   const toolName = req?.toolName || req?.name || (req?.toolCalls && req?.toolCalls[0]?.function?.name) || '';
   
   // Safe read-only/audit tools
   const safeTools = ['submit_audit_findings', 'ambiguity_check', 'composer_router'];
   if (safeTools.includes(toolName)) {
     writeLog(`[Security] Auto-approved safe utility tool: ${toolName}`);
-    return { kind: 'approve-once' };
+    return { kind: 'approve-once' as any };
   }
 
   // If in test environment, allow command execution in sandbox
   if (process.env.NODE_ENV === 'test') {
     writeLog(`[Security] Approved command execution in test environment: ${toolName}`);
-    return { kind: 'approve-once' };
+    return { kind: 'approve-once' as any };
   }
 
-  // In other environments, we log and approve sandboxed command executions under active session audits
-  writeLog(`[Security] Permitted command/tool execution under active session audit: ${toolName}`);
-  return { kind: 'approve-once' };
+  // Allowed orchestrator tools
+  const allowedOrchestratorTools = ['run_terminal_docker', 'run_tests'];
+  if (allowedOrchestratorTools.includes(toolName)) {
+    // Verify there is an active running session
+    const hasActiveSession = Array.from(activeSessions.values()).some(
+      s => s.stateSnapshot?.isRunning && !s.stateSnapshot?.awaitingHuman
+    );
+    if (hasActiveSession) {
+      writeLog(`[Security] Approved active session tool execution: ${toolName}`);
+      return { kind: 'approve-once' as any };
+    } else {
+      writeLog(`[Security Check Failed] Denied tool execution outside of an active running session context: ${toolName}`);
+      return { kind: 'deny' as any, reason: 'Execution is only permitted within an active, authorized orchestration session.' };
+    }
+  }
+
+  // Default block for other tools
+  writeLog(`[Security Check Failed] Blocked unknown or unauthorized tool: ${toolName}`);
+  return { kind: 'deny' as any, reason: `Tool '${toolName}' is not authorized in this environment. Manual approval may be required.` };
 };
 
 export const handleGateLoop = async (req: express.Request, res: express.Response) => {
@@ -118,22 +134,37 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
   let cleaningUp = false;
 
   const abortController = new AbortController();
-  const cleanup = async () => {
-    if (cleaningUp) return;
-    cleaningUp = true;
-    isRequestClosed = true;
-    abortController.abort();
 
+  const registerSseForSession = (sessionId: string | null) => {
+    if (sessionId) {
+      const currentMutationPromise = new Promise<void>((resolve) => {
+        resolveWritePromise = resolve;
+      });
+      sessionWritePromises.set(sessionId, currentMutationPromise);
+      sseResToSessionId.set(res, sessionId);
+    } else {
+      sseResToSessionId.set(res, 'unregistered-session');
+    }
+  };
+
+  const unregisterSseForSession = () => {
     if (resolveWritePromise) {
       try { resolveWritePromise(); } catch (e) {}
       resolveWritePromise = null;
     }
     if (currentSessionId) {
       sessionWritePromises.delete(currentSessionId);
-      sseResToSessionId.delete(res);
-    } else {
-      sseResToSessionId.delete(res);
     }
+    sseResToSessionId.delete(res);
+  };
+
+  const cleanup = async () => {
+    if (cleaningUp) return;
+    cleaningUp = true;
+    isRequestClosed = true;
+    abortController.abort();
+
+    unregisterSseForSession();
 
     if (heartbeatId) {
       clearInterval(heartbeatId);
@@ -192,7 +223,8 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
   });
 
   try {
-    const { prompt, input, gates, maxRetries = 2, apiKey, model, cwd, sessionId, diagnosticScenario, replayTraceId, simulateBackpressureDelayMs } = req.body;
+    const { prompt, input, gates: rawGates, maxRetries = 2, apiKey, model, cwd, sessionId, diagnosticScenario, replayTraceId, simulateBackpressureDelayMs } = req.body;
+    const gates = Array.isArray(rawGates) ? rawGates : (rawGates ? [String(rawGates)] : []);
     const keyToUse = apiKey || process.env.GEMINI_API_KEY;
     const registryInstance = new ProviderRegistry(keyToUse);
     currentSessionId = sessionId || null;
@@ -212,24 +244,18 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       }
     }
 
-    if (currentSessionId) {
-      const currentMutationPromise = new Promise<void>((resolve) => {
-        resolveWritePromise = resolve;
-      });
-      sessionWritePromises.set(currentSessionId, currentMutationPromise);
-      sseResToSessionId.set(res, currentSessionId);
-    } else {
-      sseResToSessionId.set(res, 'unregistered-session');
-    }
+    registerSseForSession(currentSessionId);
 
     writeLog(`[API Request] POST /api/copilot/gate-run: isResume=${isResume}, model=${model || 'default'}, cwd=${cwd || 'default'}, sessionId=${sessionId || 'none'}`);
 
-    const isDiagnostic = !!diagnosticScenario || !!replayTraceId;
+    const isDiagnostic = (!!diagnosticScenario || !!replayTraceId) && process.env.DIAGNOSTIC_MODE === 'true';
     const scenario = isDiagnostic && diagnosticScenario ? DIAGNOSTIC_SCENARIOS[diagnosticScenario as string] : null;
 
-    if (isDiagnostic && diagnosticScenario && !scenario) {
-      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end(`Unknown diagnostic scenario: ${diagnosticScenario}`);
+    if ((diagnosticScenario || replayTraceId) && !isDiagnostic) {
+      writeLog('[Security] Diagnostic mode is disabled. Rejecting diagnostic request.');
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Diagnostic mode is disabled via environment configuration.' }));
+      await cleanup();
       return;
     }
 
@@ -239,6 +265,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         writeLog(`[GateLoop] Session ${sessId} is currently busy. Returning 409 Conflict.`);
         res.writeHead(409, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: `Session ${sessId} is currently busy processing another request.` }));
+        await cleanup();
         return;
       }
       activeLocks.set(sessId, abortController);
@@ -299,13 +326,14 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     if (!promptStr || promptStr.trim() === '') {
       res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('User prompt is required.');
-      if (currentSessionId) {
-        activeLocks.delete(currentSessionId);
-      }
+      await cleanup();
       return;
     }
 
-    const runCwd = cwd || DEFAULT_WORKSPACE_DIR;
+    // SYS-REQ-023: Validate/normalize client-supplied cwd via getWorkspaceRoot
+    const runCwd = (cwd && typeof cwd === 'string')
+      ? path.join(getWorkspaceRoot(), path.normalize(cwd).replace(/^(\.\.(\/|\\|$))+/, ''))
+      : getWorkspaceRoot();
 
     const startModel = model || 'gemini-3.1-flash-lite';
 
@@ -319,9 +347,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     if (requiresKey && (!keyToUse || keyToUse === 'MY_GEMINI_API_KEY')) {
       res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('API Key is missing for the selected provider. Please add your key under Settings > Secrets, or type your own key.');
-      if (currentSessionId) {
-        activeLocks.delete(currentSessionId);
-      }
+      await cleanup();
       return;
     }
 
@@ -378,7 +404,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             name: RUN_TERMINAL_DOCKER_TOOL.function.name,
             description: RUN_TERMINAL_DOCKER_TOOL.function.description,
             parameters: RUN_TERMINAL_DOCKER_TOOL.function.parameters as any,
-            handler: makeDockerToolHandler(secureWrite, res, abortController.signal, writeLog, sensitiveValuesCache, sessionId || undefined)
+            handler: makeDockerToolHandler(secureWrite, res, abortController.signal, writeLog, sensitiveValuesCache || new Set<string>(), sessionId || undefined)
           },
           {
             name: 'run_tests',
@@ -483,6 +509,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           };
           await secureWrite(res, `data: ${JSON.stringify(clarityEvent)}\n\n`, isRequestClosed);
           await flushSseAndEnd(res);
+          await cleanup();
           return;
         }
       } catch (err) {
@@ -589,7 +616,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       currentModelIndex = snap.currentModelIndex || 0;
       retryCount = 0; // reset for the human attempt
       totalRetries = snap.totalRetries || Math.max(0, (snap.retryCount || 0));
-      if (snap.retryHistory) {
+      if (Array.isArray(snap.retryHistory)) {
         retryHistory.push(...snap.retryHistory);
       }
       failedGateName = snap.failedGateName || '';
@@ -708,7 +735,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               name: RUN_TERMINAL_DOCKER_TOOL.function.name,
               description: RUN_TERMINAL_DOCKER_TOOL.function.description,
               parameters: RUN_TERMINAL_DOCKER_TOOL.function.parameters as any,
-              handler: makeDockerToolHandler(secureWrite, res, abortController.signal, writeLog, sensitiveValuesCache, sessionId || undefined)
+              handler: makeDockerToolHandler(secureWrite, res, abortController.signal, writeLog, sensitiveValuesCache || new Set<string>(), sessionId || undefined)
             },
             {
               name: 'run_tests',
@@ -795,187 +822,195 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
 
         // Setup streaming event listener for current session
         assistantMessage = '';
-        const pDone = new Promise<void>((resolve, reject) => {
-          unsubscribe = session.on(async (event: any) => {
+        try {
+          const pDone = new Promise<void>((resolve, reject) => {
+            unsubscribe = session.on(async (event: any) => {
+              if (sessionId && activeSessions.has(sessionId)) {
+                const sRec = activeSessions.get(sessionId)!;
+                activeSessions.set(sessionId, {
+                  ...sRec,
+                  unsubscribe: unsubscribe || undefined
+                });
+              }
+              try {
+                if (res.writableEnded || res.destroyed || isRequestClosed) {
+                  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                  reject(new Error('SSE stream connection terminated or closed'));
+                  return;
+                }
+
+                if (event.type === 'tool.user_requested') {
+                  toolWasCalledInThisTurn = true;
+                }
+
+                if (event.type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
+                  const sRec = activeSessions.get(sessionId)!;
+                  const toolName = event.data?.toolName || 'unknown';
+                  const output = event.data?.stdout || event.data?.stderr || event.data?.output || '';
+                  activeSessions.set(sessionId, {
+                      ...sRec,
+                      conversationHistory: [
+                          ...(sRec.conversationHistory || []),
+                          { role: 'user', content: `[System (Tool Result): ${toolName}]\n${output}` }
+                      ]
+                  });
+                }
+
+                // Aggregate assistant message content
+                if (event.type === 'assistant.message') {
+                  assistantMessage += event.data.content || '';
+                } else if (event.type === 'assistant.message_delta') {
+                  assistantMessage += event.data.deltaContent || event.data.content || '';
+                }
+
+                // Step 2: Emit all SDK events to client
+                await secureWrite(res, `data: ${JSON.stringify(event)}\n\n`, isRequestClosed);
+
+                if (event.type === 'session.idle' || event.type === 'session.shutdown') {
+                  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                  resolve();
+                } else if (event.type === 'session.error') {
+                  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                  reject(new Error(event.data.message));
+                }
+              } catch (err: any) {
+                writeLog(`[GateLoop] Error forwarding event: ${err.message}`);
+                reject(err);
+              }
+            });
+          });
+
+          writeLog(`[GateLoop] Session started. Sending prompt: "${currentPrompt.substring(0, 60)}..."`);
+          
+          // Push user message to history ONLY on first iteration 
+          if (loopCycleCounter === 1 && sessionId && activeSessions.has(sessionId)) {
+            const sRec = activeSessions.get(sessionId)!;
+            activeSessions.set(sessionId, {
+              ...sRec,
+              conversationHistory: [...(sRec.conversationHistory || []), { role: 'user', content: promptStr }]
+            });
+          }
+
+          if (isDiagnostic) {
+            // Emit mock text chunk and idle event to satisfy client UI/Timeline
+            let content = '';
+            if (payload.replayTraceId) {
+              const currentSubtaskId = loopCycleCounter === 1 ? 'classify_intent' : 'run_tests';
+              const currentRole = loopCycleCounter === 1 ? 'planner' : 'executor';
+              // INTERCEPTOR (Task 1.2): fetch stubbed response or throw hard alignment exception
+              content = fetchStubbedTraceResponse(payload.replayTraceId, currentSubtaskId, currentRole, 0);
+
+              // Stream high-fidelity pipeline structure events
+              const turnStartEvent = {
+                type: 'turn.start',
+                turnIndex: 0,
+                label: 'Replay Generation Run'
+              };
+              await secureWrite(res, `data: ${JSON.stringify(turnStartEvent)}\n\n`, isRequestClosed);
+
+              const subtaskStartEvent = {
+                type: 'subtask.start',
+                turnIndex: 0,
+                subtaskId: currentSubtaskId,
+                label: currentSubtaskId === 'classify_intent' ? 'Classify Intent' : 'Run Tests'
+              };
+              await secureWrite(res, `data: ${JSON.stringify(subtaskStartEvent)}\n\n`, isRequestClosed);
+              
+              const msgEvent = { type: 'assistant.message', data: { content } };
+              await secureWrite(res, `data: ${JSON.stringify(msgEvent)}\n\n`, isRequestClosed);
+              await new Promise(r => setTimeout(r, 200));
+
+              const subtaskCompleteEvent = {
+                type: 'subtask.complete',
+                turnIndex: 0,
+                subtaskId: currentSubtaskId,
+                success: true
+              };
+              await secureWrite(res, `data: ${JSON.stringify(subtaskCompleteEvent)}\n\n`, isRequestClosed);
+            } else {
+              content = scenario!.executorResponse;
+            }
+
+            // Push assistant message to history
             if (sessionId && activeSessions.has(sessionId)) {
               const sRec = activeSessions.get(sessionId)!;
               activeSessions.set(sessionId, {
                 ...sRec,
-                unsubscribe: unsubscribe || undefined
+                conversationHistory: [...(sRec.conversationHistory || []), { role: 'assistant', content }]
               });
             }
-            try {
-              if (res.writableEnded || res.destroyed || isRequestClosed) {
-                if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                reject(new Error('SSE stream connection terminated or closed'));
-                return;
-              }
 
-              if (event.type === 'tool.user_requested') {
-                toolWasCalledInThisTurn = true;
-              }
-
-              if (event.type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
-                const sRec = activeSessions.get(sessionId)!;
-                const toolName = event.data?.toolName || 'unknown';
-                const output = event.data?.stdout || event.data?.stderr || event.data?.output || '';
-                activeSessions.set(sessionId, {
-                    ...sRec,
-                    conversationHistory: [
-                        ...(sRec.conversationHistory || []),
-                        { role: 'user', content: `[System (Tool Result): ${toolName}]\n${output}` }
-                    ]
-                });
-              }
-
-              // Aggregate assistant message content
-              if (event.type === 'assistant.message') {
-                assistantMessage += event.data.content || '';
-              } else if (event.type === 'assistant.message_delta') {
-                assistantMessage += event.data.deltaContent || event.data.content || '';
-              }
-
-              // Step 2: Emit all SDK events to client
-              await secureWrite(res, `data: ${JSON.stringify(event)}\n\n`, isRequestClosed);
-
-              if (event.type === 'session.idle' || event.type === 'session.shutdown') {
-                if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                resolve();
-              } else if (event.type === 'session.error') {
-                if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                reject(new Error(event.data.message));
-              }
-            } catch (err: any) {
-              writeLog(`[GateLoop] Error forwarding event: ${err.message}`);
-              reject(err);
+            if (!payload.replayTraceId) {
+              const msgEvent = { type: 'assistant.message', data: { content } };
+              await secureWrite(res, `data: ${JSON.stringify(msgEvent)}\n\n`, isRequestClosed);
+              await new Promise(r => setTimeout(r, 400)); // Simulate thinking/streaming time
             }
-          });
-        });
 
-        writeLog(`[GateLoop] Session started. Sending prompt: "${currentPrompt.substring(0, 60)}..."`);
-        
-        // Push user message to history ONLY on first iteration 
-        if (loopCycleCounter === 1 && sessionId && activeSessions.has(sessionId)) {
-          const sRec = activeSessions.get(sessionId)!;
-          activeSessions.set(sessionId, {
-            ...sRec,
-            conversationHistory: [...(sRec.conversationHistory || []), { role: 'user', content: promptStr }]
-          });
-        }
-
-        if (isDiagnostic) {
-          // Emit mock text chunk and idle event to satisfy client UI/Timeline
-          let content = '';
-          if (payload.replayTraceId) {
-            const currentSubtaskId = loopCycleCounter === 1 ? 'classify_intent' : 'run_tests';
-            const currentRole = loopCycleCounter === 1 ? 'planner' : 'executor';
-            // INTERCEPTOR (Task 1.2): fetch stubbed response or throw hard alignment exception
-            content = fetchStubbedTraceResponse(payload.replayTraceId, currentSubtaskId, currentRole, 0);
-
-            // Stream high-fidelity pipeline structure events
-            const turnStartEvent = {
-              type: 'turn.start',
-              turnIndex: 0,
-              label: 'Replay Generation Run'
-            };
-            await secureWrite(res, `data: ${JSON.stringify(turnStartEvent)}\n\n`, isRequestClosed);
-
-            const subtaskStartEvent = {
-              type: 'subtask.start',
-              turnIndex: 0,
-              subtaskId: currentSubtaskId,
-              label: currentSubtaskId === 'classify_intent' ? 'Classify Intent' : 'Run Tests'
-            };
-            await secureWrite(res, `data: ${JSON.stringify(subtaskStartEvent)}\n\n`, isRequestClosed);
-            
-            const msgEvent = { type: 'assistant.message', data: { content } };
-            await secureWrite(res, `data: ${JSON.stringify(msgEvent)}\n\n`, isRequestClosed);
-            await new Promise(r => setTimeout(r, 200));
-
-            const subtaskCompleteEvent = {
-              type: 'subtask.complete',
-              turnIndex: 0,
-              subtaskId: currentSubtaskId,
-              success: true
-            };
-            await secureWrite(res, `data: ${JSON.stringify(subtaskCompleteEvent)}\n\n`, isRequestClosed);
+            const idleEvent = { type: 'session.idle', data: {} };
+            await secureWrite(res, `data: ${JSON.stringify(idleEvent)}\n\n`, isRequestClosed);
+            writeLog(`[GateLoop][Diagnostic] Emitted response: ${content}`);
           } else {
-            content = scenario!.executorResponse;
-          }
+            writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`);
+            await session.sendAndWait({ prompt: currentPrompt }, 600000);
+            writeLog(`[SESSION] sendAndWait finished.`);
+            // Wait for session.idle / turn completion
+            writeLog(`[SESSION] Awaiting pDone resolution`);
+            try {
+              await pDone;
+              writeLog(`[SESSION] pDone resolved successfully`);
+            } catch (pErr: any) {
+              writeLog(`[GateLoop] Stream delivery broken during execution: ${pErr.message}. Aborting loop.`);
+              break;
+            }
 
-          // Push assistant message to history
-          if (sessionId && activeSessions.has(sessionId)) {
-            const sRec = activeSessions.get(sessionId)!;
-            activeSessions.set(sessionId, {
-              ...sRec,
-              conversationHistory: [...(sRec.conversationHistory || []), { role: 'assistant', content }]
-            });
-          }
+            if (sessionId && activeSessions.has(sessionId)) {
+              const currentRec = activeSessions.get(sessionId)!;
+              const currentTierConfig = DEFAULT_ROLES_CONFIG.executorTiers.find(t => t.model === currentModel) || (DEFAULT_ROLES_CONFIG.planner.model === currentModel ? DEFAULT_ROLES_CONFIG.planner : null) || { provider: 'gemini', model: currentModel, tokenRatio: 4 };
+              const divisor = currentTierConfig.tokenRatio || 4;
+              activeSessions.set(sessionId, {
+                ...currentRec,
+                totalOutputTokens: (currentRec.totalOutputTokens || 0) + Math.ceil(assistantMessage.length / divisor)
+              });
+            }
 
-          if (!payload.replayTraceId) {
-            const msgEvent = { type: 'assistant.message', data: { content } };
-            await secureWrite(res, `data: ${JSON.stringify(msgEvent)}\n\n`, isRequestClosed);
-            await new Promise(r => setTimeout(r, 400)); // Simulate thinking/streaming time
-          }
+            // Push assistant message to history if not diagnostic (diagnostic path does it separately)
+            if (!isDiagnostic && sessionId && activeSessions.has(sessionId)) {
+              const sRec = activeSessions.get(sessionId)!;
+              activeSessions.set(sessionId, {
+                ...sRec,
+                conversationHistory: [...(sRec.conversationHistory || []), { role: 'assistant', content: assistantMessage }]
+              });
+            }
 
-          const idleEvent = { type: 'session.idle', data: {} };
-          await secureWrite(res, `data: ${JSON.stringify(idleEvent)}\n\n`, isRequestClosed);
-          writeLog(`[GateLoop][Diagnostic] Emitted response: ${content}`);
-        } else {
-          writeLog(`[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`);
-          await session.sendAndWait({ prompt: currentPrompt }, 600000);
-          writeLog(`[SESSION] sendAndWait finished.`);
-          // Wait for session.idle / turn completion
-          writeLog(`[SESSION] Awaiting pDone resolution`);
-          try {
-            await pDone;
-            writeLog(`[SESSION] pDone resolved successfully`);
-          } catch (pErr: any) {
-            writeLog(`[GateLoop] Stream delivery broken during execution: ${pErr.message}. Aborting loop.`);
-            break;
+            // SYS-REQ-004: Enforce structured tool calls for mutation tasks
+            if (!isDiagnostic && process.env.NODE_ENV !== 'test' && (classifiedType === 'feature' || classifiedType === 'refactor') && !toolWasCalledInThisTurn) {
+               writeLog(`[GateLoop] SYS-REQ-004: Mutation task without tool call detected. Failing current turn.`);
+               allGatesPassedInThisCycle = false;
+               failedGateName = 'MutationGate';
+               failedGateFeedback = truncateOutput('The executor failed to emit any structured tool calls to modify files. Plain text explanations are blocked for mutation tasks.');
+               
+               // Emit explicit gate events for MutationGate to satisfy protocol consistency and test assertions
+               const mgStartEvent = { type: 'gate.start', data: { gateName: 'MutationGate', retryCount } };
+               await secureWrite(res, `data: ${JSON.stringify(mgStartEvent)}\n\n`, isRequestClosed);
+               
+               const mgResultEvent = {
+                 type: 'gate.result',
+                 data: {
+                   gateName: 'MutationGate',
+                   pass: false,
+                   feedback: failedGateFeedback,
+                   durationMs: 0,
+                   retryCount
+                 }
+               };
+               await secureWrite(res, `data: ${JSON.stringify(mgResultEvent)}\n\n`, isRequestClosed);
+            }
           }
-
-          if (sessionId && activeSessions.has(sessionId)) {
-            const currentRec = activeSessions.get(sessionId)!;
-            const currentTierConfig = DEFAULT_ROLES_CONFIG.executorTiers.find(t => t.model === currentModel) || (DEFAULT_ROLES_CONFIG.planner.model === currentModel ? DEFAULT_ROLES_CONFIG.planner : null) || { provider: 'gemini', model: currentModel, tokenRatio: 4 };
-            const divisor = currentTierConfig.tokenRatio || 4;
-            activeSessions.set(sessionId, {
-              ...currentRec,
-              totalOutputTokens: (currentRec.totalOutputTokens || 0) + Math.ceil(assistantMessage.length / divisor)
-            });
-          }
-
-          // Push assistant message to history if not diagnostic (diagnostic path does it separately)
-          if (!isDiagnostic && sessionId && activeSessions.has(sessionId)) {
-            const sRec = activeSessions.get(sessionId)!;
-            activeSessions.set(sessionId, {
-              ...sRec,
-              conversationHistory: [...(sRec.conversationHistory || []), { role: 'assistant', content: assistantMessage }]
-            });
-          }
-
-          // SYS-REQ-004: Enforce structured tool calls for mutation tasks
-          if (!isDiagnostic && process.env.NODE_ENV !== 'test' && (classifiedType === 'feature' || classifiedType === 'refactor') && !toolWasCalledInThisTurn) {
-             writeLog(`[GateLoop] SYS-REQ-004: Mutation task without tool call detected. Failing current turn.`);
-             allGatesPassedInThisCycle = false;
-             failedGateName = 'MutationGate';
-             failedGateFeedback = truncateOutput('The executor failed to emit any structured tool calls to modify files. Plain text explanations are blocked for mutation tasks.');
-             
-             // Emit explicit gate events for MutationGate to satisfy protocol consistency and test assertions
-             const mgStartEvent = { type: 'gate.start', data: { gateName: 'MutationGate', retryCount } };
-             await secureWrite(res, `data: ${JSON.stringify(mgStartEvent)}\n\n`, isRequestClosed);
-             
-             const mgResultEvent = {
-               type: 'gate.result',
-               data: {
-                 gateName: 'MutationGate',
-                 pass: false,
-                 feedback: failedGateFeedback,
-                 durationMs: 0,
-                 retryCount
-               }
-             };
-             await secureWrite(res, `data: ${JSON.stringify(mgResultEvent)}\n\n`, isRequestClosed);
+        } finally {
+          const toUnsubscribe: unknown = unsubscribe;
+          if (typeof toUnsubscribe === 'function') {
+            try { toUnsubscribe(); } catch (e) {}
+            unsubscribe = null;
           }
         }
 

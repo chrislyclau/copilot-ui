@@ -4,7 +4,7 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { CopilotClient, PermissionRequestResult, SessionConfig, SdkProviderConfig, Tool } from './copilotSdk/boundary';
-import { handleGateLoop } from './orchestrator/gateLoop';
+import { handleGateLoop, handleGateRunPermission } from './orchestrator/gateLoop';
 
 import {
   activeSessions,
@@ -29,6 +29,13 @@ import {
 
 import type { CopilotCreateSessionOptions } from './orchestrator/sessionState';
 
+/**
+ * Orchestrator Server Runtime Exports
+ * 
+ * These exports define the public surface area for the Express application.
+ * Re-exports from internal modules are centralized here to maintain clear layer boundaries
+ * between the API handlers and the core orchestrator logic.
+ */
 export {
   activeSessions,
   sseResToSessionId,
@@ -47,6 +54,7 @@ export {
   getCodeState,
   runLlmAudit,
   lastRunLog,
+  handleGateRunPermission,
 };
 
 export type { CopilotCreateSessionOptions };
@@ -764,11 +772,6 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       clearInterval(heartbeat);
     });
   });
-
-  // Unconditional auto-approve permission evaluator for all incoming commands and tools
-  const handleGateRunPermission = async (): Promise<PermissionRequestResult> => {
-    return { kind: 'approve-once' };
-  };
 
   // Real GitHub Copilot SDK Execution with Gemini API Integration (BYOK) - switched to POST
   app.post('/api/copilot/run', async (req, res) => {
