@@ -129,13 +129,21 @@ export const handleGateRunPermission = async (req: PermissionRequest): Promise<P
       return { kind: 'approve-once' };
     } else {
       writeLog(`[Security Check Failed] Denied tool execution outside of an active running session context: ${toolName}`);
-      return { kind: 'reject', reason: `Execution of ${toolName} requires an active, authorized orchestration session context.` } as any;
+      return {
+        kind: 'reject',
+        feedback: `Execution of ${toolName} requires an active, authorized orchestration session context.`,
+        reason: `Execution of ${toolName} requires an active, authorized orchestration session context.`
+      } as any;
     }
   }
 
   // Default block for other tools
   writeLog(`[Security Check Failed] Blocked unknown or unauthorized tool: ${toolName}`);
-  return { kind: 'reject', reason: `Tool ${toolName} is not authorized` } as any;
+  return {
+    kind: 'reject',
+    feedback: `Tool ${toolName} is not authorized`,
+    reason: `Tool ${toolName} is not authorized`
+  } as any;
 };
 
 export const handleGateLoop = async (req: express.Request, res: express.Response) => {
@@ -357,7 +365,9 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
 
     const resolvedWorkspaceRoot = path.resolve(getWorkspaceRoot());
     const resolvedRunCwd = path.resolve(runCwd);
-    if (!resolvedRunCwd.startsWith(resolvedWorkspaceRoot)) {
+    const relativePath = path.relative(resolvedWorkspaceRoot, resolvedRunCwd);
+    const isCwdSafe = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+    if (!isCwdSafe) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Access denied: Directory traversal outside workspace root.');
       await cleanup();

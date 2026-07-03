@@ -906,11 +906,13 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       const inputCwd = (cwd && typeof cwd === 'string')
         ? path.join(getWorkspaceRoot(), path.normalize(cwd).replace(/^(\.\.(\/|\\|$))+/, ''))
-        : DEFAULT_WORKSPACE_DIR;
+        : getWorkspaceRoot();
 
       const resolvedWorkspaceRoot = path.resolve(getWorkspaceRoot());
       const resolvedInputCwd = path.resolve(inputCwd);
-      if (!resolvedInputCwd.startsWith(resolvedWorkspaceRoot)) {
+      const relativePath = path.relative(resolvedWorkspaceRoot, resolvedInputCwd);
+      const isCwdSafe = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+      if (!isCwdSafe) {
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Access denied: Directory traversal outside workspace root.');
         return;
@@ -1290,7 +1292,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     if (runCwd) {
       const resolvedWorkspaceRoot = path.resolve(getWorkspaceRoot());
       const resolvedRunCwd = path.resolve(runCwd);
-      if (!resolvedRunCwd.startsWith(resolvedWorkspaceRoot)) {
+      const relativePath = path.relative(resolvedWorkspaceRoot, resolvedRunCwd);
+      const isCwdSafe = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+      if (!isCwdSafe) {
         res.status(403).json({ success: false, error: 'Access denied: Directory traversal outside workspace root.' });
         return;
       }
