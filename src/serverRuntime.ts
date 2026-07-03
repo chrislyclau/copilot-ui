@@ -904,14 +904,24 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       if (isRequestClosed) return;
 
-      const inputCwd = cwd as string;
+      const inputCwd = (cwd && typeof cwd === 'string')
+        ? path.join(getWorkspaceRoot(), path.normalize(cwd).replace(/^(\.\.(\/|\\|$))+/, ''))
+        : DEFAULT_WORKSPACE_DIR;
+
+      const resolvedWorkspaceRoot = path.resolve(getWorkspaceRoot());
+      const resolvedInputCwd = path.resolve(inputCwd);
+      if (!resolvedInputCwd.startsWith(resolvedWorkspaceRoot)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Access denied: Directory traversal outside workspace root.');
+        return;
+      }
 
       // Access the persistent global Copilot Client instead of recreation
-      const client = await getGlobalClient(inputCwd || DEFAULT_WORKSPACE_DIR);
+      const client = await getGlobalClient(inputCwd);
 
       if (isRequestClosed) return;
 
-      const runCwd = inputCwd || DEFAULT_WORKSPACE_DIR;
+      const runCwd = inputCwd;
 
       const sessionOptions: CopilotCreateSessionOptions = {
         model: executionConfig.model,
@@ -1276,6 +1286,15 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     let runCwd: string | undefined = explicitCwd 
       ? path.join(getWorkspaceRoot(), path.normalize(explicitCwd).replace(/^(\.\.(\/|\\|$))+/, ''))
       : undefined;
+
+    if (runCwd) {
+      const resolvedWorkspaceRoot = path.resolve(getWorkspaceRoot());
+      const resolvedRunCwd = path.resolve(runCwd);
+      if (!resolvedRunCwd.startsWith(resolvedWorkspaceRoot)) {
+        res.status(403).json({ success: false, error: 'Access denied: Directory traversal outside workspace root.' });
+        return;
+      }
+    }
 
     if (!runCwd) {
       // Session-based path: sessionId is required when no explicit cwd is given.

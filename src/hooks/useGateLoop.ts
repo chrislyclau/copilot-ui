@@ -110,16 +110,18 @@ export function useGateLoop(
         setAwaitingHuman(true);
         setActiveGate(undefined);
       } else if (data.type === 'loop.retry') {
-        if ((data.data as any)?.retryCount !== undefined) {
-          setRetryCount((data.data as any).retryCount);
+        const retryData = data.data;
+        if (retryData.retryCount !== undefined) {
+          setRetryCount(retryData.retryCount);
         }
-        if ((data.data as any)?.nextModel) {
-          setCurrentTier((data.data as any).nextModel);
+        if (retryData.nextModel) {
+          setCurrentTier(retryData.nextModel);
         }
         setActiveGate(undefined);
       } else if (data.type === 'gate.result') {
-        if ((data.data as any)?.retryCount !== undefined) {
-          setRetryCount((data.data as any).retryCount);
+        const resData = data.data as unknown as Record<string, unknown>;
+        if (resData && typeof resData === 'object' && resData.retryCount !== undefined) {
+          setRetryCount(resData.retryCount as number);
         }
         setAwaitingHuman(false);
         setActiveGate(undefined);
@@ -140,13 +142,14 @@ export function useGateLoop(
         completedRef.current = true;
       }
       
-      const { category, title } = deriveEventMeta(data.type || 'system.unknown', (data as any).data);
+      const eventData = ('data' in data ? data.data : undefined) as Record<string, unknown> | undefined;
+      const { category, title } = deriveEventMeta(data.type || 'system.unknown', eventData);
       const copilotEvent: CopilotEvent = {
         sessionEvent: {
           id: data.id || `evt-${Math.random().toString(36).substring(7)}`,
           timestamp: data.timestamp || new Date().toISOString(),
           type: data.type || 'system.unknown',
-          data: (data as any).data || {}
+          data: eventData || {}
         } as ExtendedSessionEvent,
         title,
         category
@@ -212,7 +215,7 @@ export function useGateLoop(
                 const mappedGate = snap.activeGate === 'runTests' ? 'tests' :
                                    snap.activeGate === 'runLint' ? 'lint' :
                                    snap.activeGate === 'runAudit' ? 'audit' : undefined;
-                setActiveGate(mappedGate as any);
+                setActiveGate(mappedGate);
               } else {
                 setActiveGate(undefined);
               }
@@ -226,9 +229,11 @@ export function useGateLoop(
               logClient(`State Hydration complete from stateSnapshot. minValidSequenceId = ${minValidSeqIdFromSnapshot}`);
             }
           }
-        } catch (err: any) {
-          if (err.name !== 'AbortError') {
-            logClient(`Skipping history hydration: ${err.message || err}`);
+        } catch (err: unknown) {
+          const isAbort = err instanceof Error && err.name === 'AbortError';
+          if (!isAbort) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logClient(`Skipping history hydration: ${msg}`);
           }
         }
       }
@@ -238,8 +243,9 @@ export function useGateLoop(
         let eventsToFlush = [...pendingEventsQueue];
         if (minValidSeqIdFromSnapshot > 0) {
           eventsToFlush = eventsToFlush.filter((ev: ExtendedSessionEvent) => {
-            const seq = (ev as any)?.sequenceId ?? (ev as any)?.data?.sequenceId;
-            return seq === undefined || seq >= minValidSeqIdFromSnapshot;
+            const evObj = ev as Record<string, unknown>;
+            const seq = evObj?.sequenceId ?? (evObj?.data as Record<string, unknown> | undefined)?.sequenceId;
+            return seq === undefined || (typeof seq === 'number' && seq >= minValidSeqIdFromSnapshot);
           });
         }
         logClient(`Flushing ${eventsToFlush.length} queued live events post-hydration.`);
@@ -304,10 +310,12 @@ export function useGateLoop(
       if (loopErrorMessage) {
         throw new Error(loopErrorMessage);
       }
-    } catch (err: any) {
-      logClient(`Error in streamEndpoint hook: ${err.message || err}`);
+    } catch (err: unknown) {
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      const msg = err instanceof Error ? err.message : String(err);
+      logClient(`Error in streamEndpoint hook: ${msg}`);
       console.error(err);
-      if (err.name !== 'AbortError') throw err;
+      if (!isAbort) throw err;
     } finally {
       setIsRunning(false);
       setActiveReplayTraceId(undefined);

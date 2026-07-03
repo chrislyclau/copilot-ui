@@ -43,8 +43,8 @@ export function createSseWriter({
           try {
             const jsonStr = data.substring(5).trim();
             if (jsonStr) {
-              eventObj = JSON.parse(jsonStr);
-              if (eventObj && typeof eventObj === 'object') {
+              const parsedEventObj = JSON.parse(jsonStr);
+              if (parsedEventObj && typeof parsedEventObj === 'object') {
                 const newSequenceCounter = (session.eventSequenceCounter || 0) + 1;
                 activeSessions.set(sessId, {
                   ...session,
@@ -52,17 +52,19 @@ export function createSseWriter({
                   turns: session.turns ? [...session.turns] : []
                 });
                 const updatedSession = activeSessions.get(sessId)!;
-                const eventData = (eventObj.data && typeof eventObj.data === 'object' ? { ...eventObj.data } : {}) as Record<string, unknown>;
+                const enrichedData = (parsedEventObj.data && typeof parsedEventObj.data === 'object'
+                  ? { ...parsedEventObj.data }
+                  : {}) as Record<string, unknown>;
                 
-                eventData.sequenceId = newSequenceCounter;
+                enrichedData.sequenceId = newSequenceCounter;
 
                 if (updatedSession.stateSnapshot) {
-                  eventData.stateSnapshot = updatedSession.stateSnapshot;
+                  enrichedData.stateSnapshot = updatedSession.stateSnapshot;
                 }
                 
                 const typedEventObj: CopilotEventData = {
-                    ...eventObj,
-                    data: eventData
+                  ...parsedEventObj,
+                  data: enrichedData
                 };
                 eventObj = typedEventObj;
 

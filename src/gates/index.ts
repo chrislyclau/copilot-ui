@@ -9,7 +9,16 @@ export interface GateResult {
 }
 
 export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd?: string, externalSignal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
+  // Validate cmd strictly to prevent shell injection
+  if (/[\x00-\x1F;`|&<>]/.test(cmd)) {
+    throw new Error(`Invalid command detected: shell control characters are forbidden.`);
+  }
+
   if (cwd) {
+    // Validate cwd strictly to prevent shell injection
+    if (/[\x00-\x1F;`"$&|<>*?(){}\n\r]/.test(cwd)) {
+      throw new Error(`Invalid characters in directory path: ${cwd}`);
+    }
     const sanitizedCwd = cwd.replace(/'/g, "'\\''");
     const checkDir = await getExecCommand()(`test -d '${sanitizedCwd}'`, externalSignal);
     if (checkDir.exitCode !== 0) {
