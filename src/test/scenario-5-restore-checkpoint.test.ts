@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { initializeWorkspace, getGitSandbox } from '../workspace';
-;
+; 
 import { serverHarness } from './harness/ServerHarness';
 
 /**
@@ -40,9 +40,9 @@ describe('Scenario 5: Checkpoint restore success', () => {
 
     try {
       // Set up a real git sandbox directly — no server session needed.
+      // initializeWorkspace() already initializes the shared GitSandbox.
       await initializeWorkspace();
       const sandbox = getGitSandbox();
-      await sandbox.initializeGitSandboxAsync();
 
       fs.writeFileSync(path.join(tempCwd, 'v.txt'), 'v1');
       const sha = (await sandbox.commitAllChangesAsync('initial')).trim();
