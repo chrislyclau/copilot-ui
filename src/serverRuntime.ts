@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
-import { CopilotClient, PermissionRequestResult, SessionConfig, SdkProviderConfig, Tool } from './copilotSdk/boundary';
+import { CopilotClient, CopilotSession, PermissionRequestResult, SessionConfig, SdkProviderConfig, Tool, SessionEvent } from './copilotSdk/boundary';
 import { handleGateLoop, handleGateRunPermission } from './orchestrator/gateLoop';
 
 import {
@@ -62,7 +62,7 @@ export type { CopilotCreateSessionOptions };
 import { DEFAULT_ROLES_CONFIG } from './config/models';
 import { runGate, runTests, runLint, runWithTimeout } from './gates';
 import { MODEL_TIERS, getNextTier } from './config/models';
-import { SessionRecord, StateSnapshot, CopilotEventData, Turn, getSequenceId, TestSession, AppSession } from './types/session';
+import { SessionRecord, StateSnapshot, CopilotEventData, Turn, getSequenceId } from './types/session';
 import { ExecutionConfig, ProviderConfig } from './utils/providerRegistry';
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from './utils/prompt';
 import { makeDockerToolHandler } from './utils/toolHandlers';
@@ -508,7 +508,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
   });
 
   app.get('/api/copilot/test', async (req, res) => {
-    let testSession: TestSession | null = null;
+    let testSession: CopilotSession | null = null;
     let testClient: CopilotClient | null = null;
     try {
       const { apiKey, model } = req.query;
@@ -569,7 +569,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
           reject(new Error("Timeout waiting for response delta"));
         }, 12000);
 
-        currentTestSession.on((event: CopilotEventData) => {
+        currentTestSession.on((event: SessionEvent) => {
           if (event.type === 'assistant.message') {
             answer = (event.data as { content?: string })?.content || "";
             addLine(`[EVENT] assistant.message: "${answer}"`);
@@ -805,7 +805,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
   // Real GitHub Copilot SDK Execution with Gemini API Integration (BYOK) - switched to POST
   app.post('/api/copilot/run', async (req, res) => {
-    let session: AppSession | null = null;
+    let session: CopilotSession | null = null;
     let unsubscribe: (() => void) | null = null;
 
     const abortController = new AbortController();
@@ -907,10 +907,13 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       let inputCwd = getWorkspaceRoot();
       if (cwd && typeof cwd === 'string') {
-        if (path.isAbsolute(cwd)) {
+        if (process.env.NODE_ENV === 'test' && path.isAbsolute(cwd) && cwd.startsWith(os.tmpdir())) {
           inputCwd = cwd;
         } else {
-          inputCwd = path.join(getWorkspaceRoot(), path.normalize(cwd).replace(/^(\.\.(\/|\\|$))+/, ''));
+          const normalizedSubpath = path.normalize(cwd)
+            .replace(/^([a-zA-Z]:)?(\/|\\)+/, '')
+            .replace(/^(\.\.(\/|\\|$))+/, '');
+          inputCwd = path.join(getWorkspaceRoot(), normalizedSubpath);
         }
       }
 
@@ -933,7 +936,6 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       const isCwdSafe = (() => {
         if (checkPathInside(getWorkspaceRoot(), inputCwd)) return true;
-        if (checkPathInside(getWorkspaceHostLocation(), inputCwd)) return true;
         if (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), inputCwd)) return true;
         return false;
       })();
@@ -966,10 +968,10 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
           client,
           sessionOptions
         );
-        session = record.copilotSession as unknown as AppSession;
+        session = record.copilotSession;
         writeLog(`[SDK] Using session from getOrCreateSession for id: ${sessionId}`);
       } else {
-        session = (await client.createSession(sessionOptions)) as unknown as AppSession;
+        session = await client.createSession(sessionOptions);
         writeLog(`[SDK] session created or reused, id: ${session?.sessionId}`);
       }
 
@@ -986,7 +988,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       }, 15000);
 
       if (!session) throw new Error('Failed to initialize session');
-      unsubscribe = session.on(async (event: CopilotEventData) => {
+      unsubscribe = session.on(async (event: SessionEvent) => {
         try {
           writeLog(`[SDK] event received: ${event.type} | res.writableEnded: ${res.writableEnded} | res.destroyed: ${res.destroyed}`);
           if (res.writableEnded || res.destroyed) {
@@ -1313,10 +1315,13 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
     let runCwd: string | undefined = undefined;
     if (explicitCwd && typeof explicitCwd === 'string') {
-      if (path.isAbsolute(explicitCwd)) {
+      if (process.env.NODE_ENV === 'test' && path.isAbsolute(explicitCwd) && explicitCwd.startsWith(os.tmpdir())) {
         runCwd = explicitCwd;
       } else {
-        runCwd = path.join(getWorkspaceRoot(), path.normalize(explicitCwd).replace(/^(\.\.(\/|\\|$))+/, ''));
+        const normalizedSubpath = path.normalize(explicitCwd)
+          .replace(/^([a-zA-Z]:)?(\/|\\)+/, '')
+          .replace(/^(\.\.(\/|\\|$))+/, '');
+        runCwd = path.join(getWorkspaceRoot(), normalizedSubpath);
       }
     }
 
@@ -1340,13 +1345,41 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       const isCwdSafe = (() => {
         if (checkPathInside(getWorkspaceRoot(), runCwd)) return true;
-        if (checkPathInside(getWorkspaceHostLocation(), runCwd)) return true;
         if (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), runCwd)) return true;
         return false;
       })();
 
       if (!isCwdSafe) {
         res.status(403).json({ success: false, error: 'Access denied: Directory traversal outside workspace root.' });
+        return;
+      }
+    }
+
+    // Enforce session ownership verification to prevent unauthorized target workspace modifications
+    if (sessionId) {
+      const session = activeSessions.get(sessionId);
+      if (!session) {
+        res.status(404).json({ success: false, error: 'Session not found.' });
+        return;
+      }
+      if (runCwd) {
+        const absSessionCwd = path.resolve(session.cwd);
+        const absRunCwd = path.resolve(runCwd);
+        if (absSessionCwd !== absRunCwd) {
+          writeLog(`[Security Blocked] Session ownership mismatch: sessionId ${sessionId} owns ${session.cwd}, but request targeted ${runCwd}`);
+          res.status(403).json({ success: false, error: 'Access denied: Session does not own the requested workspace directory.' });
+          return;
+        }
+      }
+    } else if (runCwd) {
+      // If no sessionId is provided, ensure there is no active session registered for this cwd
+      const absTargetCwd = path.resolve(runCwd);
+      const activeSessionWithCwd = Array.from(activeSessions.values()).find(
+        s => path.resolve(s.cwd) === absTargetCwd
+      );
+      if (activeSessionWithCwd) {
+        writeLog(`[Security Blocked] Attempted sessionless restore against a workspace with an active session: ${runCwd}`);
+        res.status(403).json({ success: false, error: 'Access denied: Cannot restore a workspace with an active session without providing the correct sessionId.' });
         return;
       }
     }

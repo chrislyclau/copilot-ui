@@ -120,7 +120,7 @@ export function useGateLoop(
         }
         setActiveGate(undefined);
       } else if (data.type === 'gate.result') {
-        const resData = data.data as unknown as Record<string, unknown>;
+        const resData = data.data;
         if (resData && typeof resData === 'object' && resData.retryCount !== undefined) {
           setRetryCount(resData.retryCount as number);
         }
@@ -143,7 +143,7 @@ export function useGateLoop(
         completedRef.current = true;
       }
       
-      const eventData = ('data' in data ? data.data : undefined) as Record<string, unknown> | undefined;
+      const eventData = data.data;
       const { category, title } = deriveEventMeta(data.type || 'system.unknown', eventData);
       const copilotEvent: CopilotEvent = {
         sessionEvent: {

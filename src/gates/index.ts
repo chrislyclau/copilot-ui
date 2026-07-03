@@ -1,5 +1,15 @@
+import path from 'path';
+import os from 'os';
 import { normalizeGateName } from '../config/gates';
-import { getExecCommand } from '../workspace';
+import { getExecCommand, getWorkspaceRoot } from '../workspace';
+
+// Helper to check if child path is inside parent
+function checkPathInside(parent: string, child: string): boolean {
+  const absParent = path.resolve(parent);
+  const absChild = path.resolve(child);
+  const relAbs = path.relative(absParent, absChild);
+  return relAbs === '' || (!relAbs.startsWith('..') && !path.isAbsolute(relAbs));
+}
 
 export interface GateResult {
   gateName: 'runTests' | 'runLint';
@@ -16,12 +26,20 @@ export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd
   }
 
   if (cwd) {
-    // Validate cwd strictly to prevent shell injection
-    if (/[\x00-\x1F;`"$&|<>*?(){}\n\r]/.test(cwd)) {
-      throw new Error(`Invalid characters in directory path: ${cwd}`);
+    // 1. Strict pattern check: only allow safe alphanumeric and path separator characters to eliminate shell injection
+    if (!/^[a-zA-Z0-9_\-\.\/]+$/.test(cwd)) {
+      throw new Error(`Security Exception: Directory path contains unsafe shell-characters: ${cwd}`);
     }
-    const sanitizedCwd = cwd.replace(/'/g, "'\\''");
-    const checkDir = await getExecCommand()(`test -d '${sanitizedCwd}'`, externalSignal);
+
+    // 2. Strict directory boundary check: must be inside workspace root or temp dir (tests)
+    const runCwd = path.isAbsolute(cwd) ? cwd : path.join(getWorkspaceRoot(), cwd);
+    const isCwdSafe = checkPathInside(getWorkspaceRoot(), runCwd) || 
+                      (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), runCwd));
+    if (!isCwdSafe) {
+      throw new Error(`Security Exception: Directory path is outside workspace root: ${cwd}`);
+    }
+
+    const checkDir = await getExecCommand()(`test -d '${runCwd}'`, externalSignal);
     if (checkDir.exitCode !== 0) {
       return { stdout: '', stderr: `Directory ${cwd} does not exist.` };
     }

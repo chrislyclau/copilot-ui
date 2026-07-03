@@ -13,6 +13,7 @@ export interface GateResultData {
   readonly pass: boolean;
   readonly feedback: string;
   readonly durationMs: number;
+  readonly retryCount?: number;
 }
 
 export interface LoopRetryData {

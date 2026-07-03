@@ -25,21 +25,29 @@ export interface StateSnapshot {
   readonly currentModelIndex?: number;
 }
 
+export interface CopilotEventPayload {
+  readonly sequenceId?: number;
+  readonly stateSnapshot?: StateSnapshot;
+  readonly [key: string]: unknown;
+}
+
 export interface CopilotEventData {
   readonly id: string;
   readonly timestamp: string;
   readonly type: string;
   readonly sequenceId?: number;
-  readonly data?: unknown;
+  readonly data?: CopilotEventPayload;
 }
 
 export function getSequenceId(ev: CopilotEventData): number {
   if (typeof ev.sequenceId === 'number') {
     return ev.sequenceId;
   }
-  if (ev.data && typeof ev.data === 'object' && 'sequenceId' in ev.data) {
-    const data = ev.data as { readonly sequenceId: number };
-    return data.sequenceId;
+  if (ev.data && typeof ev.data === 'object') {
+    const data = ev.data as CopilotEventPayload;
+    if (typeof data.sequenceId === 'number') {
+      return data.sequenceId;
+    }
   }
   return 0;
 }
@@ -50,23 +58,6 @@ export interface Turn {
   readonly status: 'running' | 'completed' | 'failed';
   readonly events: ReadonlyArray<CopilotEventData>;
   readonly commitSha?: string | undefined;
-}
-
-export interface TestSession {
-  readonly disconnect: () => Promise<void>;
-  readonly on: (cb: (event: CopilotEventData) => void) => () => void;
-  readonly send: {
-    (prompt: string): Promise<string>;
-    (options: { readonly prompt: string }): Promise<string>;
-  };
-  readonly sessionId: string;
-}
-
-export interface AppSession {
-  readonly disconnect: () => Promise<void>;
-  readonly on: (cb: (event: CopilotEventData) => void) => () => void;
-  readonly sessionId: string;
-  readonly sendAndWait: (args: { readonly prompt: string }, timeout: number) => Promise<void>;
 }
 
 export interface SessionRecord {

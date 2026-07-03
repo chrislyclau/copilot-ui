@@ -418,10 +418,13 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         return;
       }
 
-      if (path.isAbsolute(cwd)) {
+      if (process.env.NODE_ENV === 'test' && path.isAbsolute(cwd) && cwd.startsWith(os.tmpdir())) {
         runCwd = cwd;
       } else {
-        runCwd = path.join(getWorkspaceRoot(), path.normalize(cwd));
+        const normalizedSubpath = path.normalize(cwd)
+          .replace(/^([a-zA-Z]:)?(\/|\\)+/, '')
+          .replace(/^(\.\.(\/|\\|$))+/, '');
+        runCwd = path.join(getWorkspaceRoot(), normalizedSubpath);
       }
     }
 
@@ -444,7 +447,6 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
 
     const isCwdSafe = (() => {
       if (checkPathInside(getWorkspaceRoot(), runCwd)) return true;
-      if (checkPathInside(getWorkspaceHostLocation(), runCwd)) return true;
       if (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), runCwd)) return true;
       return false;
     })();
@@ -713,6 +715,8 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         
         unsub();
 
+        // Note: The type cast 'as ComposerRouteArguments | null' is required to prevent TypeScript's
+        // control flow analysis from narrowing this asynchronously-mutated variable to 'null' (and thus 'never').
         const args = toolArguments as ComposerRouteArguments | null;
         if (args && args.taskType) {
           classifiedType = args.taskType;

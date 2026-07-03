@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import type { CopilotEventData, SessionRecord, Turn, StateSnapshot } from '../types/session';
+import type { CopilotEventData, CopilotEventPayload, SessionRecord, Turn, StateSnapshot } from '../types/session';
 
 export interface ExtendedResponse extends Response {
   simulateBackpressureDelayMs?: number;
@@ -52,7 +52,7 @@ export function enrichEventPayload(
     timestamp: parsedEventObj.timestamp || new Date().toISOString(),
     type: parsedEventObj.type || 'unknown',
     sequenceId,
-    data: enrichedData
+    data: enrichedData as CopilotEventPayload
   };
 }
 
