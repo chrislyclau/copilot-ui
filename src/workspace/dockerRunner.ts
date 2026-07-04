@@ -43,7 +43,7 @@ export async function runDockerProcess(
       "exec",
       "-i",
       "-e",
-      `AISTUDIO_RUN_ID=${runId}`,
+      `EXEC_RUN_ID=${runId}`,
       "-w",
       FIXED_WORKSPACE_ROOT,
       getContainerName(),
@@ -72,7 +72,7 @@ export async function runDockerProcess(
       
       // 2. Kill descendants inside the container namespace
       try {
-        const killCmd = `for pid in $(grep -sl "AISTUDIO_RUN_ID=${runId}" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 $pid 2>/dev/null; done`;
+        const killCmd = `for pid in $(grep -sl "EXEC_RUN_ID=${runId}" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 $pid 2>/dev/null; done`;
         spawn("docker", [
           "exec",
           getContainerName(),

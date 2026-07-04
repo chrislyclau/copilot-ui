@@ -49,15 +49,15 @@ describe("Docker Cleanup & Orphan Handling", () => {
 
     const runCall = calls[0] as unknown as [string, string[], any];
     assert.strictEqual(runCall[0], "docker");
-    assert.ok(runCall[1].includes("AISTUDIO_RUN_ID=1234abcd-1234-1234-1234-123456789012"), "Expected run command to include RUN_ID env var");
+    assert.ok(runCall[1].includes("EXEC_RUN_ID=1234abcd-1234-1234-1234-123456789012"), "Expected run command to include RUN_ID env var");
 
-    const killCall = calls[1] as unknown as [string, string[], any];
+    const killCall = calls[1] as any;
     assert.strictEqual(killCall[0], "docker");
     assert.strictEqual(killCall[1][1], "test-container");
     assert.strictEqual(killCall[1][2], "bash");
     assert.strictEqual(killCall[1][3], "-c");
     assert.ok(
-      killCall[1][4].includes('grep -sl "AISTUDIO_RUN_ID=1234abcd-1234-1234-1234-123456789012" /proc/[0-9]*/environ'),
+      killCall[1][4].includes('grep -sl "EXEC_RUN_ID=1234abcd-1234-1234-1234-123456789012" /proc/[0-9]*/environ'),
       "Expected kill command to grep for the RUN_ID"
     );
   });
