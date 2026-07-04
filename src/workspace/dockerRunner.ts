@@ -51,57 +51,93 @@ export async function runDockerProcess(
       "-s",
     ], { detached: true });
 
-    const killChild = () => {
+    // How long we're willing to wait for the container-side kill to confirm
+    // before giving up and resolving anyway. Container cleanup is best-effort;
+    // this bounds that effort instead of leaving callers to wait forever if
+    // the docker daemon is unresponsive, while still closing most of the
+    // "resolved before the orphan was actually killed" race.
+    const CONTAINER_KILL_GRACE_MS = 1500;
+
+    let killInitiated = false;
+    let containerCleanupPromise: Promise<void> = Promise.resolve();
+
+    // Kills the host-side docker exec process immediately (synchronous) and
+    // returns a promise that resolves once the container-side cleanup has
+    // either finished or timed out. Idempotent: calling this more than once
+    // (e.g. from onAbort and then the stdin-not-writable branch) only spawns
+    // the container-side kill once.
+    const killChild = (): Promise<void> => {
+      if (killInitiated) return containerCleanupPromise;
+      killInitiated = true;
+
       // 1. Kill host-side docker exec client process
       killProcessGroup(child);
-      
+
       // 2. Kill descendants inside the container namespace.
       // runId is always a crypto.randomUUID() value (fixed hex/hyphen format,
       // no shell metacharacters), so it is safe to interpolate directly here.
       // If runId is ever sourced from elsewhere, it must be shell-escaped.
-      try {
-        const killCmd = `for pid in $(grep -sl "EXEC_RUN_ID=${runId}" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 "$pid" || echo "kill-failed pid=$pid" >&2; done`;
-        const killProc = spawn("docker", [
-          "exec",
-          getContainerName(),
-          "bash",
-          "-c",
-          killCmd,
-        ]);
+      containerCleanupPromise = new Promise<void>((resolveCleanup) => {
+        let settled = false;
+        const settle = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(graceTimer);
+          resolveCleanup();
+        };
+        const graceTimer = setTimeout(settle, CONTAINER_KILL_GRACE_MS);
 
-        // This is best-effort cleanup fired during abort/close handling, so we
-        // don't block on it — but we do surface failures instead of silently
-        // swallowing them, since a failed container-side kill means an orphan
-        // process may still be running inside the container.
-        let killStderr = "";
-        killProc.stderr?.on("data", (data) => {
-          killStderr += data.toString();
-        });
-        killProc.on("error", (err) => {
-          console.warn(
-            `Container-side kill for EXEC_RUN_ID=${runId} failed to spawn:`,
-            err,
-          );
-        });
-        killProc.on("close", (code) => {
-          if (code !== 0) {
+        try {
+          const killCmd = `for pid in $(grep -sl "EXEC_RUN_ID=${runId}" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 "$pid" || echo "kill-failed pid=$pid" >&2; done`;
+          const killProc = spawn("docker", [
+            "exec",
+            getContainerName(),
+            "bash",
+            "-c",
+            killCmd,
+          ]);
+
+          // Best-effort cleanup, but we surface failures instead of silently
+          // swallowing them, since a failed container-side kill means an
+          // orphan process may still be running inside the container.
+          let killStderr = "";
+          killProc.stderr?.on("data", (data) => {
+            killStderr += data.toString();
+          });
+          killProc.on("error", (err) => {
             console.warn(
-              `Container-side kill for EXEC_RUN_ID=${runId} exited with code ${code}` +
-                (killStderr ? `: ${killStderr.trim()}` : " (possible permission issue or no matching processes)"),
+              `Container-side kill for EXEC_RUN_ID=${runId} failed to spawn:`,
+              err,
             );
-          }
-        });
-      } catch (e) {
-        console.warn("Failed to spawn container-side kill process", e);
-      }
+            settle();
+          });
+          killProc.on("close", (code) => {
+            if (code !== 0) {
+              console.warn(
+                `Container-side kill for EXEC_RUN_ID=${runId} exited with code ${code}` +
+                  (killStderr ? `: ${killStderr.trim()}` : " (possible permission issue or no matching processes)"),
+              );
+            }
+            settle();
+          });
+        } catch (e) {
+          console.warn("Failed to spawn container-side kill process", e);
+          settle();
+        }
+      });
+
+      return containerCleanupPromise;
     };
 
-    const onAbort = () => killChild();
+    const onAbort = () => {
+      void killChild();
+    };
     if (signal) {
       signal.addEventListener("abort", onAbort);
       if (signal.aborted) {
-        killChild();
-        resolve({ stdout: "", stderr: "Docker process aborted", exitCode: 1 });
+        void killChild().then(() => {
+          resolve({ stdout: "", stderr: "Docker process aborted", exitCode: 1 });
+        });
         return;
       }
     }
@@ -127,14 +163,19 @@ export async function runDockerProcess(
 
     child.on("close", (code) => {
       if (signal) signal.removeEventListener("abort", onAbort);
-      resolve({ stdout, stderr, exitCode: code });
+      if (killInitiated) {
+        void containerCleanupPromise.then(() => {
+          resolve({ stdout, stderr, exitCode: code });
+        });
+      } else {
+        resolve({ stdout, stderr, exitCode: code });
+      }
     });
     if (child.stdin.writable) {
       child.stdin.write(command + "\n");
       child.stdin.end();
     } else {
       if (signal) signal.removeEventListener("abort", onAbort);
-      killChild();
 
       // Wait for the process to fully exit before resolving. A fallback timer
       // guards against close never firing (e.g. the kill not propagating into
@@ -151,12 +192,16 @@ export async function runDockerProcess(
 
       child.once("close", () => {
         clearTimeout(timer);
-        resolve({
-          stdout: "",
-          stderr: "Docker process stdin not writable — container may not be running.",
-          exitCode: 1,
+        void containerCleanupPromise.then(() => {
+          resolve({
+            stdout: "",
+            stderr: "Docker process stdin not writable — container may not be running.",
+            exitCode: 1,
+          });
         });
       });
+
+      void killChild();
     }
   });
 }
