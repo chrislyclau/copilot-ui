@@ -18,4 +18,17 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 512
-    
+    # Resource ceilings: pids_limit alone doesn't stop a single process from
+    # exhausting host memory/CPU, and the /app bind mount is otherwise
+    # unbounded, so cap all three explicitly.
+    mem_limit: ${APPLET_MEM_LIMIT:-2g}
+    memswap_limit: ${APPLET_MEM_LIMIT:-2g}
+    cpus: ${APPLET_CPU_LIMIT:-2}
+    # Root filesystem is read-only; only /app (the bind-mounted workspace) and
+    # /tmp are writable. This limits blast radius of arbitrary auto-executed
+    # commands beyond the workspace itself.
+    read_only: true
+    tmpfs:
+      - /tmp
+    # No explicit network policy is set here yet — auto-executed commands can
+    # currently reach the network freely. Tracked separately; see ORCH-REQ-012.
