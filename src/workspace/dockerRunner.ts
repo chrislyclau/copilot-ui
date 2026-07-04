@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import * as os from "os";
+import * as crypto from "crypto";
 
 const FIXED_WORKSPACE_ROOT = "/app";
 const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "./workspace";
@@ -36,11 +37,13 @@ export async function runDockerProcess(
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   // Needs to run docker exec -i container_name bash -s <<< "command"
   // No need to sanitize. The container is already an isolated environment.
-
   return new Promise((resolve) => {
+    const runId = crypto.randomUUID();
     const child = spawn("docker", [
       "exec",
       "-i",
+      "-e",
+      `AISTUDIO_RUN_ID=${runId}`,
       "-w",
       FIXED_WORKSPACE_ROOT,
       getContainerName(),
@@ -49,6 +52,7 @@ export async function runDockerProcess(
     ], { detached: true });
 
     const killChild = () => {
+      // 1. Kill host-side docker exec client process
       try {
         if (child.pid) {
           if (os.platform() !== "win32") {
@@ -64,6 +68,20 @@ export async function runDockerProcess(
         }
       } catch (e) {
         console.warn(`Fallback kill failed for child ${child.pid}:`, e);
+      }
+      
+      // 2. Kill descendants inside the container namespace
+      try {
+        const killCmd = `for pid in $(grep -sl "AISTUDIO_RUN_ID=${runId}" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 $pid 2>/dev/null; done`;
+        spawn("docker", [
+          "exec",
+          getContainerName(),
+          "bash",
+          "-c",
+          killCmd
+        ]);
+      } catch (e) {
+        console.warn("Failed to spawn container-side kill process", e);
       }
     };
 
