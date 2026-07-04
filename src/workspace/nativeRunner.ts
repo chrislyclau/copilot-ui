@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { killProcessGroup } from "./processGroup.js";
 
 // fs.mkdtempSync atomically creates a uniquely-named directory under the
 // OS temp root (respects TMPDIR/TEMP/TMP) and returns its path — avoiding
@@ -36,24 +37,7 @@ export async function runNativeProcess(
       detached: true,
     });
 
-    const killChild = () => {
-      try {
-        if (child.pid) {
-          if (os.platform() !== "win32") {
-            try {
-              process.kill(-child.pid, "SIGKILL");
-            } catch (e) {
-              console.warn(`Failed to kill process group for child ${child.pid}:`, e);
-              child.kill("SIGKILL");
-            }
-          } else {
-            child.kill("SIGKILL");
-          }
-        }
-      } catch (e) {
-        console.warn(`Fallback kill failed for child ${child.pid}:`, e);
-      }
-    };
+    const killChild = () => killProcessGroup(child);
 
     const onAbort = () => killChild();
     if (signal) {
