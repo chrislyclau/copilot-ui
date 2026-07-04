@@ -53,12 +53,14 @@ describe("Docker Cleanup & Orphan Handling", () => {
 
     const killCall = calls[1] as any;
     assert.strictEqual(killCall[0], "docker");
-    assert.strictEqual(killCall[1][1], "test-container");
-    assert.strictEqual(killCall[1][2], "bash");
-    assert.strictEqual(killCall[1][3], "-c");
+    assert.strictEqual(killCall[1][1], "-e");
+    assert.strictEqual(killCall[1][2], "EXEC_RUN_ID=1234abcd-1234-1234-1234-123456789012", "Expected kill exec to pass EXEC_RUN_ID via env var, not string interpolation");
+    assert.strictEqual(killCall[1][3], "test-container");
+    assert.strictEqual(killCall[1][4], "bash");
+    assert.strictEqual(killCall[1][5], "-c");
     assert.ok(
-      killCall[1][4].includes('grep -sl "EXEC_RUN_ID=1234abcd-1234-1234-1234-123456789012" /proc/[0-9]*/environ'),
-      "Expected kill command to grep for the RUN_ID"
+      killCall[1][6].includes('grep -sl "EXEC_RUN_ID=$EXEC_RUN_ID" /proc/[0-9]*/environ'),
+      "Expected kill command to grep for the RUN_ID via the shell's own EXEC_RUN_ID env var"
     );
   });
 });
