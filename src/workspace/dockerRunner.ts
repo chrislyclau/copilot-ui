@@ -3,7 +3,7 @@ import * as os from "os";
 import * as crypto from "crypto";
 
 const FIXED_WORKSPACE_ROOT = "/app";
-const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "./workspace";
+const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "/tmp/applet_workspace";
 // Default timeout for user-supplied commands. Callers can override by passing
 // their own AbortSignal; this deadline applies only when none is provided.
 const EXEC_TIMEOUT_MS = 60_000;
