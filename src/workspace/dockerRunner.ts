@@ -1,4 +1,6 @@
 import { spawn } from "child_process";
+import * as os from "os";
+
 const FIXED_WORKSPACE_ROOT = "/app";
 const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "./workspace";
 // Default timeout for user-supplied commands. Callers can override by passing
@@ -48,14 +50,20 @@ export async function runDockerProcess(
 
     const killChild = () => {
       try {
-        if (child.pid) process.kill(-child.pid, "SIGKILL");
-      } catch (e) {
-        // Fallback if process group doesn't exist or we lack permissions
-        try {
-          child.kill("SIGKILL");
-        } catch (e2) {
-          // ignore
+        if (child.pid) {
+          if (os.platform() !== "win32") {
+            try {
+              process.kill(-child.pid, "SIGKILL");
+            } catch (e) {
+              console.warn(`Failed to kill process group for child ${child.pid}:`, e);
+              child.kill("SIGKILL");
+            }
+          } else {
+            child.kill("SIGKILL");
+          }
         }
+      } catch (e) {
+        console.warn(`Fallback kill failed for child ${child.pid}:`, e);
       }
     };
 

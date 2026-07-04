@@ -38,14 +38,20 @@ export async function runNativeProcess(
 
     const killChild = () => {
       try {
-        if (child.pid) process.kill(-child.pid, "SIGKILL");
-      } catch (e) {
-        // Fallback if process group doesn't exist or we lack permissions
-        try {
-          child.kill("SIGKILL");
-        } catch (e2) {
-          // ignore
+        if (child.pid) {
+          if (os.platform() !== "win32") {
+            try {
+              process.kill(-child.pid, "SIGKILL");
+            } catch (e) {
+              console.warn(`Failed to kill process group for child ${child.pid}:`, e);
+              child.kill("SIGKILL");
+            }
+          } else {
+            child.kill("SIGKILL");
+          }
         }
+      } catch (e) {
+        console.warn(`Fallback kill failed for child ${child.pid}:`, e);
       }
     };
 
