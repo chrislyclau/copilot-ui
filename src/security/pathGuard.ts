@@ -10,18 +10,40 @@ import { getWorkspaceRoot } from '../workspace';
 export function checkPathInside(parent: string, child: string): boolean {
   const absParent = path.resolve(parent);
   const absChild = path.resolve(child);
+
+  // 1. Unresolved path check: must not escape structurally via string relative manipulation
   const relAbs = path.relative(absParent, absChild);
   const isUnresolvedSafe = relAbs === '' || (!relAbs.startsWith('..') && !path.isAbsolute(relAbs));
-  if (isUnresolvedSafe) return true;
+  if (!isUnresolvedSafe) return false;
 
+  // 2. Resolved path check (resolving symlinks for both parent and child/existing child ancestors)
   try {
-    const realParent = fs.realpathSync(parent);
-    const realChild = fs.realpathSync(child);
-    const relReal = path.relative(realParent, realChild);
-    return relReal === '' || (!relReal.startsWith('..') && !path.isAbsolute(relReal));
+    const realParent = fs.realpathSync(absParent);
+    
+    // Traverse up to find the nearest existing ancestor of absChild
+    let existingChildPath = absChild;
+    while (existingChildPath && !fs.existsSync(existingChildPath)) {
+      const parentDir = path.dirname(existingChildPath);
+      if (parentDir === existingChildPath) {
+        break;
+      }
+      existingChildPath = parentDir;
+    }
+
+    if (fs.existsSync(existingChildPath)) {
+      const realChild = fs.realpathSync(existingChildPath);
+      const relReal = path.relative(realParent, realChild);
+      const isResolvedSafe = relReal === '' || (!relReal.startsWith('..') && !path.isAbsolute(relReal));
+      if (!isResolvedSafe) return false;
+    } else {
+      // If no ancestor exists, we cannot guarantee its resolution, default to unsafe
+      return false;
+    }
   } catch {
     return false;
   }
+
+  return true;
 }
 
 /**
