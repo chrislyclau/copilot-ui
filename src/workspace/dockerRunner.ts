@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 import * as crypto from "crypto";
-import { killProcessGroup } from "./processGroup.js";
+import { killProcessGroup } from "./processGroup";
 
 const FIXED_WORKSPACE_ROOT = "/app";
 const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "/tmp/applet_workspace";
