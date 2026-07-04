@@ -44,13 +44,26 @@ export async function runDockerProcess(
       getContainerName(),
       "bash",
       "-s",
-    ]);
+    ], { detached: true });
 
-    const onAbort = () => child.kill("SIGKILL");
+    const killChild = () => {
+      try {
+        if (child.pid) process.kill(-child.pid, "SIGKILL");
+      } catch (e) {
+        // Fallback if process group doesn't exist or we lack permissions
+        try {
+          child.kill("SIGKILL");
+        } catch (e2) {
+          // ignore
+        }
+      }
+    };
+
+    const onAbort = () => killChild();
     if (signal) {
       signal.addEventListener("abort", onAbort);
       if (signal.aborted) {
-        child.kill("SIGKILL");
+        killChild();
         resolve({ stdout: "", stderr: "Docker process aborted", exitCode: 1 });
         return;
       }
@@ -84,7 +97,7 @@ export async function runDockerProcess(
       child.stdin.end();
     } else {
       if (signal) signal.removeEventListener("abort", onAbort);
-      child.kill("SIGKILL");
+      killChild();
 
       // Wait for the process to fully exit before resolving. A fallback timer
       // guards against close never firing (e.g. the kill not propagating into
