@@ -1,5 +1,4 @@
 import * as path from "path";
-import * as fs from "fs";
 
 export type ExecCommand = (
     command: string,
@@ -208,9 +207,12 @@ export class GitSandbox {
      * Throws if the worktree is dirty so in-progress changes are never
      * silently discarded by the checkout.
      *
-     * After checking out, runs `git clean -fd` to remove any untracked files
-     * that were added after the checkpoint, ensuring the working tree exactly
-     * mirrors the historic snapshot before committing forward.
+     * Uses `git read-tree --reset -u <commitSha>` to force the index and working
+     * tree to exactly match the checkpoint's tree in one atomic step (handles
+     * additions, modifications, and deletions uniformly), followed by
+     * `git clean -fd` to sweep any remaining untracked files, before committing
+     * forward. HEAD/branch refs are never moved — restoration is always a new
+     * forward commit, never a rewind.
      */
     private async _restoreCheckpointAsync(
         commitSha: string,
@@ -228,27 +230,17 @@ export class GitSandbox {
             );
         }
 
-        // Get the list of files added between commitSha and HEAD.
-        // If git diff fails (e.g. if the commitSha is not found, or HEAD doesn't exist), we gracefully handle it.
-        let addedFiles: string[] = [];
-        try {
-            const addedFilesStr = await this.git(["diff", "--name-only", "--diff-filter=A", commitSha, "HEAD"]);
-            addedFiles = addedFilesStr.split("\n").map(f => f.trim()).filter(Boolean);
-        } catch (err) {
-            // Ignore error or log it if necessary
-        }
+        // Force the index and working tree to exactly match commitSha's tree in a single,
+        // atomic step: additions since commitSha are removed, modifications are reverted,
+        // and deletions are restored. This never moves HEAD or any ref, so the branch and
+        // its history remain untouched — we still commit forward below.
+        //
+        // (Deliberately not `git checkout commitSha -- .`: that form only touches paths
+        // that exist in commitSha's tree, so files added and committed after commitSha
+        // were silently left in place. `read-tree --reset -u` has no such gap.)
+        await this.git(["read-tree", "--reset", "-u", commitSha]);
 
-        await this.git(["checkout", commitSha, "--", "."]);
-
-        // Delete any files added after the target commit.
-        for (const file of addedFiles) {
-            const filePath = path.join(this.workTree, file);
-            if (fs.existsSync(filePath)) {
-                fs.rmSync(filePath, { recursive: true, force: true });
-            }
-        }
-
-        // Remove untracked files/directories added after commitSha so the
+        // Remove any remaining untracked files/directories added after commitSha so the
         // working tree is an exact mirror of the snapshot, not just a partial overlay.
         await this.git(["clean", "-fd"]);
         await this.git(["add", "-A"]);
