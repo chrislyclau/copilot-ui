@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import type { CopilotEventData, CopilotEventPayload, SessionRecord, Turn, StateSnapshot } from '../types/session';
+import { LogLevel } from '../orchestrator/sessionState';
 
 export interface ExtendedResponse extends Response {
   simulateBackpressureDelayMs?: number;
@@ -9,7 +10,7 @@ export interface ExtendedResponse extends Response {
 export interface SseWriterDependencies {
   activeSessions: Map<string, SessionRecord>;
   sseResToSessionId: Map<Response, string>;
-  writeLog: (message: string) => void;
+  writeLog: (message: string, level?: LogLevel) => void;
 }
 
 export interface SseWriter {
@@ -65,18 +66,18 @@ export function createSseWriter({
 
   async function secureWrite(res: Response, data: string, isRequestClosed: boolean = false) {
     if (res.destroyed || res.writableEnded || isRequestClosed) {
-      writeLog(`[WRITE] secureWrite skipped early because response is closed/destroyed/writableEnded.`);
+      writeLog(`[WRITE] secureWrite skipped early because response is closed/destroyed/writableEnded.`, LogLevel.DEBUG);
       return;
     }
     const extRes = res as ExtendedResponse;
     if (extRes.simulateBackpressureDelayMs && Number(extRes.simulateBackpressureDelayMs) > 0) {
       await new Promise(r => setTimeout(r, Number(extRes.simulateBackpressureDelayMs)));
     }
-    writeLog(`[WRITE] secureWrite called, isRequestClosed=${isRequestClosed} length=${data.length}`);
+    writeLog(`[WRITE] secureWrite called, isRequestClosed=${isRequestClosed} length=${data.length}`, LogLevel.DEBUG);
     let eventObj: CopilotEventData | null = null;
     let sessionObj: SessionRecord | null = null;
     if (data.startsWith('data: {')) {
-      writeLog(`[SSE] data written: ${data.trim().replace(/^data:\s*/, '')}`);
+      writeLog(`[SSE] data written: ${data.trim().replace(/^data:\s*/, '')}`, LogLevel.DEBUG);
       const sessId = sseResToSessionId.get(res);
       if (sessId) {
         const session = activeSessions.get(sessId);

@@ -23,6 +23,7 @@ import {
   getGlobalClient,
   resetGlobalClient,
   writeLog,
+  LogLevel,
   initLogFile,
   getCodeState,
   runLlmAudit,
@@ -52,6 +53,7 @@ export {
   getGlobalClient,
   resetGlobalClient,
   writeLog,
+  LogLevel,
   initLogFile,
   getCodeState,
   runLlmAudit,
@@ -179,7 +181,7 @@ function rebuildSensitiveValuesCache() {
   } catch (e) {}
 
   setSensitiveValuesCache(newValues);
-  writeLog(`[Sanitizer] Cache rebuilt/updated with ${newValues.size} secrets.`);
+  writeLog(`[Sanitizer] Cache rebuilt/updated with ${newValues.size} secrets.`, LogLevel.INFO);
 }
 
 // Build at startup and setup watcher
@@ -197,7 +199,7 @@ function setupEnvWatcherWithBackoff(delay: number = 1000) {
         }
       });
       envWatcher.on('error', (err: Error) => {
-        writeLog(`[Watcher] Env watcher encountered error: ${err?.message || String(err)}. Reconnecting with backoff...`);
+        writeLog(`[Watcher] Env watcher encountered error: ${err?.message || String(err)}. Reconnecting with backoff...`, LogLevel.WARN);
         try { if (envWatcher) { envWatcher.close(); } } catch (_) {}
         envWatcher = null;
         const nextDelay = Math.min(delay * 2, 30000);
@@ -270,6 +272,11 @@ console.log = function(...args: unknown[]) {
   
   const sanitizedMessage = sanitizeSensitives(message, sensitiveValuesCache || new Set());
   
+  // Avoid logging our own level-prefixed logs back to writeLog to prevent recursion or redundancy
+  if (!message.startsWith('[INFO]') && !message.startsWith('[WARN]') && !message.startsWith('[ERROR]') && !message.startsWith('[DEBUG]')) {
+    writeLog(`[LOG] ${sanitizedMessage}`, LogLevel.DEBUG);
+  }
+
   return originalLog.apply(console, [sanitizedMessage]);
 };
 

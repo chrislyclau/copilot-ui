@@ -17,7 +17,16 @@ export interface CopilotCreateSessionOptions extends Omit<SessionConfig, 'provid
   streaming?: boolean;
 }
 
+export enum LogLevel {
+  DEBUG = 0,
+  INFO = 1,
+  WARN = 2,
+  ERROR = 3,
+}
+
 const LOG_FILE = path.join('/tmp', 'debug_log.txt');
+const CURRENT_LOG_LEVEL = process.env.LOG_LEVEL ? (LogLevel[process.env.LOG_LEVEL.toUpperCase() as keyof typeof LogLevel] ?? LogLevel.WARN) : LogLevel.WARN;
+const FILE_LOG_LEVEL = LogLevel.DEBUG; // Always record everything to file for troubleshooting
 export const lastRunLog: string[] = [];
 
 export const DEFAULT_WORKSPACE_DIR = getWorkspaceHostLocation();
@@ -29,10 +38,10 @@ export class SessionMap extends Map<string, SessionRecord> {
   set(key: string, value: SessionRecord) {
     super.set(key, value);
     try {
-      console.log(`[SessionMap] Saving session ${key} to DB...`);
+      writeLog(`[SessionMap] Saving session ${key} to DB...`, LogLevel.DEBUG);
       saveSession(value);
     } catch (e) {
-      console.error(`Failed to save session ${key} to SQLite:`, e);
+      writeLog(`Failed to save session ${key} to SQLite: ${e}`, LogLevel.WARN);
     }
     return this;
   }
@@ -40,10 +49,10 @@ export class SessionMap extends Map<string, SessionRecord> {
   delete(key: string) {
     const res = super.delete(key);
     try {
-      console.log(`[SessionMap] Deleting session ${key} from DB...`);
+      writeLog(`[SessionMap] Deleting session ${key} from DB...`, LogLevel.DEBUG);
       deleteSession(key);
     } catch (e) {
-      console.error(`Failed to delete session ${key} from SQLite:`, e);
+      writeLog(`Failed to delete session ${key} from SQLite: ${e}`, LogLevel.WARN);
     }
     return res;
   }
@@ -281,17 +290,30 @@ export async function getGlobalClient(cwd?: string): Promise<CopilotClient> {
   return initializationPromise;
 }
 
-export function writeLog(message: string) {
+export function writeLog(message: string, level: LogLevel = LogLevel.INFO) {
+  const levelName = LogLevel[level];
   const timestamp = new Date().toISOString();
-  const line = `[${timestamp}] ${message}\n`;
-  lastRunLog.push(`[${timestamp}] ${message}`);
-  if (lastRunLog.length > 500) lastRunLog.shift();
-  try {
-    fs.appendFileSync(LOG_FILE, line, 'utf8');
-  } catch (err) {
-    // ignore
+  const line = `[${timestamp}] [${levelName}] ${message}\n`;
+
+  // Always write to the debug file if it meets the file threshold (DEBUG+)
+  if (level >= FILE_LOG_LEVEL) {
+    try {
+      fs.appendFileSync(LOG_FILE, line, 'utf8');
+    } catch (err) {
+      // ignore
+    }
   }
-  console.log(message);
+
+  // Only push to in-memory history and console if it meets the "Quiet Mode" threshold
+  if (level >= CURRENT_LOG_LEVEL) {
+    lastRunLog.push(`[${timestamp}] [${levelName}] ${message}`);
+    if (lastRunLog.length > 500) lastRunLog.shift();
+    
+    // Only print to console if it's INFO or higher, or if DEBUG was explicitly requested
+    if (level >= LogLevel.INFO || CURRENT_LOG_LEVEL <= LogLevel.DEBUG) {
+      console.log(`[${levelName}] ${message}`);
+    }
+  }
 }
 
 export function initLogFile() {
