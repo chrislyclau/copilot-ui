@@ -74,9 +74,9 @@ export async function runDockerProcess(
       killProcessGroup(child);
 
       // 2. Kill descendants inside the container namespace.
-      // runId is always a crypto.randomUUID() value (fixed hex/hyphen format,
-      // no shell metacharacters), so it is safe to interpolate directly here.
-      // If runId is ever sourced from elsewhere, it must be shell-escaped.
+      // EXEC_RUN_ID is passed via -e (an env var), not interpolated into the
+      // shell string, so this is safe regardless of what runId looks like —
+      // no reliance on it always being a shell-metacharacter-free UUID.
       containerCleanupPromise = new Promise<void>((resolveCleanup) => {
         let settled = false;
         const settle = () => {
@@ -88,9 +88,11 @@ export async function runDockerProcess(
         const graceTimer = setTimeout(settle, CONTAINER_KILL_GRACE_MS);
 
         try {
-          const killCmd = `for pid in $(grep -sl "EXEC_RUN_ID=${runId}" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 "$pid" || echo "kill-failed pid=$pid" >&2; done`;
+          const killCmd = `for pid in $(grep -sl "EXEC_RUN_ID=$EXEC_RUN_ID" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 "$pid" || echo "kill-failed pid=$pid" >&2; done`;
           const killProc = spawn("docker", [
             "exec",
+            "-e",
+            `EXEC_RUN_ID=${runId}`,
             getContainerName(),
             "bash",
             "-c",
