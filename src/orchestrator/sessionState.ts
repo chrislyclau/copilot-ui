@@ -25,8 +25,13 @@ export enum LogLevel {
 }
 
 const LOG_FILE = path.join('/tmp', 'debug_log.txt');
-const CURRENT_LOG_LEVEL = process.env.LOG_LEVEL ? (LogLevel[process.env.LOG_LEVEL.toUpperCase() as keyof typeof LogLevel] ?? LogLevel.WARN) : LogLevel.WARN;
-const FILE_LOG_LEVEL = LogLevel.DEBUG; // Always record everything to file for troubleshooting
+let CURRENT_LOG_LEVEL = process.env.LOG_LEVEL ? (LogLevel[process.env.LOG_LEVEL.toUpperCase() as keyof typeof LogLevel] ?? LogLevel.WARN) : LogLevel.WARN;
+let FILE_LOG_LEVEL = LogLevel.DEBUG; // Always record everything to file for troubleshooting
+
+export function setLogLevels(current: LogLevel, file: LogLevel = LogLevel.DEBUG) {
+  CURRENT_LOG_LEVEL = current;
+  FILE_LOG_LEVEL = file;
+}
 export const lastRunLog: string[] = [];
 
 export const DEFAULT_WORKSPACE_DIR = getWorkspaceHostLocation();

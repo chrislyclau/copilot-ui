@@ -283,17 +283,12 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
   };
 
   req.on('close', () => {
-    writeLog(`[SDK] req.on(close) fired. res.writableEnded=${res.writableEnded} res.destroyed=${res.destroyed} req.destroyed=${req.destroyed}`);
+    writeLog(`[SDK] Connection closed. res.writableEnded=${res.writableEnded} res.destroyed=${res.destroyed} req.destroyed=${req.destroyed}`);
     // Only clean up if the socket or response is actually destroyed before cleanly finishing
-    if (!res.writableEnded && res.destroyed) {
-       writeLog('[SDK] Client aborted gate-run connection gracefully.');
+    if (!res.writableEnded) {
+       writeLog('[SDK] Client connection ended or aborted.');
        cleanup();
     }
-  });
-  
-  req.on('aborted', () => {
-    writeLog('[SDK] Client aborted gate-run connection prematurely.', LogLevel.WARN);
-    cleanup();
   });
 
   try {
@@ -1009,6 +1004,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             }
             const activeSession: CopilotSession = session;
 
+            let eventChain = Promise.resolve();
             const pDone = new Promise<void>((resolve, reject) => {
               const onAbort = () => {
                 if (unsubscribe) { unsubscribe(); unsubscribe = null; }
@@ -1016,64 +1012,66 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               };
               abortController.signal.addEventListener('abort', onAbort);
 
-              unsubscribe = activeSession.on(async (event: SessionEvent) => {
-                const extEvent = event as ExtendedSessionEvent;
-                if (sessionId && activeSessions.has(sessionId)) {
-                  const sRec = activeSessions.get(sessionId)!;
-                  activeSessions.set(sessionId, {
-                    ...sRec,
-                    unsubscribe: unsubscribe || undefined
-                  });
-                }
-                try {
-                  if (res.writableEnded || res.destroyed || isRequestClosed || abortController.signal.aborted) {
-                    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                    abortController.signal.removeEventListener('abort', onAbort);
-                    reject(new Error('SSE stream connection terminated or closed'));
-                    return;
-                  }
-
-                  if (extEvent.type === 'tool.user_requested') {
-                    toolWasCalledInThisTurn = true;
-                  }
-
-                  if (extEvent.type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
+              unsubscribe = activeSession.on((event: SessionEvent) => {
+                eventChain = eventChain.then(async () => {
+                  const extEvent = event as ExtendedSessionEvent;
+                  if (sessionId && activeSessions.has(sessionId)) {
                     const sRec = activeSessions.get(sessionId)!;
-                    const toolName = extEvent.data.toolName || 'unknown';
-                    const output = extEvent.data.stdout || extEvent.data.stderr || '';
                     activeSessions.set(sessionId, {
-                        ...sRec,
-                        conversationHistory: [
-                            ...(sRec.conversationHistory || []),
-                            { role: 'user', content: `[System (Tool Result): ${toolName}]\n${output}` }
-                        ]
+                      ...sRec,
+                      unsubscribe: unsubscribe || undefined
                     });
                   }
+                  try {
+                    if (res.writableEnded || res.destroyed || isRequestClosed || abortController.signal.aborted) {
+                      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                      abortController.signal.removeEventListener('abort', onAbort);
+                      reject(new Error('SSE stream connection terminated or closed'));
+                      return;
+                    }
 
-                  // Aggregate assistant message content
-                  if (extEvent.type === 'assistant.message') {
-                    assistantMessage += extEvent.data.content || '';
-                  } else if (extEvent.type === 'assistant.message_delta') {
-                    assistantMessage += extEvent.data.deltaContent || '';
-                  }
+                    if (extEvent.type === 'tool.user_requested') {
+                      toolWasCalledInThisTurn = true;
+                    }
 
-                  // Step 2: Emit all SDK events to client
-                  await secureWrite(res, `data: ${JSON.stringify(extEvent)}\n\n`, isRequestClosed);
+                    if (extEvent.type === 'tool.result' && sessionId && activeSessions.has(sessionId)) {
+                      const sRec = activeSessions.get(sessionId)!;
+                      const toolName = extEvent.data.toolName || 'unknown';
+                      const output = extEvent.data.stdout || extEvent.data.stderr || '';
+                      activeSessions.set(sessionId, {
+                          ...sRec,
+                          conversationHistory: [
+                              ...(sRec.conversationHistory || []),
+                              { role: 'user', content: `[System (Tool Result): ${toolName}]\n${output}` }
+                          ]
+                      });
+                    }
 
-                  if (extEvent.type === 'session.idle' || extEvent.type === 'session.shutdown') {
-                    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                    // Aggregate assistant message content
+                    if (extEvent.type === 'assistant.message') {
+                      assistantMessage += extEvent.data.content || '';
+                    } else if (extEvent.type === 'assistant.message_delta') {
+                      assistantMessage += extEvent.data.deltaContent || '';
+                    }
+
+                    // Step 2: Emit all SDK events to client
+                    await secureWrite(res, `data: ${JSON.stringify(extEvent)}\n\n`, isRequestClosed);
+
+                    if (extEvent.type === 'session.idle' || extEvent.type === 'session.shutdown') {
+                      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                      abortController.signal.removeEventListener('abort', onAbort);
+                      resolve();
+                    } else if (extEvent.type === 'session.error') {
+                      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                      abortController.signal.removeEventListener('abort', onAbort);
+                      reject(new Error(extEvent.data.message));
+                    }
+                  } catch (err: unknown) {
+                    writeLog(`[GateLoop] Error forwarding event: ${err instanceof Error ? err.message : String(err)}`, LogLevel.WARN);
                     abortController.signal.removeEventListener('abort', onAbort);
-                    resolve();
-                  } else if (extEvent.type === 'session.error') {
-                    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-                    abortController.signal.removeEventListener('abort', onAbort);
-                    reject(new Error(extEvent.data.message));
+                    reject(err);
                   }
-                } catch (err: unknown) {
-                  writeLog(`[GateLoop] Error forwarding event: ${err instanceof Error ? err.message : String(err)}`, LogLevel.WARN);
-                  abortController.signal.removeEventListener('abort', onAbort);
-                  reject(err);
-                }
+                });
               });
             });
 
