@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
-import * as os from "os";
 import * as crypto from "crypto";
+import { killProcessGroup } from "./processGroup.js";
 
 const FIXED_WORKSPACE_ROOT = "/app";
 const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "/tmp/applet_workspace";
@@ -53,33 +53,44 @@ export async function runDockerProcess(
 
     const killChild = () => {
       // 1. Kill host-side docker exec client process
-      try {
-        if (child.pid) {
-          if (os.platform() !== "win32") {
-            try {
-              process.kill(-child.pid, "SIGKILL");
-            } catch (e) {
-              console.warn(`Failed to kill process group for child ${child.pid}:`, e);
-              child.kill("SIGKILL");
-            }
-          } else {
-            child.kill("SIGKILL");
-          }
-        }
-      } catch (e) {
-        console.warn(`Fallback kill failed for child ${child.pid}:`, e);
-      }
+      killProcessGroup(child);
       
-      // 2. Kill descendants inside the container namespace
+      // 2. Kill descendants inside the container namespace.
+      // runId is always a crypto.randomUUID() value (fixed hex/hyphen format,
+      // no shell metacharacters), so it is safe to interpolate directly here.
+      // If runId is ever sourced from elsewhere, it must be shell-escaped.
       try {
-        const killCmd = `for pid in $(grep -sl "EXEC_RUN_ID=${runId}" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 $pid 2>/dev/null; done`;
-        spawn("docker", [
+        const killCmd = `for pid in $(grep -sl "EXEC_RUN_ID=${runId}" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 "$pid" || echo "kill-failed pid=$pid" >&2; done`;
+        const killProc = spawn("docker", [
           "exec",
           getContainerName(),
           "bash",
           "-c",
-          killCmd
+          killCmd,
         ]);
+
+        // This is best-effort cleanup fired during abort/close handling, so we
+        // don't block on it — but we do surface failures instead of silently
+        // swallowing them, since a failed container-side kill means an orphan
+        // process may still be running inside the container.
+        let killStderr = "";
+        killProc.stderr?.on("data", (data) => {
+          killStderr += data.toString();
+        });
+        killProc.on("error", (err) => {
+          console.warn(
+            `Container-side kill for EXEC_RUN_ID=${runId} failed to spawn:`,
+            err,
+          );
+        });
+        killProc.on("close", (code) => {
+          if (code !== 0) {
+            console.warn(
+              `Container-side kill for EXEC_RUN_ID=${runId} exited with code ${code}` +
+                (killStderr ? `: ${killStderr.trim()}` : " (possible permission issue or no matching processes)"),
+            );
+          }
+        });
       } catch (e) {
         console.warn("Failed to spawn container-side kill process", e);
       }
