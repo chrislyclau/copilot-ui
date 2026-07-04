@@ -1,13 +1,21 @@
-version: "3.8"
-
 services:
   applet:
     image: node:20-bookworm
-    container_name: test-container
+    container_name: ${CONTAINER_NAME:-test-container}
+    restart: unless-stopped
     # Keep the container running indefinitely
     command: tail -f /dev/null
     volumes:
       # Mounts the /app directory in a temporary directory on the host machine
-      - /tmp/applet_workspace:/app
+      - ${WORKSPACE_HOST_LOCATION:-/tmp/applet_workspace}:/app
     environment:
       - NODE_ENV=development
+    # Hardening: the orchestrator auto-executes LLM-generated commands in this
+    # container with no human confirmation step (see ORCH-REQ-012/013), so this
+    # boundary is the primary backstop rather than a secondary layer.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    
