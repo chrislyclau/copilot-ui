@@ -6,6 +6,7 @@ import { MODEL_TIERS } from '../config/models';
 import { SessionRecord, StateSnapshot } from '../types/session';
 import { AuditResult } from '../types/audit';
 import { getWorkspaceHostLocation, getExecCommand, getWorkspaceRoot } from '../workspace';
+import { checkPathInside } from '../security/pathGuard';
 import { saveSession, deleteSession } from '../db/sessionStore';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
 import { submitAuditFindingsTool } from '../config/tools';
@@ -242,8 +243,12 @@ export async function getGlobalClient(cwd?: string): Promise<CopilotClient> {
         try {
           const makeDirResult = await getExecCommand()(`mkdir -p '${cwd}'`);
           if (makeDirResult.exitCode === 0) {
-            const relativeCwd = path.relative(getWorkspaceRoot(), cwd);
-            finalCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
+            if (checkPathInside(getWorkspaceRoot(), cwd)) {
+              const relativeCwd = path.relative(getWorkspaceRoot(), cwd);
+              finalCwd = path.join(getWorkspaceHostLocation(), relativeCwd);
+            } else {
+              finalCwd = cwd;
+            }
             fs.mkdirSync(finalCwd, { recursive: true });
           } else {
             throw new Error(makeDirResult.stderr);
@@ -402,7 +407,7 @@ You MUST submit structured verification feedback, logic checks, and compiler gat
     if (isAbort) {
       writeLog(`[runLlmAudit] Audit session was aborted or cancelled.`);
       return {
-        pass: true,
+        pass: false,
         aborted: true,
         findings: [
           {

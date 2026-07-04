@@ -2,14 +2,7 @@ import path from 'path';
 import os from 'os';
 import { normalizeGateName } from '../config/gates';
 import { getExecCommand, getWorkspaceRoot } from '../workspace';
-
-// Helper to check if child path is inside parent
-function checkPathInside(parent: string, child: string): boolean {
-  const absParent = path.resolve(parent);
-  const absChild = path.resolve(child);
-  const relAbs = path.relative(absParent, absChild);
-  return relAbs === '' || (!relAbs.startsWith('..') && !path.isAbsolute(relAbs));
-}
+import { validateCwd } from '../security/pathGuard';
 
 export interface GateResult {
   gateName: 'runTests' | 'runLint';
@@ -25,20 +18,9 @@ export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd
     throw new Error(`Execution of unauthorized command is blocked: ${cmd}`);
   }
 
+  let runCwd = getWorkspaceRoot();
   if (cwd) {
-    // 1. Strict pattern check: only allow safe alphanumeric and path separator characters to eliminate shell injection
-    if (!/^[a-zA-Z0-9_\-\.\/]+$/.test(cwd)) {
-      throw new Error(`Security Exception: Directory path contains unsafe shell-characters: ${cwd}`);
-    }
-
-    // 2. Strict directory boundary check: must be inside workspace root or temp dir (tests)
-    const runCwd = path.isAbsolute(cwd) ? cwd : path.join(getWorkspaceRoot(), cwd);
-    const isCwdSafe = checkPathInside(getWorkspaceRoot(), runCwd) || 
-                      (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), runCwd));
-    if (!isCwdSafe) {
-      throw new Error(`Security Exception: Directory path is outside workspace root: ${cwd}`);
-    }
-
+    runCwd = validateCwd(cwd);
     const checkDir = await getExecCommand()(`test -d '${runCwd}'`, externalSignal);
     if (checkDir.exitCode !== 0) {
       return { stdout: '', stderr: `Directory ${cwd} does not exist.` };
@@ -58,7 +40,7 @@ export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd
   const combinedSignal = externalSignal ? combineSignals(externalSignal, timeoutSignal) : timeoutSignal;
 
   const result = await execCommand(
-    cwd ? `cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}` : cmd,
+    cwd ? `cd '${runCwd.replace(/'/g, "'\\''")}' && ${cmd}` : cmd,
     combinedSignal
   ).catch((err: any) => {
     if (timeoutSignal.aborted) {

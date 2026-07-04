@@ -79,5 +79,5 @@ export interface SessionRecord {
   readonly diagnosticTrail?: ReadonlyArray<unknown>;
   readonly unsubscribe?: () => void;
   readonly pendingPatchedSpec?: string;
-  lastPassedSpecAuditSha?: string;
+  readonly lastPassedSpecAuditSha?: string;
 }

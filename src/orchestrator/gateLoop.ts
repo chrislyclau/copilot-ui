@@ -38,9 +38,10 @@ import {
 } from '../config/tools';
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from '../config/gates';
 import { runSpecAudit } from '../gates/specAuditor';
+import { validateCwd } from '../security/pathGuard';
 import { sanitizeSensitives } from '../utils/sanitizers';
 import { truncateOutput } from '../utils/formatters';
-import { initializeWorkspace, getGitSandbox, getExecCommand, getWorkspaceRoot, getWorkspaceHostLocation } from '../workspace';
+import { initializeWorkspace, getGitSandbox, getExecCommand, getWorkspaceRoot } from '../workspace';
 import { enforceWorkingMemoryTruncation, SlidingWindowCircularBuffer, clearCleanCache } from '../utils/contextManager';
 import { fetchStubbedTraceResponse } from '../utils/traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from '../utils/escalationStore';
@@ -408,52 +409,13 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     // To maintain a strict security boundary, we employ checkPathInside() which performs absolute resolution and
     // realpath/symlink resolution to guarantee the target directory is physically inside the authorized list of roots.
     let runCwd = getWorkspaceRoot();
-    if (cwd && typeof cwd === 'string') {
-      // Reject any malicious patterns trying to escape directories via path manipulation
-      if (cwd.includes('..') || /[\x00-\x1F;`"$&|<>*?(){}\n\r]/.test(cwd)) {
-        writeLog(`[Security Blocked] Malicious path characters detected: ${cwd}`);
-        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Access denied: Invalid directory path characters.');
-        await cleanup();
-        return;
-      }
-
-      if (process.env.NODE_ENV === 'test' && path.isAbsolute(cwd) && cwd.startsWith(os.tmpdir())) {
-        runCwd = cwd;
-      } else {
-        const normalizedSubpath = path.normalize(cwd)
-          .replace(/^([a-zA-Z]:)?(\/|\\)+/, '')
-          .replace(/^(\.\.(\/|\\|$))+/, '');
-        runCwd = path.join(getWorkspaceRoot(), normalizedSubpath);
-      }
-    }
-
-    const checkPathInside = (parent: string, child: string): boolean => {
-      const absParent = path.resolve(parent);
-      const absChild = path.resolve(child);
-      const relAbs = path.relative(absParent, absChild);
-      const isUnresolvedSafe = relAbs === '' || (!relAbs.startsWith('..') && !path.isAbsolute(relAbs));
-      if (isUnresolvedSafe) return true;
-
-      try {
-        const realParent = fs.realpathSync(parent);
-        const realChild = fs.realpathSync(child);
-        const relReal = path.relative(realParent, realChild);
-        return relReal === '' || (!relReal.startsWith('..') && !path.isAbsolute(relReal));
-      } catch {
-        return false;
-      }
-    };
-
-    const isCwdSafe = (() => {
-      if (checkPathInside(getWorkspaceRoot(), runCwd)) return true;
-      if (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), runCwd)) return true;
-      return false;
-    })();
-
-    if (!isCwdSafe) {
+    try {
+      runCwd = validateCwd(cwd);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeLog(`[Security Blocked] ${msg}`);
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Access denied: Directory traversal outside workspace root.');
+      res.end('Access denied: Invalid directory path or directory traversal.');
       await cleanup();
       return;
     }
@@ -1416,7 +1378,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               const sessionRec = activeSessions.get(sessionId)!;
               try {
                 const currentSha = await getGitSandbox().getHeadShaAsync();
-                sessionRec.lastPassedSpecAuditSha = currentSha;
+                activeSessions.set(sessionId, { ...sessionRec, lastPassedSpecAuditSha: currentSha });
               } catch (e) {}
             }
 

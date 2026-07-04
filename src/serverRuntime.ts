@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
+import { validateCwd } from './security/pathGuard';
 import { CopilotClient, CopilotSession, PermissionRequestResult, SessionConfig, SdkProviderConfig, Tool, SessionEvent } from './copilotSdk/boundary';
 import { handleGateLoop, handleGateRunPermission } from './orchestrator/gateLoop';
 
@@ -906,43 +907,13 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       if (isRequestClosed) return;
 
       let inputCwd = getWorkspaceRoot();
-      if (cwd && typeof cwd === 'string') {
-        if (process.env.NODE_ENV === 'test' && path.isAbsolute(cwd) && cwd.startsWith(os.tmpdir())) {
-          inputCwd = cwd;
-        } else {
-          const normalizedSubpath = path.normalize(cwd)
-            .replace(/^([a-zA-Z]:)?(\/|\\)+/, '')
-            .replace(/^(\.\.(\/|\\|$))+/, '');
-          inputCwd = path.join(getWorkspaceRoot(), normalizedSubpath);
-        }
-      }
-
-      const checkPathInside = (parent: string, child: string): boolean => {
-        const absParent = path.resolve(parent);
-        const absChild = path.resolve(child);
-        const relAbs = path.relative(absParent, absChild);
-        const isUnresolvedSafe = relAbs === '' || (!relAbs.startsWith('..') && !path.isAbsolute(relAbs));
-        if (isUnresolvedSafe) return true;
-
-        try {
-          const realParent = fs.realpathSync(parent);
-          const realChild = fs.realpathSync(child);
-          const relReal = path.relative(realParent, realChild);
-          return relReal === '' || (!relReal.startsWith('..') && !path.isAbsolute(relReal));
-        } catch {
-          return false;
-        }
-      };
-
-      const isCwdSafe = (() => {
-        if (checkPathInside(getWorkspaceRoot(), inputCwd)) return true;
-        if (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), inputCwd)) return true;
-        return false;
-      })();
-
-      if (!isCwdSafe) {
+      try {
+        inputCwd = validateCwd(cwd);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        writeLog(`[Security Blocked] ${msg}`);
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Access denied: Directory traversal outside workspace root.');
+        res.end('Access denied: Invalid directory path or directory traversal.');
         return;
       }
 
@@ -1315,42 +1286,12 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
     let runCwd: string | undefined = undefined;
     if (explicitCwd && typeof explicitCwd === 'string') {
-      if (process.env.NODE_ENV === 'test' && path.isAbsolute(explicitCwd) && explicitCwd.startsWith(os.tmpdir())) {
-        runCwd = explicitCwd;
-      } else {
-        const normalizedSubpath = path.normalize(explicitCwd)
-          .replace(/^([a-zA-Z]:)?(\/|\\)+/, '')
-          .replace(/^(\.\.(\/|\\|$))+/, '');
-        runCwd = path.join(getWorkspaceRoot(), normalizedSubpath);
-      }
-    }
-
-    if (runCwd) {
-      const checkPathInside = (parent: string, child: string): boolean => {
-        const absParent = path.resolve(parent);
-        const absChild = path.resolve(child);
-        const relAbs = path.relative(absParent, absChild);
-        const isUnresolvedSafe = relAbs === '' || (!relAbs.startsWith('..') && !path.isAbsolute(relAbs));
-        if (isUnresolvedSafe) return true;
-
-        try {
-          const realParent = fs.realpathSync(parent);
-          const realChild = fs.realpathSync(child);
-          const relReal = path.relative(realParent, realChild);
-          return relReal === '' || (!relReal.startsWith('..') && !path.isAbsolute(relReal));
-        } catch {
-          return false;
-        }
-      };
-
-      const isCwdSafe = (() => {
-        if (checkPathInside(getWorkspaceRoot(), runCwd)) return true;
-        if (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), runCwd)) return true;
-        return false;
-      })();
-
-      if (!isCwdSafe) {
-        res.status(403).json({ success: false, error: 'Access denied: Directory traversal outside workspace root.' });
+      try {
+        runCwd = validateCwd(explicitCwd);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        writeLog(`[Security Blocked] ${msg}`);
+        res.status(403).json({ success: false, error: 'Access denied: Invalid directory path or directory traversal.' });
         return;
       }
     }
