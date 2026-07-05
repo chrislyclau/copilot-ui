@@ -39,6 +39,7 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
     const proxyUrl = await proxy.start();
     process.env.COPILOT_API_URL = proxyUrl;
     process.env.OPENAI_COMPAT_BASE_URL = proxyUrl;
+    process.env.GEMINI_API_KEY = 'test-key';
 
     // 2. Start the Express server directly in the same process on an ephemeral port
     server = http.createServer(app);

@@ -16,6 +16,7 @@ describe('Scenario 4: Human escalation and gate-resume', () => {
     proxy = new CapiProxy();
     const proxyUrl = await proxy.start();
     process.env.COPILOT_API_URL = proxyUrl;
+    process.env.GEMINI_API_KEY = 'test-key';
 
     const serverModule = await import('../../server');
     app = serverModule.app;

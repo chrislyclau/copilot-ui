@@ -1124,7 +1124,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             }
 
             // SYS-REQ-004: Enforce structured tool calls for mutation tasks
-            if (!isDiagnostic && process.env.NODE_ENV !== 'test' && (classifiedType === 'feature' || classifiedType === 'refactor') && !toolWasCalledInThisTurn) {
+            if (!isDiagnostic && (classifiedType === 'feature' || classifiedType === 'refactor') && !toolWasCalledInThisTurn) {
                writeLog(`[GateLoop] SYS-REQ-004: Mutation task without tool call detected. Failing current turn.`, LogLevel.WARN);
                allGatesPassedInThisCycle = false;
                failedGateName = 'MutationGate';

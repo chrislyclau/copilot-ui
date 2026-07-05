@@ -16,6 +16,7 @@ describe('Scenario 2: Composer router picks non-feature taskType (style-only)', 
     proxy = new CapiProxy();
     const proxyUrl = await proxy.start();
     process.env.COPILOT_API_URL = proxyUrl;
+    process.env.GEMINI_API_KEY = 'test-key';
 
     const serverModule = await import('../../server');
     app = serverModule.app;
