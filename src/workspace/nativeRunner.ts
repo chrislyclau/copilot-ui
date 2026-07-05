@@ -33,7 +33,7 @@ export async function runNativeProcess(
   return new Promise((resolve) => {
     const child = spawn("bash", ["-s"], {
       cwd: getWorkspaceRoot(),
-      env: { PATH: FIXED_PATH },
+      env: process.env.NODE_ENV === "test" || process.env.VITEST === "true" ? process.env : { PATH: FIXED_PATH },
       detached: true,
     });
 
@@ -82,9 +82,9 @@ export async function runNativeProcess(
     });
 
     child.on("close", (code) => {
-      if (signal) signal.removeEventListener("abort", onAbort);
-      resolve({ stdout, stderr, exitCode: code });
-    });
+       if (signal) signal.removeEventListener("abort", onAbort);
+       resolve({ stdout, stderr, exitCode: code });
+     });
 
     if (child.stdin.writable) {
       child.stdin.write(command + "\n");

@@ -282,9 +282,9 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     } catch (e) {}
   };
 
-  req.on('close', () => {
+  res.on('close', () => {
     writeLog(`[SDK] Connection closed. res.writableEnded=${res.writableEnded} res.destroyed=${res.destroyed} req.destroyed=${req.destroyed}`);
-    // Only clean up if the socket or response is actually destroyed before cleanly finishing
+    // Only clean up if the response is actually closed or destroyed before cleanly finishing
     if (!res.writableEnded) {
        writeLog('[SDK] Client connection ended or aborted.');
        cleanup();
@@ -538,6 +538,8 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         ]
       });
     }
+
+    res.write(':\n\n');
 
     let currentPrompt = promptStr;
 

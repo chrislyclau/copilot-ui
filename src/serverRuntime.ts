@@ -1303,6 +1303,20 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       }
     }
 
+    // 1. Refuse restore if there is any active loop execution running in the target workspace
+    const checkCwd = runCwd || (sessionId ? activeSessions.get(sessionId)?.cwd : undefined);
+    if (checkCwd) {
+      const absTargetCwd = path.resolve(checkCwd);
+      const runningSession = Array.from(activeSessions.values()).find(
+        s => path.resolve(s.cwd) === absTargetCwd && s.stateSnapshot?.isRunning
+      );
+      if (runningSession) {
+        writeLog(`[Checkpoint] Refusing restore because an active loop is running in cwd: ${checkCwd}`);
+        res.status(409).json({ success: false, error: 'Cannot restore checkpoint during an active loop execution.' });
+        return;
+      }
+    }
+
     // Enforce session ownership verification to prevent unauthorized target workspace modifications
     if (sessionId) {
       const session = activeSessions.get(sessionId);

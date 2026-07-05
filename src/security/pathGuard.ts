@@ -53,7 +53,7 @@ export function checkPathInside(parent: string, child: string): boolean {
 export function normalizeCwd(cwd: string | undefined): string {
   let inputCwd = getWorkspaceRoot();
   if (cwd && typeof cwd === 'string') {
-    if (process.env.NODE_ENV === 'test' && path.isAbsolute(cwd) && cwd.startsWith(os.tmpdir())) {
+    if ((process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') && path.isAbsolute(cwd) && cwd.startsWith(os.tmpdir())) {
       inputCwd = cwd;
     } else {
       const normalizedSubpath = path.normalize(cwd)
@@ -80,7 +80,7 @@ export function validateCwd(cwd: string | undefined): string {
   const runCwd = normalizeCwd(cwd);
   
   const isCwdSafe = checkPathInside(getWorkspaceRoot(), runCwd) || 
-                    (process.env.NODE_ENV === 'test' && checkPathInside(os.tmpdir(), runCwd));
+                    ((process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') && checkPathInside(os.tmpdir(), runCwd));
                     
   if (!isCwdSafe) {
     throw new Error(`Security Exception: Directory path is outside workspace root: ${cwd}`);

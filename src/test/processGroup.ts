@@ -28,8 +28,8 @@ describe("killProcessGroup", () => {
     killProcessGroup(child);
 
     assert.strictEqual(killSpy.mock.calls.length, 1);
-    assert.strictEqual(killSpy.mock.calls[0][0], -4242);
-    assert.strictEqual(killSpy.mock.calls[0][1], "SIGKILL");
+    assert.strictEqual(killSpy.mock.calls[0]?.[0], -4242);
+    assert.strictEqual(killSpy.mock.calls[0]?.[1], "SIGKILL");
     assert.strictEqual(child.kill.mock.calls.length, 0, "Should not fall back to child.kill if group kill succeeds");
   });
 
