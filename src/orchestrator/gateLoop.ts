@@ -356,7 +356,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           stateSnapshot: storedSession.stateSnapshot,
           conversationHistory: storedSession.conversationHistory || [],
           turns: storedSession.turns || [],
-          cwd: storedSession.cwd || DEFAULT_WORKSPACE_DIR,
+          cwd: storedSession.cwd || getWorkspaceRoot(),
           currentModel: storedSession.currentModel || 'gemini-3.1-flash-lite',
           sessionId: currentSessionId,
           copilotSession: null as unknown as CopilotSession, // populated below

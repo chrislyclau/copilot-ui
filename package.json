@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit && eslint .",
     "diagnose:gates": "tsx scripts/diagnose-gates.ts",
     "import:repo": "tsx scripts/import-repo.ts",
+    "diff:repo": "tsx scripts/remote-diff.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },

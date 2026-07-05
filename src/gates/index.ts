@@ -68,7 +68,7 @@ export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
-export async function runTests(cwd: string = process.cwd(), abortSignal?: AbortSignal): Promise<GateResult> {
+export async function runTests(cwd: string = getWorkspaceRoot(), abortSignal?: AbortSignal): Promise<GateResult> {
   const start = Date.now();
   try {
     const { stdout } = await runWithTimeout(`npm run test -- --watch=false`, 30000, cwd, abortSignal);
@@ -78,7 +78,7 @@ export async function runTests(cwd: string = process.cwd(), abortSignal?: AbortS
   }
 }
 
-export async function runLint(cwd: string = process.cwd(), abortSignal?: AbortSignal): Promise<GateResult> {
+export async function runLint(cwd: string = getWorkspaceRoot(), abortSignal?: AbortSignal): Promise<GateResult> {
   const start = Date.now();
   try {
     const { stdout } = await runWithTimeout(`npm run lint`, 30000, cwd, abortSignal);

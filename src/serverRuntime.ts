@@ -406,7 +406,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       return;
     }
 
-    const currentCwd = terminalSessions[sessionId] || process.cwd();
+    const currentCwd = terminalSessions[sessionId] || getWorkspaceRoot();
 
     if (process.env.NODE_ENV === 'test') {
       res.json({
@@ -633,7 +633,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
   // T1 — Diagnostics: Gates (echo command through runWithTimeout, runTests, and runLint)
   app.get('/api/diagnostics/gates', async (req, res) => {
     try {
-      const runCwd = process.cwd();
+      const runCwd = getWorkspaceRoot();
       
       const timeoutStart = Date.now();
       let timeoutPass = true;
