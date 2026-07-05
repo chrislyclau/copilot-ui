@@ -370,9 +370,9 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     activeSessions.set(currentSessionId, {
       sessionId: currentSessionId,
       cwd: initialCwd,
-      copilotSession: null as any,
+      copilotSession: null as unknown as CopilotSession,
       stateSnapshot: { isRunning: true }
-    } as any);
+    } as unknown as SessionRecord);
   }
 
   // 2. Check if a background run is already active for this session
