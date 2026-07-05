@@ -88,7 +88,17 @@ export async function runDockerProcess(
         const graceTimer = setTimeout(settle, CONTAINER_KILL_GRACE_MS);
 
         try {
-          const killCmd = `for pid in $(grep -sl "EXEC_RUN_ID=$EXEC_RUN_ID" /proc/[0-9]*/environ | cut -d/ -f3); do kill -9 "$pid" || echo "kill-failed pid=$pid" >&2; done`;
+          // The `[ "$pid" = "$$" ] && continue` guard excludes this very
+          // bash process from the kill list. Without it, this exec is
+          // tagged with the same EXEC_RUN_ID as the target, so it matches
+          // its own grep. /proc/[0-9]*/environ globs in lexicographic (not
+          // numeric) order, so whenever the target's PID and this script's
+          // PID straddle a power-of-10 boundary (e.g. target=999,
+          // self=1000), "1000" sorts before "999" and this script would
+          // SIGKILL itself before reaching the real target — silently
+          // leaking the orphan. Excluding $$ removes that ordering
+          // dependency entirely.
+          const killCmd = `for pid in $(grep -sl "EXEC_RUN_ID=$EXEC_RUN_ID" /proc/[0-9]*/environ | cut -d/ -f3); do [ "$pid" = "$$" ] && continue; kill -9 "$pid" || echo "kill-failed pid=$pid" >&2; done`;
           const killProc = spawn("docker", [
             "exec",
             "-e",
