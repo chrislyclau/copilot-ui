@@ -44,7 +44,20 @@ export async function runNativeProcess(
       signal.addEventListener("abort", onAbort);
       if (signal.aborted) {
         killChild();
-        resolve({ stdout: "", stderr: "Native process aborted", exitCode: 1 });
+        // Wait for the OS to actually reap the process group before
+        // resolving, rather than assuming SIGKILL took effect the instant
+        // it was sent — mirrors the docker runner's wait-for-cleanup
+        // behavior so callers get consistent "resolved means dead" semantics
+        // across both runners. Bounded by the same style of fallback timer
+        // used elsewhere in this file in case close never fires.
+        const timer = setTimeout(() => {
+          child.removeAllListeners("close");
+          resolve({ stdout: "", stderr: "Native process aborted", exitCode: 1 });
+        }, 1000);
+        child.once("close", () => {
+          clearTimeout(timer);
+          resolve({ stdout: "", stderr: "Native process aborted", exitCode: 1 });
+        });
         return;
       }
     }
