@@ -191,131 +191,333 @@ interface RehydratedRequest extends express.Request {
   _blueprintTargets?: ReadonlyArray<string>;
 }
 
+export class SessionSseHub {
+  private static subscribers = new Map<string, Set<express.Response>>();
+  private static bufferedEvents = new Map<string, CopilotEventData[]>();
+
+  static subscribe(sessionId: string, res: express.Response) {
+    if (!this.subscribers.has(sessionId)) {
+      this.subscribers.set(sessionId, new Set());
+    }
+    this.subscribers.get(sessionId)!.add(res);
+    writeLog(`[Hub] Subscribed response for session ${sessionId}. Total: ${this.subscribers.get(sessionId)!.size}`);
+  }
+
+  static unsubscribe(sessionId: string, res: express.Response) {
+    const subs = this.subscribers.get(sessionId);
+    if (subs) {
+      subs.delete(res);
+      writeLog(`[Hub] Unsubscribed response for session ${sessionId}. Remaining: ${subs.size}`);
+      if (subs.size === 0) {
+        this.subscribers.delete(sessionId);
+      }
+    }
+  }
+
+  static clearBuffer(sessionId: string) {
+    this.bufferedEvents.set(sessionId, []);
+  }
+
+  static getBuffer(sessionId: string) {
+    return this.bufferedEvents.get(sessionId) || [];
+  }
+
+  static addToBuffer(sessionId: string, event: CopilotEventData) {
+    if (!this.bufferedEvents.has(sessionId)) {
+      this.bufferedEvents.set(sessionId, []);
+    }
+    this.bufferedEvents.get(sessionId)!.push(event);
+  }
+
+  static async broadcast(sessionId: string, data: string, isClosed: boolean = false) {
+    let finalData = data;
+    let enrichedEvent: CopilotEventData | null = null;
+
+    if (data.startsWith('data: {')) {
+      const jsonStr = data.substring(5).trim();
+      if (jsonStr) {
+        try {
+          const parsed = JSON.parse(jsonStr);
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.sequenceId !== undefined) {
+              enrichedEvent = parsed;
+              finalData = `data: ${JSON.stringify(parsed)}\n\n`;
+            } else {
+              const session = activeSessions.get(sessionId);
+              if (session) {
+                const newSequenceCounter = (session.eventSequenceCounter || 0) + 1;
+                activeSessions.set(sessionId, {
+                  ...session,
+                  eventSequenceCounter: newSequenceCounter,
+                  turns: session.turns ? [...session.turns] : []
+                });
+                const updatedSession = activeSessions.get(sessionId)!;
+                const { enrichEventPayload } = await import('../utils/sseWriter');
+                const typedEventObj = enrichEventPayload(
+                  parsed,
+                  newSequenceCounter,
+                  updatedSession.stateSnapshot
+                );
+                enrichedEvent = typedEventObj;
+                
+                if (updatedSession.turns.length === 0) {
+                  const newTurn: Turn = {
+                    id: `turn-fallback-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                    taskLabel: 'System Recovery / Unknown Turn',
+                    status: 'running',
+                    events: []
+                  };
+                  activeSessions.set(sessionId, {
+                    ...updatedSession,
+                    turns: [...updatedSession.turns, newTurn]
+                  });
+                }
+                const currentSession = activeSessions.get(sessionId)!;
+                const currentTurn = currentSession.turns[currentSession.turns.length - 1];
+                if (currentTurn) {
+                  const updatedTurns = currentSession.turns.map((turn, index) =>
+                    index === currentSession.turns.length - 1 ?
+                    { ...turn, events: [...turn.events, typedEventObj] } : turn
+                  );
+                  activeSessions.set(sessionId, {
+                    ...currentSession,
+                    turns: updatedTurns
+                  });
+                }
+                finalData = `data: ${JSON.stringify(typedEventObj)}\n\n`;
+              }
+            }
+          }
+        } catch (e) {
+          writeLog(`[Hub Broadcast Error] Parsing event failed: ${e}`);
+        }
+      }
+    }
+
+    if (enrichedEvent) {
+      this.addToBuffer(sessionId, enrichedEvent);
+    }
+
+    const subs = this.subscribers.get(sessionId);
+    if (subs) {
+      const promises = Array.from(subs).map(async (subRes) => {
+        try {
+          await secureWrite(subRes, finalData, isClosed);
+        } catch (err) {
+          writeLog(`[Hub Broadcast Error] Failed to write to subscriber: ${err}`);
+        }
+      });
+      await Promise.all(promises);
+    }
+  }
+
+  static async endAll(sessionId: string) {
+    const subs = this.subscribers.get(sessionId);
+    if (subs) {
+      const promises = Array.from(subs).map(async (subRes) => {
+        try {
+          await flushSseAndEnd(subRes);
+        } catch (err) {
+          writeLog(`[Hub EndAll Error] Failed to end subscriber: ${err}`);
+        }
+      });
+      await Promise.all(promises);
+      this.subscribers.delete(sessionId);
+    }
+  }
+}
+
+export const activeBackgroundRuns = new Map<string, {
+  abortController: AbortController;
+  promise: Promise<void>;
+}>();
+
 export const handleGateLoop = async (req: express.Request, res: express.Response) => {
   const rreq = req as RehydratedRequest;
   const isResume = rreq.path.includes('/gate-resume');
-  let session: CopilotSession | null = null;
-  let unsubscribe: (() => void) | null = null;
-  let isRequestClosed = false;
-  let currentSessionId: string | null = null;
-  let heartbeatId: NodeJS.Timeout | null = null;
-  let resolveWritePromise: (() => void) | null = null;
-  let cleaningUp = false;
+  const { sessionId } = req.body;
+  const currentSessionId = sessionId || null;
 
-  const abortController = new AbortController();
-  const abortPromise = new Promise<never>((_, reject) => {
-    const onAbort = () => reject(new Error('Operation aborted by client or timeout'));
-    if (abortController.signal.aborted) onAbort();
-    else abortController.signal.addEventListener('abort', onAbort, { once: true });
+  if (!currentSessionId) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Session ID is required.');
+    return;
+  }
+
+  // 1. Check if locked due to manual panic intervention
+  const sess = activeSessions.get(currentSessionId);
+  if (sess && sess.stateSnapshot?.manualIntervention) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, error: 'Session locked due to manual panic intervention.' }));
+    return;
+  }
+
+  // 2. Check if a background run is already active for this session
+  const activeRun = activeBackgroundRuns.get(currentSessionId);
+  if (activeRun) {
+    writeLog(`[GateLoop] Reconnecting client to in-progress session ${currentSessionId}`);
+    
+    // Set headers for SSE
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+    res.write(':\n\n');
+
+    // Subscribe the new response res to the active session
+    SessionSseHub.subscribe(currentSessionId, res);
+
+    // Stream all buffered events that the client hasn't seen
+    const buffered = SessionSseHub.getBuffer(currentSessionId);
+    writeLog(`[GateLoop] Streaming ${buffered.length} buffered events to reconnected client.`);
+    for (const ev of buffered) {
+      await secureWrite(res, `data: ${JSON.stringify(ev)}\n\n`);
+    }
+
+    res.on('close', () => {
+      writeLog(`[GateLoop] Reconnected client connection closed for session ${currentSessionId}`);
+      SessionSseHub.unsubscribe(currentSessionId, res);
+    });
+
+    return;
+  }
+
+  // If NOT already running, start a new run!
+  // Set up SSE headers on the initial connection
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
   });
+  res.write(':\n\n');
 
-  const registerSseForSession = (sessionId: string | null) => {
-    if (sessionId) {
-      const currentMutationPromise = new Promise<void>((resolve) => {
-        resolveWritePromise = resolve;
-      });
-      sessionWritePromises.set(sessionId, currentMutationPromise);
-      sseResToSessionId.set(res, sessionId);
-    } else {
-      sseResToSessionId.set(res, 'unregistered-session');
-    }
-  };
+  // Register SSE
+  sseResToSessionId.set(res, currentSessionId);
 
-  const unregisterSseForSession = () => {
-    if (resolveWritePromise) {
-      try { resolveWritePromise(); } catch (e) {}
-      resolveWritePromise = null;
-    }
-    if (currentSessionId) {
-      sessionWritePromises.delete(currentSessionId);
-    }
-    sseResToSessionId.delete(res);
-  };
-
-  const cleanup = async () => {
-    if (cleaningUp) return;
-    cleaningUp = true;
-    isRequestClosed = true;
-    abortController.abort();
-
-    unregisterSseForSession();
-
-    if (heartbeatId) {
-      clearInterval(heartbeatId);
-      heartbeatId = null;
-    }
-    if (currentSessionId) {
-      if (activeLocks.get(currentSessionId) === abortController) {
-        activeLocks.delete(currentSessionId);
-      }
-      // T2: Memory guardrails - trim history on completion if too large to prevent memory bloat
-      const sessionRec = activeSessions.get(currentSessionId);
-      if (sessionRec) {
-        const history = sessionRec.conversationHistory || [];
-        if (history.length > 50) {
-          activeSessions.set(sessionRec.sessionId, {
-            ...sessionRec,
-            conversationHistory: history.slice(-20)
-          });
-          writeLog(`[GC] Trimmed conversation history for session ${currentSessionId} to prevent memory bloat.`);
-        }
-      }
-      // Force-evict cleanCache content to prevent stale static strings from leaking across sessions
-      clearCleanCache();
-      writeLog(`[GC] Cleared static log regex cache on session shutdown.`);
-    }
-    if (unsubscribe) {
-      try { unsubscribe(); } catch (e) {}
-      unsubscribe = null;
-    }
-    try {
-      if (session) {
-        // If the session is part of the persistent activeSessions, do NOT disconnect here.
-        // Disconnecting would break context retention for future turns using getOrCreateSession.
-        // The global GC interval handles pruning inactive persistent sessions.
-        const isPersistent = Array.from(activeSessions.values()).some(s => s.copilotSession === session);
-        if (!isPersistent) {
-          await session.disconnect();
-        }
-        session = null;
-      }
-    } catch (e) {}
-  };
+  // Initialize SessionSseHub and register this client
+  SessionSseHub.clearBuffer(currentSessionId);
+  SessionSseHub.subscribe(currentSessionId, res);
 
   res.on('close', () => {
-    writeLog(`[SDK] Connection closed. res.writableEnded=${res.writableEnded} res.destroyed=${res.destroyed} req.destroyed=${req.destroyed}`);
-    // Only clean up if the response is actually closed or destroyed before cleanly finishing
-    if (!res.writableEnded) {
-       writeLog('[SDK] Client connection ended or aborted.');
-       cleanup();
-    }
+    writeLog(`[GateLoop] Initial client connection closed for session ${currentSessionId}. Loop continues running in background.`);
+    SessionSseHub.unsubscribe(currentSessionId, res);
+    sseResToSessionId.delete(res);
   });
 
-  try {
-    const { prompt, input, gates: rawGates, maxRetries = 2, apiKey, model, cwd, sessionId, diagnosticScenario, replayTraceId, simulateBackpressureDelayMs } = req.body;
-    const gates = Array.isArray(rawGates) ? rawGates : (rawGates ? [String(rawGates)] : []);
-    const keyToUse = apiKey || process.env.GEMINI_API_KEY;
-    const registryInstance = new ProviderRegistry(keyToUse);
-    currentSessionId = sessionId || null;
+  // Create AbortController for the background task
+  const runAbortController = new AbortController();
+  activeLocks.set(currentSessionId, runAbortController);
 
-    if (simulateBackpressureDelayMs) {
-      (res as ExtendedResponse).simulateBackpressureDelayMs = Number(simulateBackpressureDelayMs);
-    }
+  // Now, spawn the background task asynchronously!
+  const runPromise = (async () => {
+    let session: CopilotSession | null = null;
+    let unsubscribe: (() => void) | null = null;
+    let isRequestClosed = false;
+    let heartbeatId: NodeJS.Timeout | null = null;
+    let cleaningUp = false;
 
-    const payload = req.body;
+    const abortController = runAbortController;
+    const abortPromise = new Promise<never>((_, reject) => {
+      const onAbort = () => reject(new Error('Operation aborted by client or timeout'));
+      if (abortController.signal.aborted) onAbort();
+      else abortController.signal.addEventListener('abort', onAbort, { once: true });
+    });
 
-    if (currentSessionId) {
-      const sess = activeSessions.get(currentSessionId);
-      if (sess && sess.stateSnapshot?.manualIntervention) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'Session locked due to manual panic intervention.' }));
-        return;
+    // Create a virtual res object that writes to the SessionSseHub
+    const res = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead: (status: number, headers: Record<string, string | number | string[]>) => {
+        writeLog(`[Background virtualRes] writeHead status=${status}`);
+        return res;
+      },
+      write: (chunk: string | Buffer) => {
+        SessionSseHub.broadcast(currentSessionId, chunk.toString());
+        return true;
+      },
+      end: (chunk?: string | Buffer) => {
+        if (chunk) {
+          SessionSseHub.broadcast(currentSessionId, chunk.toString());
+        }
+        const mutRes = res as unknown as { destroyed: boolean; writableEnded: boolean };
+        mutRes.writableEnded = true;
+        mutRes.destroyed = true;
+        SessionSseHub.endAll(currentSessionId);
+      },
+      once: () => {},
+      removeListener: () => {}
+    } as unknown as express.Response;
+
+    const cleanup = async () => {
+      if (cleaningUp) return;
+      cleaningUp = true;
+      isRequestClosed = true;
+      const mutRes = res as unknown as { destroyed: boolean; writableEnded: boolean };
+      mutRes.writableEnded = true;
+      mutRes.destroyed = true;
+      abortController.abort();
+
+      if (heartbeatId) {
+        clearInterval(heartbeatId);
+        heartbeatId = null;
       }
-    }
+      if (currentSessionId) {
+        if (activeLocks.get(currentSessionId) === abortController) {
+          activeLocks.delete(currentSessionId);
+        }
+        // T2: Memory guardrails - trim history on completion if too large to prevent memory bloat
+        const sessionRec = activeSessions.get(currentSessionId);
+        if (sessionRec) {
+          const history = sessionRec.conversationHistory || [];
+          if (history.length > 50) {
+            activeSessions.set(sessionRec.sessionId, {
+              ...sessionRec,
+              conversationHistory: history.slice(-20)
+            });
+            writeLog(`[GC] Trimmed conversation history for session ${currentSessionId} to prevent memory bloat.`);
+          }
+        }
+        // Force-evict cleanCache content to prevent stale static strings from leaking across sessions
+        clearCleanCache();
+        writeLog(`[GC] Cleared static log regex cache on session shutdown.`);
+      }
+      if (unsubscribe) {
+        try { unsubscribe(); } catch (e) {}
+        unsubscribe = null;
+      }
+      try {
+        if (session) {
+          // If the session is part of the persistent activeSessions, do NOT disconnect here.
+          // Disconnecting would break context retention for future turns using getOrCreateSession.
+          // The global GC interval handles pruning inactive persistent sessions.
+          const isPersistent = Array.from(activeSessions.values()).some(s => s.copilotSession === session);
+          if (!isPersistent) {
+            await session.disconnect();
+          }
+          session = null;
+        }
+      } catch (e) {}
+    };
 
-    registerSseForSession(currentSessionId);
+    try {
+      const { prompt, input, gates: rawGates, maxRetries = 2, apiKey, model, cwd, sessionId, diagnosticScenario, replayTraceId, simulateBackpressureDelayMs } = req.body;
+      const gates = Array.isArray(rawGates) ? rawGates : (rawGates ? [String(rawGates)] : []);
+      const keyToUse = apiKey || process.env.GEMINI_API_KEY;
+      const registryInstance = new ProviderRegistry(keyToUse);
 
-    writeLog(`[API Request] POST /api/copilot/gate-run: isResume=${isResume}, model=${model || 'default'}, cwd=${cwd || 'default'}, sessionId=${sessionId || 'none'}`);
+      if (simulateBackpressureDelayMs) {
+        (res as ExtendedResponse).simulateBackpressureDelayMs = Number(simulateBackpressureDelayMs);
+      }
+
+      const payload = req.body;
+
+      // Register virtualRes so secureWrite can map it to sessionId
+      sseResToSessionId.set(res, currentSessionId);
+
+      writeLog(`[Background API Run] starting: isResume=${isResume}, model=${model || 'default'}, cwd=${cwd || 'default'}, sessionId=${sessionId || 'none'}`);
 
     const isDiagnostic = (!!diagnosticScenario || !!replayTraceId) && process.env.DIAGNOSTIC_MODE === 'true';
     const scenario = isDiagnostic && diagnosticScenario ? DIAGNOSTIC_SCENARIOS[diagnosticScenario as string] : null;
@@ -330,14 +532,6 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
 
     if (currentSessionId) {
       const sessId = currentSessionId;
-      if (activeLocks.has(sessId)) {
-        writeLog(`[GateLoop] Session ${sessId} is currently busy. Returning 409 Conflict.`);
-        res.writeHead(409, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `Session ${sessId} is currently busy processing another request.` }));
-        await cleanup();
-        return;
-      }
-      activeLocks.set(sessId, abortController);
       if (isResume) {
         updateEscalationStatus(sessId, 'resumed');
       }
@@ -1419,7 +1613,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           
           try {
             commitSha = await getGitSandbox().commitAllChangesAsync(`Turn Completed: ${taskLabel}`);
-          } catch (e: any) {
+          } catch (e: unknown) {
             // suppress git error output
           }
           
@@ -1596,12 +1790,12 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         });
 
         writeLog(`[GateLoop] State saved. Closing SSE stream to await stateless POST /gate-resume for session ${sessionId}.`);
-        await flushSseAndEnd(res);
+        await cleanup();
         return; // Break completely; this request is finished!
       }
-    } catch (innerLoopErr: any) {
+    } catch (innerLoopErr: unknown) {
       allGatesPassed = false;
-      writeLog(`[GateLoop] Critical inner loop failure: ${innerLoopErr.stack || innerLoopErr}`);
+      writeLog(`[GateLoop] Critical inner loop failure: ${innerLoopErr instanceof Error ? innerLoopErr.stack || innerLoopErr.message : String(innerLoopErr)}`);
     } finally {
       writeLog(`[GateLoop] Inner loop execution cycle terminated.`);
     }
@@ -1611,29 +1805,28 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         heartbeatId = null;
       }
       const errMsg = err instanceof Error ? err.message : String(err);
-      writeLog(`[GateLoop] Exception in endpoint loop: ${err instanceof Error ? err.stack : errMsg}`);
+      writeLog(`[GateLoop] Exception in background loop: ${err instanceof Error ? err.stack : errMsg}`);
       await cleanup();
 
       try {
-        if (!res.destroyed && !res.writableEnded) {
-          await secureWrite(res, `data: ${JSON.stringify({
-            type: 'loop.error',
-            data: { message: errMsg || 'Fatal pipeline escalation error' }
-          })}\n\n`);
-          await secureWrite(res, `data: ${JSON.stringify({
-            type: 'session.error',
-            data: { message: errMsg || 'Error occurred during gate run execution.' }
-          })}\n\n`);
-          await flushSseAndEnd(res);
-        }
+        await SessionSseHub.broadcast(currentSessionId, `data: ${JSON.stringify({
+          type: 'loop.error',
+          data: { message: errMsg || 'Fatal pipeline escalation error' }
+        })}\n\n`);
+        await SessionSseHub.broadcast(currentSessionId, `data: ${JSON.stringify({
+          type: 'session.error',
+          data: { message: errMsg || 'Error occurred during gate run execution.' }
+        })}\n\n`);
       } catch (_) {}
     } finally {
-    updateStateSnapshot(currentSessionId, { isRunning: false, activeGate: undefined });
-    writeLog(`[CleanupGuard] Orchestration sequence finished or failed.`);
-    
-    await cleanup();
-    if (!res.writableEnded && !res.destroyed) {
-      await flushSseAndEnd(res);
+      activeBackgroundRuns.delete(currentSessionId);
+      updateStateSnapshot(currentSessionId, { isRunning: false, activeGate: undefined });
+      writeLog(`[CleanupGuard] Background orchestration sequence finished or failed.`);
+      
+      await cleanup();
+      await SessionSseHub.endAll(currentSessionId);
     }
-  }
+  })();
+
+  activeBackgroundRuns.set(currentSessionId, { abortController: runAbortController, promise: runPromise });
 };

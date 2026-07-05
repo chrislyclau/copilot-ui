@@ -64,6 +64,7 @@ describe('Stateless Rehydration & Crash Recovery', () => {
 
     // Clear memory cache, simulating a restart
     activeSessions.clear();
+    serverModule.activeLocks.clear();
     expect(activeSessions.has(sessionId)).toBe(false);
 
     // Now resume, which should force rehydration

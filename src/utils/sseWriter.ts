@@ -98,46 +98,51 @@ export function createSseWriter({
               if (jsonStr) {
                 const parsedEventObj = JSON.parse(jsonStr);
                 if (parsedEventObj && typeof parsedEventObj === 'object') {
-                  const newSequenceCounter = (session.eventSequenceCounter || 0) + 1;
-                  activeSessions.set(sessId, {
-                    ...session,
-                    eventSequenceCounter: newSequenceCounter,
-                    turns: session.turns ? [...session.turns] : []
-                  });
-                  const updatedSession = activeSessions.get(sessId)!;
-                  const typedEventObj = enrichEventPayload(
-                    parsedEventObj,
-                    newSequenceCounter,
-                    updatedSession.stateSnapshot
-                  );
-                  eventObj = typedEventObj;
-
-                  if (updatedSession.turns.length === 0) {
-                    const newTurn: Turn = {
-                      id: `turn-fallback-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-                      taskLabel: 'System Recovery / Unknown Turn',
-                      status: 'running',
-                      events: [] as CopilotEventData[]
-                    };
+                  const hasSeqId = parsedEventObj.sequenceId !== undefined || (parsedEventObj.data && typeof parsedEventObj.data === 'object' && 'sequenceId' in parsedEventObj.data);
+                  if (hasSeqId) {
+                    eventObj = parsedEventObj;
+                  } else {
+                    const newSequenceCounter = (session.eventSequenceCounter || 0) + 1;
                     activeSessions.set(sessId, {
-                      ...updatedSession,
-                      turns: [...updatedSession.turns, newTurn]
+                      ...session,
+                      eventSequenceCounter: newSequenceCounter,
+                      turns: session.turns ? [...session.turns] : []
                     });
-                  }
-                  const currentSession = activeSessions.get(sessId)!;
-                  const currentTurn = currentSession.turns[currentSession.turns.length - 1];
-                  if (currentTurn) {
-                    const updatedTurns = currentSession.turns.map((turn, index) =>
-                      index === currentSession.turns.length - 1 ?
-                      { ...turn, events: [...turn.events, typedEventObj] } : turn
+                    const updatedSession = activeSessions.get(sessId)!;
+                    const typedEventObj = enrichEventPayload(
+                      parsedEventObj,
+                      newSequenceCounter,
+                      updatedSession.stateSnapshot
                     );
-                    activeSessions.set(sessId, {
-                      ...currentSession,
-                      turns: updatedTurns
-                    });
-                  }
+                    eventObj = typedEventObj;
 
-                  data = `data: ${JSON.stringify(typedEventObj)}\n\n`;
+                    if (updatedSession.turns.length === 0) {
+                      const newTurn: Turn = {
+                        id: `turn-fallback-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                        taskLabel: 'System Recovery / Unknown Turn',
+                        status: 'running',
+                        events: [] as CopilotEventData[]
+                      };
+                      activeSessions.set(sessId, {
+                        ...updatedSession,
+                        turns: [...updatedSession.turns, newTurn]
+                      });
+                    }
+                    const currentSession = activeSessions.get(sessId)!;
+                    const currentTurn = currentSession.turns[currentSession.turns.length - 1];
+                    if (currentTurn) {
+                      const updatedTurns = currentSession.turns.map((turn, index) =>
+                        index === currentSession.turns.length - 1 ?
+                        { ...turn, events: [...turn.events, typedEventObj] } : turn
+                      );
+                      activeSessions.set(sessId, {
+                        ...currentSession,
+                        turns: updatedTurns
+                      });
+                    }
+
+                    data = `data: ${JSON.stringify(typedEventObj)}\n\n`;
+                  }
                 }
               }
             } catch (err: unknown) {
@@ -239,8 +244,9 @@ export function createSseWriter({
       lock = newLock;
     }
     sseWriteLocks.delete(res);
-    if (typeof (res as any).flush === 'function') {
-      (res as any).flush();
+    const flushableRes = res as unknown as { flush?: () => void };
+    if (typeof flushableRes.flush === 'function') {
+      flushableRes.flush();
     }
     await new Promise<void>((resolve) => {
       if (res.writableNeedDrain) {

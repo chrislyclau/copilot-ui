@@ -7,7 +7,7 @@ import { SessionRecord, StateSnapshot } from '../types/session';
 import { AuditResult } from '../types/audit';
 import { getWorkspaceHostLocation, getExecCommand, getWorkspaceRoot } from '../workspace';
 import { checkPathInside } from '../security/pathGuard';
-import { saveSession, deleteSession } from '../db/sessionStore';
+import { saveSession, deleteSession, getSession } from '../db/sessionStore';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
 import { submitAuditFindingsTool } from '../config/tools';
 
@@ -44,6 +44,7 @@ export class SessionMap extends Map<string, SessionRecord> {
     super.set(key, value);
     try {
       writeLog(`[SessionMap] Saving session ${key} to DB...`, LogLevel.DEBUG);
+      // Synchronous SQLite run
       saveSession(value);
     } catch (e) {
       writeLog(`Failed to save session ${key} to SQLite: ${e}`, LogLevel.WARN);
@@ -134,8 +135,32 @@ export async function getOrCreateSession(
   createSessionOptions: CopilotCreateSessionOptions
 ): Promise<SessionRecord> {
   const now = Date.now();
-  const existing = activeSessions.get(sessionId);
-  
+  let existing = activeSessions.get(sessionId);
+
+  // Try to rehydrate if not in memory
+  if (!existing) {
+    const stored = getSession(sessionId);
+    if (stored) {
+      writeLog(`[Session] Rehydrating session ${sessionId} from DB before creating new context.`);
+      existing = {
+        ...stored,
+        sessionId,
+        copilotSession: null as any,
+        currentModel: stored.currentModel || 'gemini-3.1-flash-lite',
+        cwd: stored.cwd || getWorkspaceRoot(),
+        lastUsedAt: stored.lastUsedAt || now,
+        totalInputTokens: stored.totalInputTokens || 0,
+        totalOutputTokens: stored.totalOutputTokens || 0,
+        eventSequenceCounter: stored.eventSequenceCounter || 0,
+        stateSnapshot: stored.stateSnapshot || { isRunning: false, awaitingHuman: false, retryCount: 0, currentTier: 'gemini-3.1-flash-lite' },
+        conversationHistory: stored.conversationHistory || [],
+        turns: stored.turns || [],
+        diagnosticTrail: stored.diagnosticTrail || []
+      } as SessionRecord;
+      activeSessions.set(sessionId, existing);
+    }
+  }
+
   const safeModelTier = (MODEL_TIERS.includes(currentModel) ? currentModel : MODEL_TIERS[0]) || 'gemini-3.1-flash-lite';
 
   if (existing) {

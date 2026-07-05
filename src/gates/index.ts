@@ -47,7 +47,7 @@ export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd
   const result = await execCommand(
     cwd ? `cd '${runCwd.replace(/'/g, "'\\''")}' && ${cmd}` : cmd,
     combinedSignal
-  ).catch((err: any) => {
+  ).catch((err: unknown) => {
     if (timeoutSignal.aborted) {
       throw new Error(`Gate execution timed out after ${timeoutMs}ms`);
     }
@@ -58,7 +58,7 @@ export async function runWithTimeout(cmd: string, timeoutMs: number = 30000, cwd
   });
 
   if (result.exitCode !== 0) {
-    const error: any = new Error(`Command failed: ${cmd}\n${result.stderr}`);
+    const error = new Error(`Command failed: ${cmd}\n${result.stderr}`) as Error & { stdout?: string; stderr?: string; code?: number | null };
     error.stdout = result.stdout;
     error.stderr = result.stderr;
     error.code = result.exitCode;
@@ -73,8 +73,8 @@ export async function runTests(cwd: string = getWorkspaceRoot(), abortSignal?: A
   try {
     const { stdout } = await runWithTimeout(`npm run test -- --watch=false`, 30000, cwd, abortSignal);
     return { gateName: 'runTests', success: true, output: stdout, durationMs: Date.now() - start };
-  } catch (err: any) {
-    return { gateName: 'runTests', success: false, output: err.stdout || err.message, durationMs: Date.now() - start };
+  } catch (err: unknown) {
+    return { gateName: 'runTests', success: false, output: (err as { stdout?: string }).stdout || (err instanceof Error ? err.message : String(err)), durationMs: Date.now() - start };
   }
 }
 
@@ -83,8 +83,8 @@ export async function runLint(cwd: string = getWorkspaceRoot(), abortSignal?: Ab
   try {
     const { stdout } = await runWithTimeout(`npm run lint`, 30000, cwd, abortSignal);
     return { gateName: 'runLint', success: true, output: stdout, durationMs: Date.now() - start };
-  } catch (err: any) {
-    return { gateName: 'runLint', success: false, output: err.stdout || err.message, durationMs: Date.now() - start };
+  } catch (err: unknown) {
+    return { gateName: 'runLint', success: false, output: (err as { stdout?: string }).stdout || (err instanceof Error ? err.message : String(err)), durationMs: Date.now() - start };
   }
 }
 
