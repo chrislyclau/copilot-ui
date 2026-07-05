@@ -377,10 +377,40 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
 
   // 2. Check if a background run is already active for this session
   const activeRun = activeBackgroundRuns.get(currentSessionId);
+  const wantStream = req.query.stream !== 'false' && req.body.stream !== false;
+
   if (activeRun) {
-    writeLog(`[GateLoop] Reconnecting client to in-progress session ${currentSessionId}`);
-    
-    // Set headers for SSE
+    writeLog(`[GateLoop] Session ${currentSessionId} already has an active background run.`);
+    if (wantStream) {
+      writeLog(`[GateLoop] Reconnecting streaming client directly to in-progress session ${currentSessionId}`);
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+      });
+      res.write(':\n\n');
+      SessionSseHub.subscribe(currentSessionId, res);
+      const buffered = SessionSseHub.getBuffer(currentSessionId);
+      for (const ev of buffered) {
+        await secureWrite(res, `data: ${JSON.stringify(ev)}\n\n`);
+      }
+      res.on('close', () => {
+        writeLog(`[GateLoop] Reconnected client connection closed for session ${currentSessionId}`);
+        SessionSseHub.unsubscribe(currentSessionId, res);
+      });
+    } else {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, sessionId: currentSessionId, alreadyRunning: true }));
+    }
+    return;
+  }
+
+  // Clear buffer for a completely fresh run
+  SessionSseHub.clearBuffer(currentSessionId);
+
+  if (wantStream) {
+    // Set up SSE headers on the initial connection if legacy inline stream is requested
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -388,47 +418,14 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       'X-Accel-Buffering': 'no'
     });
     res.write(':\n\n');
-
-    // Subscribe the new response res to the active session
+    sseResToSessionId.set(res, currentSessionId);
     SessionSseHub.subscribe(currentSessionId, res);
-
-    // Stream all buffered events that the client hasn't seen
-    const buffered = SessionSseHub.getBuffer(currentSessionId);
-    writeLog(`[GateLoop] Streaming ${buffered.length} buffered events to reconnected client.`);
-    for (const ev of buffered) {
-      await secureWrite(res, `data: ${JSON.stringify(ev)}\n\n`);
-    }
-
     res.on('close', () => {
-      writeLog(`[GateLoop] Reconnected client connection closed for session ${currentSessionId}`);
+      writeLog(`[GateLoop] Initial streaming client connection closed for session ${currentSessionId}. Loop continues running in background.`);
       SessionSseHub.unsubscribe(currentSessionId, res);
+      sseResToSessionId.delete(res);
     });
-
-    return;
   }
-
-  // If NOT already running, start a new run!
-  // Set up SSE headers on the initial connection
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no'
-  });
-  res.write(':\n\n');
-
-  // Register SSE
-  sseResToSessionId.set(res, currentSessionId);
-
-  // Initialize SessionSseHub and register this client
-  SessionSseHub.clearBuffer(currentSessionId);
-  SessionSseHub.subscribe(currentSessionId, res);
-
-  res.on('close', () => {
-    writeLog(`[GateLoop] Initial client connection closed for session ${currentSessionId}. Loop continues running in background.`);
-    SessionSseHub.unsubscribe(currentSessionId, res);
-    sseResToSessionId.delete(res);
-  });
 
   // Create AbortController for the background task
   const runAbortController = new AbortController();
@@ -1854,4 +1851,49 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
   })();
 
   activeBackgroundRuns.set(currentSessionId, { abortController: runAbortController, promise: runPromise });
+
+  if (!wantStream) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, sessionId: currentSessionId }));
+  }
+};
+
+export const handleGateStream = async (req: express.Request, res: express.Response) => {
+  const sessionId = (req.query.sessionId as string) || (req.headers['x-copilot-session-id'] as string);
+  
+  if (!sessionId) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, error: 'Session ID is required.' }));
+    return;
+  }
+
+  writeLog(`[GateStream] Establishing SSE stream for session ${sessionId}`);
+
+  // Set headers for SSE
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.write(':\n\n');
+
+  // Register SSE mapping
+  sseResToSessionId.set(res, sessionId);
+
+  // Subscribe the response res to the active session's SSE Hub
+  SessionSseHub.subscribe(sessionId, res);
+
+  // Stream all buffered events that the client hasn't seen
+  const buffered = SessionSseHub.getBuffer(sessionId);
+  writeLog(`[GateStream] Streaming ${buffered.length} buffered events to client for session ${sessionId}.`);
+  for (const ev of buffered) {
+    await secureWrite(res, `data: ${JSON.stringify(ev)}\n\n`);
+  }
+
+  res.on('close', () => {
+    writeLog(`[GateStream] Client connection closed for session ${sessionId}`);
+    SessionSseHub.unsubscribe(sessionId, res);
+    sseResToSessionId.delete(res);
+  });
 };

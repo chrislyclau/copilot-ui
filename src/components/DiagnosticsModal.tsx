@@ -274,7 +274,7 @@ export function DiagnosticsModal({
     try {
       const isReplay = t6Scenario === 'replay';
       const traceToUse = isReplay && t6ReplayTraceId === 'custom' ? customTraceId : t6ReplayTraceId;
-      const response = await fetch('/api/copilot/gate-run', {
+      const response = await fetch('/api/copilot/gate-run?stream=false', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -297,11 +297,22 @@ export function DiagnosticsModal({
         throw new Error(`HTTP error ${response.status}: ${await response.text()}`);
       }
 
-      if (!response.body) {
+      const resJson = await response.json();
+      const currentSessionId = resJson.sessionId;
+
+      const streamResponse = await fetch(`/api/copilot/gate-stream?sessionId=${currentSessionId}`, {
+        method: 'GET'
+      });
+
+      if (!streamResponse.ok) {
+        throw new Error(`HTTP error ${streamResponse.status}: ${await streamResponse.text()}`);
+      }
+
+      if (!streamResponse.body) {
         throw new Error('Response body is undefined or not readable');
       }
 
-      const reader = response.body.getReader();
+      const reader = streamResponse.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 

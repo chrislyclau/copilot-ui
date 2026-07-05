@@ -261,7 +261,7 @@ export function useGateLoop(
         requestBody = serializablePayload;
       }
 
-      const response = await fetch(endpoint, {
+      const response = await fetch(`${endpoint}?stream=false`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
@@ -278,10 +278,30 @@ export function useGateLoop(
         }
         throw new Error(msg);
       }
+
+      const resJson = await response.json();
+      const currentSessionId = resJson.sessionId || sessionId;
+
+      // Connect to the GET stream endpoint to monitor progress
+      const streamResponse = await fetch(`/api/copilot/gate-stream?sessionId=${currentSessionId}`, {
+        method: 'GET',
+        signal: abortControllerRef.current.signal
+      });
+
+      if (!streamResponse.ok) {
+        let msg = `HTTP ${streamResponse.status}`;
+        try {
+          const body = await streamResponse.json();
+          msg += ` - ${body.error || body.message || 'Unknown Error'}`;
+        } catch (_) {
+           msg += ` - ${streamResponse.statusText}`;
+        }
+        throw new Error(msg);
+      }
       
-      if (!response.body) throw new Error('No response body');
+      if (!streamResponse.body) throw new Error('No response body');
       
-      const reader = response.body.getReader();
+      const reader = streamResponse.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let loopErrorMessage = '';

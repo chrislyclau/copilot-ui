@@ -6,7 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { validateCwd } from './security/pathGuard';
 import { CopilotClient, CopilotSession, PermissionRequestResult, SessionConfig, SdkProviderConfig, Tool, SessionEvent } from './copilotSdk/boundary';
-import { handleGateLoop, handleGateRunPermission } from './orchestrator/gateLoop';
+import { handleGateLoop, handleGateRunPermission, handleGateStream } from './orchestrator/gateLoop';
 
 import {
   activeSessions,
@@ -1188,6 +1188,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
   app.post('/api/copilot/gate-run', handleGateLoop);
   app.post('/api/copilot/gate-resume', handleGateLoop);
+  app.get('/api/copilot/gate-stream', handleGateStream);
 
   // RESTful Spec Patching Route (SYS-REQ-015/016)
   app.post('/api/copilot/spec-patch', async (req, res) => {
