@@ -52,21 +52,23 @@ describe('Token Budget Exhaustion', () => {
 
     expect(activeSessions.has(sessionId)).toBeTruthy();
 
-    // Force totalInputTokens to exceed budget so the next turn escalates
-    const sess = activeSessions.get(sessionId!);
-    if (sess) {
-      sess.totalInputTokens = 500001;
-    }
-
     // Now wait for the run to complete - it should hit the loop and escalate
     const response = await reqPromise;
     expect(response.status).toBe(200);
 
     if (response.body) {
       const reader = response.body.getReader();
+      const decoder = new TextDecoder();
       while (true) {
-        const { done } = await reader.read();
+        const { done, value } = await reader.read();
         if (done) break;
+        const chunk = decoder.decode(value);
+        if (chunk.includes('composer.plan') || chunk.includes('loop.warning')) {
+          const sess = activeSessions.get(sessionId!);
+          if (sess) {
+            sess.totalInputTokens = 500001;
+          }
+        }
       }
     }
 

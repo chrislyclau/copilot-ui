@@ -335,12 +335,21 @@ export const activeBackgroundRuns = new Map<string, {
 export const handleGateLoop = async (req: express.Request, res: express.Response) => {
   const rreq = req as RehydratedRequest;
   const isResume = rreq.path.includes('/gate-resume');
-  const { sessionId } = req.body;
-  const currentSessionId = sessionId || null;
+  const { sessionId, diagnosticScenario, replayTraceId } = req.body;
+  let currentSessionId = sessionId || `sess-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
-  if (!currentSessionId) {
-    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Session ID is required.');
+  const isDiagnostic = (!!diagnosticScenario || !!replayTraceId) && process.env.DIAGNOSTIC_MODE === 'true';
+  if ((diagnosticScenario || replayTraceId) && !isDiagnostic) {
+    writeLog('[Security] Diagnostic mode is disabled. Rejecting diagnostic request.', LogLevel.WARN);
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, error: 'Diagnostic mode is disabled via environment configuration.' }));
+    return;
+  }
+
+
+  if (activeLocks.has(currentSessionId)) {
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, error: `Session ${currentSessionId} is currently busy processing another request.` }));
     return;
   }
 
@@ -350,6 +359,20 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     res.writeHead(403, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: false, error: 'Session locked due to manual panic intervention.' }));
     return;
+  }
+
+
+  let initialCwd = getWorkspaceRoot();
+  try {
+    initialCwd = validateCwd(req.body.cwd);
+  } catch(e) {}
+  if (!activeSessions.has(currentSessionId)) {
+    activeSessions.set(currentSessionId, {
+      sessionId: currentSessionId,
+      cwd: initialCwd,
+      copilotSession: null as any,
+      stateSnapshot: { isRunning: true }
+    } as any);
   }
 
   // 2. Check if a background run is already active for this session
@@ -503,6 +526,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     };
 
     try {
+      console.log("gateLoop body:", req.body);
       const { prompt, input, gates: rawGates, maxRetries = 2, apiKey, model, cwd, sessionId, diagnosticScenario, replayTraceId, simulateBackpressureDelayMs } = req.body;
       const gates = Array.isArray(rawGates) ? rawGates : (rawGates ? [String(rawGates)] : []);
       const keyToUse = apiKey || process.env.GEMINI_API_KEY;
@@ -701,6 +725,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         streaming: true,
       };
 
+      console.log("Calling getOrCreateSession with", sessionId, loopExecutionConfig.model, runCwd);
       await getOrCreateSession(
         sessionId,
         loopExecutionConfig.model,

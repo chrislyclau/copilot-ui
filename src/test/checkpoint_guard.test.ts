@@ -78,7 +78,7 @@ describe('Checkpoint Guard REST API Integration Tests', () => {
             console.log('Received active stream bytes. Triggering conflict checkpoint/restore request...');
             
             // Slight delay to ensure status registers as active in the map
-            await new Promise(r => setTimeout(r, 200));
+            await new Promise(r => setTimeout(r, 1000));
 
             console.log(`Sending Restore Checkpoint request for sessionId: ${sessionId}`);
             const restoreRes = await fetch(`http://127.0.0.1:${serverPort}/api/copilot/checkpoint/restore`, {

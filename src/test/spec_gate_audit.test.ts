@@ -18,10 +18,8 @@ describe('Spec-Gate Auditor Validation Tests', () => {
 
   it('Verifies that a Spec-Gate Audit Failure stops the pipeline and returns a SPEC_VIOLATION event', { timeout: 60000 }, async () => {
     console.log('Starting spec_gate_audit integration test...');
-
     const { serverPort, proxy, proxyUrl } = serverHarness;
     assert.ok(proxy);
-
     const snapshotPath = path.resolve(process.cwd(), 'src/test/snapshots/gate_loop/spec_gate_audit_failure.yaml');
     
     // Use getWorkspaceHostLocation to create directory on host, and relative path for the API
@@ -58,7 +56,6 @@ describe('Spec-Gate Auditor Validation Tests', () => {
       });
 
       console.log('Sending request to /api/copilot/gate-run with Spec Gate auditing enabled');
-
       const res = await fetch(`http://127.0.0.1:${serverPort}/api/copilot/gate-run`, {
         method: 'POST',
         headers: {
@@ -83,7 +80,7 @@ describe('Spec-Gate Auditor Validation Tests', () => {
       }
 
       console.log('Finished streaming. Verifying Spec Gate violation response...');
-
+      
       // Verify compilation checks ran successfully
       assert.ok(
         finalData.includes('Lint Passed'),
@@ -95,12 +92,11 @@ describe('Spec-Gate Auditor Validation Tests', () => {
         finalData.includes('SPEC_VIOLATION'),
         'Output should stream back the SPEC_VIOLATION failure reason'
       );
-
       assert.ok(
         finalData.includes('Authentication router is missing'),
         'Output should include auditor structural feedback text'
       );
-
+      
       console.log('✓ Spec-Gate Auditor integration test validated successfully!');
     } finally {
       if (fs.existsSync(hostCwd)) {
