@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { killProcessGroup } from "./processGroup.js";
+import { killProcessGroup } from "./processGroup";
 
 // fs.mkdtempSync atomically creates a uniquely-named directory under the
 // OS temp root (respects TMPDIR/TEMP/TMP) and returns its path — avoiding
