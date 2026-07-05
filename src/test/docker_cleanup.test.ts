@@ -1,5 +1,5 @@
 import { assert, describe, it, vi, beforeEach } from "vitest";
-import { runDockerProcess } from "../workspace/dockerRunner.js";
+import { runDockerProcess } from "../workspace/dockerRunner";
 import * as cp from "child_process";
 import * as crypto from "crypto";
 
