@@ -15,8 +15,31 @@ const dbPath = path.join(dbDir, isTestMode ? 'app-test.db' : 'app.db');
 export const db = new Database(dbPath);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS specs (
+    specId TEXT PRIMARY KEY,
+    filePath TEXT NOT NULL,        -- path to spec.md in workspace
+    version TEXT NOT NULL,         -- git SHA at time of decomposition
+    createdAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS tasks (
+    taskId TEXT PRIMARY KEY,
+    specId TEXT REFERENCES specs(specId),
+    specVersion TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT CHECK(status IN ('pending','running','blocked','done','stale','superseded')) DEFAULT 'pending',
+    touches TEXT,                  -- JSON array of file paths/globs
+    dependsOn TEXT,                -- JSON array of taskIds
+    branchName TEXT,
+    blockedReason TEXT,
+    createdAt INTEGER,
+    updatedAt INTEGER
+  );
+
   CREATE TABLE IF NOT EXISTS sessions (
     sessionId TEXT PRIMARY KEY,
+    taskId TEXT REFERENCES tasks(taskId),
     currentModel TEXT,
     cwd TEXT,
     lastUsedAt INTEGER,
@@ -47,3 +70,9 @@ db.exec(`
     currentModel TEXT
   );
 `);
+
+try {
+  db.prepare('ALTER TABLE sessions ADD COLUMN taskId TEXT').run();
+} catch (e) {
+  // Ignored if column already exists or table is empty
+}

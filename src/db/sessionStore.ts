@@ -3,6 +3,7 @@ import { SessionRecord } from '../types/session';
 
 interface SessionRow {
   readonly sessionId: string;
+  readonly taskId?: string;
   readonly currentModel: string;
   readonly cwd: string;
   readonly lastUsedAt: number;
@@ -22,6 +23,7 @@ export function getSession(sessionId: string): Partial<SessionRecord> | undefine
   if (!row) return undefined;
   return {
     sessionId: row.sessionId,
+    taskId: row.taskId,
     currentModel: row.currentModel as any, // TODO: refine Model type
     cwd: row.cwd,
     lastUsedAt: row.lastUsedAt,
@@ -40,17 +42,18 @@ export function getSession(sessionId: string): Partial<SessionRecord> | undefine
 export function saveSession(session: SessionRecord) {
   const stmt = db.prepare(`
     INSERT INTO sessions (
-      sessionId, currentModel, cwd, lastUsedAt, currentTierIndex,
+      sessionId, taskId, currentModel, cwd, lastUsedAt, currentTierIndex,
       planVersions, totalInputTokens, totalOutputTokens,
       eventSequenceCounter, stateSnapshot, conversationHistory,
       turns, diagnosticTrail
     ) VALUES (
-      @sessionId, @currentModel, @cwd, @lastUsedAt, @currentTierIndex,
+      @sessionId, @taskId, @currentModel, @cwd, @lastUsedAt, @currentTierIndex,
       @planVersions, @totalInputTokens, @totalOutputTokens,
       @eventSequenceCounter, @stateSnapshot, @conversationHistory,
       @turns, @diagnosticTrail
     )
     ON CONFLICT(sessionId) DO UPDATE SET
+      taskId = excluded.taskId,
       currentModel = excluded.currentModel,
       cwd = excluded.cwd,
       lastUsedAt = excluded.lastUsedAt,
@@ -67,6 +70,7 @@ export function saveSession(session: SessionRecord) {
   
   stmt.run({
     sessionId: session.sessionId,
+    taskId: session.taskId || null,
     currentModel: session.currentModel,
     cwd: session.cwd,
     lastUsedAt: session.lastUsedAt,
@@ -86,6 +90,7 @@ export function getAllSessions(): ReadonlyArray<Partial<SessionRecord>> {
   const rows = db.prepare('SELECT * FROM sessions').all() as ReadonlyArray<SessionRow>;
   return rows.map(row => ({
     sessionId: row.sessionId,
+    taskId: row.taskId,
     currentModel: row.currentModel as any,
     cwd: row.cwd,
     lastUsedAt: row.lastUsedAt,

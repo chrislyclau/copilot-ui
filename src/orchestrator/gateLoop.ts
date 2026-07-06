@@ -47,6 +47,8 @@ import { fetchStubbedTraceResponse } from '../utils/traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from '../utils/escalationStore';
 import { createSseWriter } from '../utils/sseWriter';
 import { getSession, saveSession, deleteSession, getAllSessions } from '../db/sessionStore';
+import { saveTask, getTask } from '../db/taskStore';
+import { decomposeSpecIntoTasks } from '../utils/taskManager';
 import { ProviderRegistry } from '../utils/providerRegistry';
 
 export interface ClarityCheckData {
@@ -736,6 +738,50 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     if (!isResume) {
       resetSessionForNewRun(sessionId);
     }
+
+    let activeTaskId: string | undefined;
+    try {
+      const decomposition = await decomposeSpecIntoTasks(runCwd);
+      if (decomposition) {
+        const { tasks } = decomposition;
+        if (isResume) {
+          // If we are resuming, find if there is a task that failed/blocked/running and complete/skip it
+          // to "resume from the next step"
+          for (const t of tasks) {
+            if (t.status === 'blocked' || t.status === 'running') {
+              const updatedTask = {
+                ...t,
+                status: 'done' as const,
+                updatedAt: Date.now()
+              };
+              saveTask(updatedTask);
+              writeLog(`[GateLoop] Resuming: Advanced past blocked/running task ${t.taskId}.`);
+              break; // advance one task at a time
+            }
+          }
+          // Re-decompose to get updated status
+          const refreshed = await decomposeSpecIntoTasks(runCwd);
+          if (refreshed) {
+            const nextTask = refreshed.tasks.find(t => t.status === 'pending' || t.status === 'running');
+            if (nextTask) {
+              activeTaskId = nextTask.taskId;
+              saveTask({ ...nextTask, status: 'running', updatedAt: Date.now() });
+              writeLog(`[GateLoop] Selected next pending task to run: ${activeTaskId}`);
+            }
+          }
+        } else {
+          // Regular run: find the first pending or running task
+          const currentTask = tasks.find(t => t.status === 'pending' || t.status === 'running');
+          if (currentTask) {
+            activeTaskId = currentTask.taskId;
+            saveTask({ ...currentTask, status: 'running', updatedAt: Date.now() });
+            writeLog(`[GateLoop] Selected first pending task to run: ${activeTaskId}`);
+          }
+        }
+      }
+    } catch (err) {
+      writeLog(`[GateLoop] Task decomposition failed: ${err}`);
+    }
     
     const activeSessionRecord = sessionId ? activeSessions.get(sessionId) : null;
     const taskLabel = promptStr.length > 50 ? promptStr.slice(0, 47) + '...' : promptStr;
@@ -743,6 +789,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     if (activeSessionRecord) {
       activeSessions.set(sessionId, {
         ...activeSessionRecord,
+        taskId: activeTaskId || activeSessionRecord.taskId,
         turns: [
           ...(activeSessionRecord.turns || []),
           {
@@ -1629,6 +1676,26 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           // Step 6: All gates pass → emit `loop.complete`, end
           writeLog(`[GateLoop] All gates passed successfully!`, LogLevel.INFO);
 
+          // Mark active task as done
+          if (sessionId && activeSessions.has(sessionId)) {
+            const currentSession = activeSessions.get(sessionId)!;
+            if (currentSession.taskId) {
+              try {
+                const t = getTask(currentSession.taskId);
+                if (t) {
+                  saveTask({
+                    ...t,
+                    status: 'done',
+                    updatedAt: Date.now()
+                  });
+                  writeLog(`[GateLoop] Task ${currentSession.taskId} marked as DONE.`);
+                }
+              } catch (err) {
+                writeLog(`[GateLoop] Error marking task as done: ${err}`);
+              }
+            }
+          }
+
           const util = await import('util');
           let commitSha = '';
           const taskLabel = promptStr.length > 50 ? promptStr.slice(0, 47) + '...' : promptStr;
@@ -1767,6 +1834,28 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         // Step 9: On final model tier and still failing → emit `loop.escalate_human` & wait!
         writeLog(`[GateLoop] Failed on final model tier. Escalating to human for session ${sessionId}.`);
         updateStateSnapshot(sessionId, { awaitingHuman: true, isRunning: false, hasFailureState: true });
+
+        // Mark active task as blocked
+        if (sessionId && activeSessions.has(sessionId)) {
+          const currentSession = activeSessions.get(sessionId)!;
+          if (currentSession.taskId) {
+            try {
+              const t = getTask(currentSession.taskId);
+              if (t) {
+                saveTask({
+                  ...t,
+                  status: 'blocked',
+                  blockedReason: `Failed gate: ${failedGateName}. Feedback: ${failedGateFeedback}`,
+                  updatedAt: Date.now()
+                });
+                writeLog(`[GateLoop] Task ${currentSession.taskId} marked as BLOCKED due to failed gate.`);
+              }
+            } catch (err) {
+              writeLog(`[GateLoop] Error marking task as blocked: ${err}`);
+            }
+          }
+        }
+
         const escalateEvent = {
           type: 'loop.escalate_human',
           data: {
