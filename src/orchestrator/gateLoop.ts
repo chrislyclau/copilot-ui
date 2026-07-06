@@ -47,7 +47,7 @@ import { fetchStubbedTraceResponse } from '../utils/traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from '../utils/escalationStore';
 import { createSseWriter } from '../utils/sseWriter';
 import { getSession, saveSession, deleteSession, getAllSessions } from '../db/sessionStore';
-import { saveTask, getTask } from '../db/taskStore';
+import { saveTask, getTask, TaskRecord } from '../db/taskStore';
 import { decomposeSpecIntoTasks } from '../utils/taskManager';
 import { ProviderRegistry } from '../utils/providerRegistry';
 
@@ -984,6 +984,121 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
       }
     }
 
+    const moveToNextTask = async (failureReason: string, failureGate: string): Promise<boolean> => {
+      writeLog(`[GateLoop] moveToNextTask initiated. Failure reason: ${failureReason}. Failure gate: ${failureGate}`);
+      
+      // 1. Commit or stash whatever is in the working tree
+      try {
+        await getGitSandbox().commitAllChangesAsync(`Terminal Escalation: Blocked task ${activeTaskId || 'unknown'}`);
+        writeLog(`[GateLoop] Staged and committed working tree changes for blocked task ${activeTaskId || 'unknown'}`);
+      } catch (e) {
+        writeLog(`[GateLoop] Error committing on terminal escalation: ${e}`);
+      }
+
+      // 2. Mark task blocked in the tasks table with the failure reason
+      if (activeTaskId) {
+        try {
+          const t = getTask(activeTaskId);
+          if (t) {
+            saveTask({
+              ...t,
+              status: 'blocked',
+              blockedReason: `Failed gate: ${failureGate}. Feedback: ${failureReason}`,
+              updatedAt: Date.now()
+            });
+            writeLog(`[GateLoop] Task ${activeTaskId} marked as BLOCKED.`);
+          }
+        } catch (err) {
+          writeLog(`[GateLoop] Error marking task as blocked: ${err}`);
+        }
+      }
+
+      // 3. Checkout back to base branch
+      try {
+        try {
+          await getGitSandbox().checkoutAsync('main');
+          writeLog(`[GateLoop] Checked out back to base branch: main`);
+        } catch (checkoutErr) {
+          await getGitSandbox().checkoutAsync('master');
+          writeLog(`[GateLoop] Checked out back to base branch: master`);
+        }
+      } catch (err) {
+        writeLog(`[GateLoop] Error checking out back to base branch: ${err}`);
+      }
+
+      // 4. Pull next pending task from queue
+      let nextTask: TaskRecord | undefined;
+      try {
+        const decomposition = await decomposeSpecIntoTasks(runCwd);
+        if (decomposition) {
+          nextTask = decomposition.tasks.find(t => t.status === 'pending');
+        }
+      } catch (err) {
+        writeLog(`[GateLoop] Error pulling next pending task: ${err}`);
+      }
+
+      // 5. Continue loop
+      if (nextTask) {
+        try {
+          saveTask({
+            ...nextTask,
+            status: 'running',
+            updatedAt: Date.now()
+          });
+          activeTaskId = nextTask.taskId;
+          writeLog(`[GateLoop] Selected next pending task to run: ${activeTaskId}`);
+        } catch (err) {
+          writeLog(`[GateLoop] Error marking next task as running: ${err}`);
+        }
+
+        // Reset loop variables and state
+        loopCycleCounter = 0;
+        currentModelIndex = 0;
+        retryCount = 0;
+        totalRetries = 0;
+        retryHistory.length = 0;
+        lastFailedGate = '';
+        consecutiveFailures = 0;
+        failedGateName = '';
+        failedGateFeedback = '';
+        allGatesPassed = true;
+
+        promptStr = `${nextTask.title}\n\n${nextTask.description || ''}`;
+        currentPrompt = promptStr;
+
+        updateStateSnapshot(sessionId, {
+          isRunning: true,
+          awaitingHuman: false,
+          hasFailureState: false,
+          currentTier: uniqueModelTiers[0],
+          retryCount: 0,
+          activeGate: undefined,
+        });
+
+        if (sessionId && activeSessions.has(sessionId)) {
+          const sRec = activeSessions.get(sessionId)!;
+          const newTurnId = `turn-${Date.now()}`;
+          activeSessions.set(sessionId, {
+            ...sRec,
+            taskId: activeTaskId,
+            turns: [
+              ...(sRec.turns || []),
+              {
+                id: newTurnId,
+                taskLabel: nextTask.title,
+                status: 'running',
+                events: []
+              }
+            ]
+          });
+        }
+        return true;
+      } else {
+        writeLog(`[GateLoop] No more pending tasks in queue.`);
+        return false;
+      }
+    };
+
     const MAX_SESSION_TOKEN_BUDGET = 500000;
     let loopCycleCounter = 0;
     const MAX_RETRY_CYCLES = 10;
@@ -1041,7 +1156,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
               sessionId,
               summary: `Loop iteration ceiling of ${MAX_RETRY_CYCLES} reached. Bypassing further auto-healing logic and forcing human intervention.`,
               failedGate: failedGateName || 'unknown',
-              failedGateFeedback: '',
+              failedGateFeedback: failedGateFeedback || 'Loop iteration ceiling reached.',
               retryHistory: retryHistory || [],
               stateSnapshot: nextState,
               conversationHistory: currentRec.conversationHistory,
@@ -1051,7 +1166,39 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
             });
           }
           await secureWrite(res, `data: ${JSON.stringify(escalateEvent)}\n\n`, isRequestClosed);
-          break;
+
+          // For compatibility with UI/escalation expectations, we also emit loop.escalate_human event
+          const humanEscalateEvent = {
+            type: 'loop.escalate_human',
+            data: {
+              summary: `Loop iteration ceiling of ${MAX_RETRY_CYCLES} reached. Bypassing further auto-healing logic and forcing human intervention.`,
+              failedGate: failedGateName || 'unknown',
+              retryHistory: retryHistory
+            }
+          };
+          await secureWrite(res, `data: ${JSON.stringify(humanEscalateEvent)}\n\n`, isRequestClosed);
+
+          const moved = await moveToNextTask(failedGateFeedback || 'Loop iteration ceiling reached.', failedGateName || 'unknown');
+          if (moved) {
+            continue;
+          } else {
+            writeLog(`[GateLoop] No more pending tasks. Saving failure state snapshot and ending loop on ceiling breach.`);
+            
+            updateStateSnapshot(sessionId, {
+              awaitingHuman: true,
+              isRunning: false,
+              hasFailureState: true,
+              currentModelIndex,
+              totalRetries,
+              currentPrompt: promptStr, // Original prompt
+              retryHistory,
+              failedGateName,
+              failedGateFeedback
+            });
+
+            await cleanup();
+            return; // Terminate request
+          }
         }
 
         if (isRequestClosed) {
@@ -1831,30 +1978,8 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           continue; // runs step 1 with escalated model
         }
 
-        // Step 9: On final model tier and still failing → emit `loop.escalate_human` & wait!
-        writeLog(`[GateLoop] Failed on final model tier. Escalating to human for session ${sessionId}.`);
-        updateStateSnapshot(sessionId, { awaitingHuman: true, isRunning: false, hasFailureState: true });
-
-        // Mark active task as blocked
-        if (sessionId && activeSessions.has(sessionId)) {
-          const currentSession = activeSessions.get(sessionId)!;
-          if (currentSession.taskId) {
-            try {
-              const t = getTask(currentSession.taskId);
-              if (t) {
-                saveTask({
-                  ...t,
-                  status: 'blocked',
-                  blockedReason: `Failed gate: ${failedGateName}. Feedback: ${failedGateFeedback}`,
-                  updatedAt: Date.now()
-                });
-                writeLog(`[GateLoop] Task ${currentSession.taskId} marked as BLOCKED due to failed gate.`);
-              }
-            } catch (err) {
-              writeLog(`[GateLoop] Error marking task as blocked: ${err}`);
-            }
-          }
-        }
+        // Step 9: On final model tier and still failing → emit `loop.escalate_human` and transition to next task!
+        writeLog(`[GateLoop] Failed on final model tier. Escalating to human for session ${sessionId} and moving to next task.`);
 
         const escalateEvent = {
           type: 'loop.escalate_human',
@@ -1865,24 +1990,6 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           }
         };
         await secureWrite(res, `data: ${JSON.stringify(escalateEvent)}\n\n`);
-
-        if (!sessionId || isRequestClosed) {
-          try { if (session) { await session.disconnect(); session = null; } } catch (e) {}
-          break;
-        }
-
-        // Persist loop state to StateSnapshot for human resumption
-        updateStateSnapshot(sessionId, {
-          awaitingHuman: true,
-          isRunning: false,
-          hasFailureState: true,
-          currentModelIndex,
-          totalRetries,
-          currentPrompt: promptStr, // Original prompt
-          retryHistory,
-          failedGateName,
-          failedGateFeedback
-        });
 
         const activeRec = activeSessions.get(sessionId);
 
@@ -1900,9 +2007,32 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           currentModel: activeRec?.currentModel,
         });
 
-        writeLog(`[GateLoop] State saved. Closing SSE stream to await stateless POST /gate-resume for session ${sessionId}.`);
-        await cleanup();
-        return; // Break completely; this request is finished!
+        if (!sessionId || isRequestClosed) {
+          try { if (session) { await session.disconnect(); session = null; } } catch (e) {}
+          break;
+        }
+
+        const moved = await moveToNextTask(failedGateFeedback, failedGateName);
+        if (moved) {
+          continue;
+        } else {
+          writeLog(`[GateLoop] No more pending tasks. Saving failure state snapshot and ending loop.`);
+          
+          updateStateSnapshot(sessionId, {
+            awaitingHuman: true,
+            isRunning: false,
+            hasFailureState: true,
+            currentModelIndex,
+            totalRetries,
+            currentPrompt: promptStr, // Original prompt
+            retryHistory,
+            failedGateName,
+            failedGateFeedback
+          });
+
+          await cleanup();
+          return; // Terminate request
+        }
       }
     } catch (innerLoopErr: unknown) {
       allGatesPassed = false;

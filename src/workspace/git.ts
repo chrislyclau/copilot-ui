@@ -124,6 +124,10 @@ export class GitSandbox {
         return this.withLock(() => this._getHeadShaAsync());
     }
 
+    public async checkoutAsync(branchName: string): Promise<string> {
+        return this.withLock(() => this.git(["checkout", branchName]));
+    }
+
     // -------------------------------------------------------------------------
     // Private implementations
     // -------------------------------------------------------------------------

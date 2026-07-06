@@ -648,19 +648,24 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       let lintRes;
       let fallbackUsed = false;
 
-      // Explicit write-check to verify if the file system is locked / writable
-      try {
-        const fsPromises = await import('fs/promises');
-        const pathModule = await import('path');
-        const hostCwd = getWorkspaceHostLocation();
-        const checkFilePath = pathModule.join(hostCwd, '.diagnostics-locked-test');
-        
-        await fsPromises.writeFile(checkFilePath, 'check');
-        await fsPromises.unlink(checkFilePath);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        writeLog(`[DIAGNOSTICS] File-system write-check failed: "${msg}". Falling back to memory-safe mock workspace metrics to avert 500 status timeouts.`);
+      // Only trigger fallback if the container is genuinely not up (i.e., liveness check failed)
+      if (!timeoutPass) {
+        writeLog(`[DIAGNOSTICS] Container is genuinely not running or unresponsive. Falling back to memory-safe mock workspace metrics.`);
         fallbackUsed = true;
+      } else {
+        // Run an explicit write-check to see if the file system is locked / writable on host for logs/diagnostics
+        try {
+          const fsPromises = await import('fs/promises');
+          const pathModule = await import('path');
+          const hostCwd = getWorkspaceHostLocation();
+          const checkFilePath = pathModule.join(hostCwd, '.diagnostics-locked-test');
+          
+          await fsPromises.writeFile(checkFilePath, 'check');
+          await fsPromises.unlink(checkFilePath);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          writeLog(`[DIAGNOSTICS] Host file-system write-check failed: "${msg}". However, the container is up and responsive, so we continue to run real gates.`);
+        }
       }
 
       if (fallbackUsed) {
