@@ -15,7 +15,7 @@ interface CodeReviewResult {
   findings: CodeReviewFinding[];
   summary: string;
 }
-
+const PORT = parseInt(process.env.PORT || '3000', 10);
 /**
  * ProviderRegistry routes gemini (and other non-anthropic-direct) calls through
  * this app's own '/api/providers/:provider/*' proxy route rather than hitting
@@ -24,14 +24,10 @@ interface CodeReviewResult {
  * runs headless in CI, so it has to stand the proxy up itself for the duration
  * of the review call.
  */
-function startProviderProxy(): Promise<Server> {
+function startProviderProxy(): Promise<Server> {  
+  process.env.COPILOT_API_URL = `http://127.0.0.1:${PORT}`;
   return new Promise((resolve, reject) => {
-    const server = app.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      const port = addr && typeof addr !== 'string' ? addr.port : 0;
-      process.env.COPILOT_API_URL = `http://127.0.0.1:${port}`;
-      resolve(server);
-    });
+    const server = app.listen(PORT, '127.0.0.1', () => resolve(server));
     server.on('error', reject);
   });
 }
@@ -113,6 +109,8 @@ You must not answer conversationally and must strictly invoke 'submit_code_revie
   } catch (commentErr) {
     console.warn('[review-pr] failed to post PR comment using GitHub CLI (this is expected if the run originates from a fork or lacks write permissions):', commentErr);
   }
+
+  process.exit(0);
 }
 
 main().catch((err) => {
