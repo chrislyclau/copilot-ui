@@ -109,6 +109,8 @@ You must not answer conversationally and must strictly invoke 'submit_code_revie
   } catch (commentErr) {
     console.warn('[review-pr] failed to post PR comment using GitHub CLI (this is expected if the run originates from a fork or lacks write permissions):', commentErr);
   }
+
+  process.exit(0);
 }
 
 main().catch((err) => {
