@@ -128,6 +128,95 @@ export class GitSandbox {
         return this.withLock(() => this.git(["checkout", branchName]));
     }
 
+    public async checkoutTaskBranch(taskId: string): Promise<string> {
+        return this.withLock(async () => {
+            // Return to base branch first so we don't try to delete the active branch
+            try {
+                await this.git(["checkout", "main"]);
+            } catch (e) {
+                try {
+                    await this.git(["checkout", "master"]);
+                } catch (e2) {}
+            }
+
+            // Delete branch if it already exists to start fresh off current clean HEAD
+            try {
+                await this.git(["branch", "-D", `task/${taskId}`]);
+            } catch (e) {
+                // Ignore if the branch did not exist
+            }
+            const out = await this.git(["checkout", "-b", `task/${taskId}`]);
+            
+            // Persist the branch name on the task record in SQLite
+            try {
+                const { getTask, saveTask } = await import("../db/taskStore");
+                const task = getTask(taskId);
+                if (task) {
+                    saveTask({
+                        ...task,
+                        branchName: `task/${taskId}`,
+                        updatedAt: Date.now()
+                    });
+                }
+            } catch (err) {
+                // Ignore or log error
+            }
+            return out;
+        });
+    }
+
+    public async parkTaskBranch(taskId: string): Promise<string> {
+        return this.withLock(async () => {
+            // Stage and commit all current changes on the task branch
+            await this.git(["add", "-A"]);
+            await this.git(["commit", "--allow-empty", "-m", `Park task ${taskId}`]);
+
+            // Persist the branch name on the task record in SQLite
+            try {
+                const { getTask, saveTask } = await import("../db/taskStore");
+                const task = getTask(taskId);
+                if (task) {
+                    saveTask({
+                        ...task,
+                        branchName: `task/${taskId}`,
+                        updatedAt: Date.now()
+                    });
+                }
+            } catch (err) {
+                // Ignore or log error
+            }
+
+            // Return to base branch (try main, then master)
+            try {
+                return await this.git(["checkout", "main"]);
+            } catch (e) {
+                return await this.git(["checkout", "master"]);
+            }
+        });
+    }
+
+    public async resumeTaskBranch(taskId: string): Promise<string> {
+        return this.withLock(async () => {
+            const out = await this.git(["checkout", `task/${taskId}`]);
+
+            // Persist the branch name on the task record in SQLite
+            try {
+                const { getTask, saveTask } = await import("../db/taskStore");
+                const task = getTask(taskId);
+                if (task) {
+                    saveTask({
+                        ...task,
+                        branchName: `task/${taskId}`,
+                        updatedAt: Date.now()
+                    });
+                }
+            } catch (err) {
+                // Ignore or log error
+            }
+            return out;
+        });
+    }
+
     // -------------------------------------------------------------------------
     // Private implementations
     // -------------------------------------------------------------------------

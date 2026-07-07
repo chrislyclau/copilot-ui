@@ -67,7 +67,7 @@ export class ProviderRegistry {
       }
       return {
         type: 'openai',
-        baseUrl: `http://127.0.0.1:${process.env.PORT || 3000}/api/providers/gemini/v1beta/openai/`,
+        baseUrl: process.env.COPILOT_API_URL ? `${process.env.COPILOT_API_URL}/api/providers/gemini/v1beta/openai/` : `http://127.0.0.1:${process.env.PORT || 3000}/api/providers/gemini/v1beta/openai/`,
         apiKey: this.apiKey
       };
     } else if (provider === 'anthropic') {

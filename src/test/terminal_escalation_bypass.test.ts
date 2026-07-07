@@ -50,6 +50,10 @@ This task is pending and should be picked up after Step 1 gets blocked.
       }
     }, null, 2));
 
+    // Commit baseline files to git sandbox so they are tracked on main and not deleted during branch switches
+    const { getGitSandbox } = await import('../workspace');
+    await getGitSandbox().commitAllChangesAsync("baseline files for terminal bypass test");
+
     const snapshotPath = path.resolve(tempCwd, 'bypass_snapshot.yaml');
     fs.writeFileSync(snapshotPath, `conversations:
   - messages:

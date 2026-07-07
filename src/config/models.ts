@@ -13,6 +13,7 @@ export interface SystemRolesConfig {
   planner: ModelProviderConfig;
   executorTiers: ModelProviderConfig[]; // Tiered ladder for execution
   auditor: ModelProviderConfig;
+  reviewer: ModelProviderConfig;
 }
 
 export const KNOWN_MODELS_CONFIG: ModelProviderConfig[] = [
@@ -54,6 +55,11 @@ export const DEFAULT_ROLES_CONFIG: SystemRolesConfig = {
     provider: (typeof process !== 'undefined' && process.env?.AUDITOR_PROVIDER as ProviderType) || 'gemini',
     model: (typeof process !== 'undefined' && process.env?.AUDITOR_MODEL) || 'gemini-3.1-flash-lite',
     tokenRatio: 3.5
+  },
+  reviewer: {
+    provider: (typeof process !== 'undefined' && process.env?.REVIEWER_PROVIDER as ProviderType) || 'gemini',
+    model: (typeof process !== 'undefined' && process.env?.REVIEWER_MODEL) || 'gemini-3.1-pro-preview',
+    tokenRatio: 3.0
   }
 };
 

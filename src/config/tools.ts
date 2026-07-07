@@ -103,6 +103,42 @@ export const submitSpecAuditTool = {
   }
 };
 
+export const submitCodeReviewTool = {
+  type: 'function',
+  function: {
+    name: "submit_code_review",
+    description: "Submit code review findings for the current PR diff.",
+    parameters: {
+      type: "object",
+      properties: {
+        findings: {
+          type: "array",
+          description: "List of individual review findings.",
+          items: {
+            type: "object",
+            properties: {
+              severity: {
+                type: "string",
+                enum: ["blocking", "suggestion", "nit"],
+                description: "How serious the finding is. Purely for comment formatting -- does not gate anything."
+              },
+              file: { type: "string", description: "File path the finding applies to." },
+              line: { type: "number", description: "Line number in the new version of the file, if applicable." },
+              message: { type: "string", description: "Description of the issue or suggestion." }
+            },
+            required: ["severity", "file", "message"]
+          }
+        },
+        summary: {
+          type: "string",
+          description: "One or two sentence overall summary of the PR's quality and the review outcome."
+        }
+      },
+      required: ["findings", "summary"]
+    }
+  }
+};
+
 export const AMBIGUITY_CHECK_TOOL = {
   type: 'function',
   function: {

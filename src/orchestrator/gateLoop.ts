@@ -117,6 +117,11 @@ function pruneConversationHistory(history: ReadonlyArray<{ role: 'user' | 'assis
   return enforceWorkingMemoryTruncation(history);
 }
 
+export let globalAutoApproveAll = process.env.NODE_ENV === 'test';
+export function setGlobalAutoApproveAll(val: boolean) {
+  globalAutoApproveAll = val;
+}
+
 // Least-privilege permission evaluator for incoming commands and tools
 export const handleGateRunPermission = async (req: PermissionRequest): Promise<PermissionRequestResult & { reason?: string }> => {
   let toolName = '';
@@ -144,6 +149,11 @@ export const handleGateRunPermission = async (req: PermissionRequest): Promise<P
     }
   }
   
+  if (globalAutoApproveAll) {
+    writeLog(`[Security] Auto-approving tool/command execution: ${toolName || 'unknown'}`, LogLevel.INFO);
+    return { kind: 'approve-once' };
+  }
+
   // Safe read-only/audit tools
   const safeTools = ['submit_audit_findings', 'ambiguity_check', 'composer_router'];
   if (safeTools.includes(toolName)) {
@@ -782,6 +792,31 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     } catch (err) {
       writeLog(`[GateLoop] Task decomposition failed: ${err}`);
     }
+
+    if (activeTaskId) {
+      try {
+        const taskRecord = getTask(activeTaskId);
+        if (taskRecord && taskRecord.branchName) {
+          writeLog(`[GateLoop] Task ${activeTaskId} has existing branch ${taskRecord.branchName}. Resuming branch.`);
+          await getGitSandbox().resumeTaskBranch(activeTaskId);
+        } else {
+          writeLog(`[GateLoop] Task ${activeTaskId} has no existing branch. Creating new branch.`);
+          await getGitSandbox().checkoutTaskBranch(activeTaskId);
+        }
+      } catch (err) {
+        writeLog(`[GateLoop] Error checking out/resuming task branch: ${err}`);
+        const taskRecord = getTask(activeTaskId);
+        if (taskRecord) {
+          saveTask({
+            ...taskRecord,
+            status: "blocked",
+            blockedReason: `Failed to checkout/resume branch: ${err instanceof Error ? err.message : String(err)}`,
+            updatedAt: Date.now()
+          });
+        }
+        throw new Error(`Failed to checkout/resume branch: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     
     const activeSessionRecord = sessionId ? activeSessions.get(sessionId) : null;
     const taskLabel = promptStr.length > 50 ? promptStr.slice(0, 47) + '...' : promptStr;
@@ -987,12 +1022,14 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
     const moveToNextTask = async (failureReason: string, failureGate: string): Promise<boolean> => {
       writeLog(`[GateLoop] moveToNextTask initiated. Failure reason: ${failureReason}. Failure gate: ${failureGate}`);
       
-      // 1. Commit or stash whatever is in the working tree
-      try {
-        await getGitSandbox().commitAllChangesAsync(`Terminal Escalation: Blocked task ${activeTaskId || 'unknown'}`);
-        writeLog(`[GateLoop] Staged and committed working tree changes for blocked task ${activeTaskId || 'unknown'}`);
-      } catch (e) {
-        writeLog(`[GateLoop] Error committing on terminal escalation: ${e}`);
+      // 1. Park the current active task branch (which commits changes, saves branch name, and returns to base)
+      if (activeTaskId) {
+        try {
+          await getGitSandbox().parkTaskBranch(activeTaskId);
+          writeLog(`[GateLoop] Parked task branch for: ${activeTaskId}`);
+        } catch (e) {
+          writeLog(`[GateLoop] Error parking task branch on terminal escalation: ${e}`);
+        }
       }
 
       // 2. Mark task blocked in the tasks table with the failure reason
@@ -1013,20 +1050,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         }
       }
 
-      // 3. Checkout back to base branch
-      try {
-        try {
-          await getGitSandbox().checkoutAsync('main');
-          writeLog(`[GateLoop] Checked out back to base branch: main`);
-        } catch (checkoutErr) {
-          await getGitSandbox().checkoutAsync('master');
-          writeLog(`[GateLoop] Checked out back to base branch: master`);
-        }
-      } catch (err) {
-        writeLog(`[GateLoop] Error checking out back to base branch: ${err}`);
-      }
-
-      // 4. Pull next pending task from queue
+      // 3. Pull next pending task from queue
       let nextTask: TaskRecord | undefined;
       try {
         const decomposition = await decomposeSpecIntoTasks(runCwd);
@@ -1037,7 +1061,7 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
         writeLog(`[GateLoop] Error pulling next pending task: ${err}`);
       }
 
-      // 5. Continue loop
+      // 4. Continue loop
       if (nextTask) {
         try {
           saveTask({
@@ -1047,8 +1071,19 @@ export const handleGateLoop = async (req: express.Request, res: express.Response
           });
           activeTaskId = nextTask.taskId;
           writeLog(`[GateLoop] Selected next pending task to run: ${activeTaskId}`);
+
+          // Checkout or resume branch for the new active task
+          const taskRecord = getTask(activeTaskId);
+          if (taskRecord && taskRecord.branchName) {
+            writeLog(`[GateLoop] Task ${activeTaskId} has existing branch ${taskRecord.branchName}. Resuming branch.`);
+            await getGitSandbox().resumeTaskBranch(activeTaskId);
+          } else {
+            writeLog(`[GateLoop] Task ${activeTaskId} has no existing branch. Creating new branch.`);
+            await getGitSandbox().checkoutTaskBranch(activeTaskId);
+          }
         } catch (err) {
-          writeLog(`[GateLoop] Error marking next task as running: ${err}`);
+          writeLog(`[GateLoop] Error marking next task as running or checking out its branch: ${err}`);
+          return false;
         }
 
         // Reset loop variables and state

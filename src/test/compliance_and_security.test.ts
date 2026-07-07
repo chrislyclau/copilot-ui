@@ -92,7 +92,7 @@ describe('Compliance and Security Gating', () => {
 
   it('should deny unauthorized tools via handleGateRunPermission', async () => {
     const { serverModule } = serverHarness;
-    const { handleGateRunPermission } = serverModule;
+    const { handleGateRunPermission, setGlobalAutoApproveAll } = serverModule;
 
     // Test a "safe" tool
     const safeRes = await handleGateRunPermission({ toolName: 'ambiguity_check' });
@@ -102,15 +102,17 @@ describe('Compliance and Security Gating', () => {
     // Wait, the code says:
     // if (process.env.NODE_ENV === 'test') return { kind: 'approve-once' };
     
-    // So for this test, we temporarily unset NODE_ENV
+    // So for this test, we temporarily unset NODE_ENV and globalAutoApproveAll
     const oldNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
+    setGlobalAutoApproveAll(false);
     try {
       const dangerousRes = await handleGateRunPermission({ toolName: 'rm_rf_root' });
       expect(dangerousRes.kind).toBe('reject');
       expect(dangerousRes.reason).toContain('not authorized');
     } finally {
       process.env.NODE_ENV = oldNodeEnv;
+      setGlobalAutoApproveAll(true);
     }
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, beforeAll, afterAll, expect, beforeEach } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { handleGateRunPermission } from '../orchestrator/gateLoop';
+import { handleGateRunPermission, setGlobalAutoApproveAll } from '../orchestrator/gateLoop';
 import { activeSessions, sseResToSessionId, activeLocks } from '../orchestrator/sessionState';
 import { CapiProxy } from './harness/CapiProxy';
 
@@ -12,10 +12,12 @@ describe('handleGateRunPermission Unit Tests', () => {
   beforeEach(() => {
     activeSessions.clear();
     process.env.NODE_ENV = 'production'; // Set to production so the environment check doesn't auto-approve everything
+    setGlobalAutoApproveAll(false);
   });
 
   afterAll(() => {
     process.env.NODE_ENV = originalEnv;
+    setGlobalAutoApproveAll(true);
   });
 
   it('should auto-approve safe utility tools', async () => {
