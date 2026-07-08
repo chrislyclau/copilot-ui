@@ -30,27 +30,28 @@ export function getAuditorExecutionConfig(apiKey?: string): ExecutionConfig {
 
   // Resolve the key based on the provider
   let keyToUse = apiKey;
-  let envVarName = 'GEMINI_API_KEY';
+  let envVarName = "GEMINI_API_KEY";
 
   if (!keyToUse) {
-    if (provider === 'gemini') {
+    if (provider === "gemini") {
       keyToUse = process.env.GEMINI_API_KEY;
-      envVarName = 'GEMINI_API_KEY';
-    } else if (provider === 'anthropic') {
+      envVarName = "GEMINI_API_KEY";
+    } else if (provider === "anthropic") {
       keyToUse = process.env.ANTHROPIC_API_KEY;
-      envVarName = 'ANTHROPIC_API_KEY';
-    } else if (provider === 'openai') {
+      envVarName = "ANTHROPIC_API_KEY";
+    } else if (provider === "openai") {
       keyToUse = process.env.OPENAI_API_KEY;
-      envVarName = 'OPENAI_API_KEY';
-    }
-    // Fallback to GEMINI_API_KEY if specific one is missing, as many setups route through it
-    if (!keyToUse && provider !== 'gemini' && process.env.GEMINI_API_KEY) {
-      keyToUse = process.env.GEMINI_API_KEY;
+      envVarName = "OPENAI_API_KEY";
+    } else if (provider === "openrouter") {
+      keyToUse = process.env.OPENROUTER_API_KEY;
+      envVarName = "OPENROUTER_API_KEY";
     }
   }
 
-  if (!keyToUse && provider !== 'copilot-native' && provider !== 'local') {
-    throw new Error(`Missing API key for auditor provider "${provider}". Expected ${envVarName} to be set.`);
+  if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
+    throw new Error(
+      `Missing API key for auditor provider "${provider}". Expected ${envVarName} to be set.`,
+    );
   }
 
   const registry = new ProviderRegistry(keyToUse);
@@ -69,26 +70,29 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
   const provider = reviewerConfig.provider;
 
   let keyToUse = apiKey;
-  let envVarName = 'GEMINI_API_KEY';
+  let envVarName = "GEMINI_API_KEY";
 
   if (!keyToUse) {
-    if (provider === 'gemini') {
+    if (provider === "gemini") {
       keyToUse = process.env.GEMINI_API_KEY;
-      envVarName = 'GEMINI_API_KEY';
-    } else if (provider === 'anthropic') {
+      envVarName = "GEMINI_API_KEY";
+    } else if (provider === "anthropic") {
       keyToUse = process.env.ANTHROPIC_API_KEY;
-      envVarName = 'ANTHROPIC_API_KEY';
-    } else if (provider === 'openai') {
+      envVarName = "ANTHROPIC_API_KEY";
+    } else if (provider === "openai") {
       keyToUse = process.env.OPENAI_API_KEY;
-      envVarName = 'OPENAI_API_KEY';
-    }
-    if (!keyToUse && provider !== 'gemini' && process.env.GEMINI_API_KEY) {
-      keyToUse = process.env.GEMINI_API_KEY;
+      envVarName = "OPENAI_API_KEY";
+    } else if (provider === "openrouter") {
+      keyToUse = process.env.OPENROUTER_API_KEY;
+      envVarName = "OPENROUTER_API_KEY";
     }
   }
 
-  if (!keyToUse && provider !== 'copilot-native' && provider !== 'local') {
-    throw new Error(`Missing API key for reviewer provider "${provider}". Expected ${envVarName} to be set.`);
+
+  if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
+    throw new Error(
+      `Missing API key for reviewer provider "${provider}". Expected ${envVarName} to be set.`,
+    );
   }
 
   const registry = new ProviderRegistry(keyToUse);
@@ -106,10 +110,9 @@ export function buildAuditorSessionSettings(
   systemPrompt: string,
   tool: any,
   onResult: (result: any) => void,
-  responseRequirements: ResponseRequirement
-) {
+  responseRequirements: ResponseRequirement) {
   const toolName = tool.function.name;
-  
+
   return {
     model: executionConfig.model,
     ...(executionConfig.provider ? { provider: executionConfig.provider as any } : {}),
@@ -126,16 +129,14 @@ export function buildAuditorSessionSettings(
           onResult(args);
           return { status: "received" };
         }
-      }
-    ],
+      } ],
     tool_choice: responseRequirements.toolChoice,
     onPermissionRequest: async (req: any) => {
       if (responseRequirements.allowOthers) return { kind: 'approve-once' };
-
       const requestedTool = req.toolName || req.name || (req.toolCalls && req.toolCalls[0]?.function?.name);
       const allowed = !requestedTool || requestedTool === toolName || 
         (Array.isArray(req.toolCalls) && req.toolCalls.every((tc: any) => tc.function?.name === toolName));
-      
+
       return allowed ? { kind: 'approve-once' } : { kind: 'reject', reason: 'Auditor sessions must not execute tools.' };
     },
     streaming: false,
@@ -154,20 +155,18 @@ export async function executeAuditSession<T>(
   userPrompt: string,
   responseRequirements: ResponseRequirement,
   abortSignal?: AbortSignal,
-  timeoutMs: number = 300000
-): Promise<T | null> {
+  timeoutMs: number = 300000,
+  onSessionId?: (sessionId: string) => void): Promise<T | null> {
   const client = new CopilotClient({
     workingDirectory,
     logLevel: 'none',
     useLoggedInUser: false,
   });
-
   let result: T | null = null;
-
   try {
     console.log('[executeAuditSession] starting client...');
     await client.start();
-    
+
     const sessionSettings = buildAuditorSessionSettings(
       executionConfig,
       systemPrompt,
@@ -175,9 +174,10 @@ export async function executeAuditSession<T>(
       (args) => { result = args as T; },
       responseRequirements
     );
-
     console.log('[executeAuditSession] creating session...');
     const session = await client.createSession(sessionSettings as any);
+    console.log(`[executeAuditSession] session created: ${session.sessionId}`);
+    onSessionId?.(session.sessionId);
     console.log('[executeAuditSession] sending and waiting for response...');
     if (abortSignal) {
       await Promise.race([
@@ -193,7 +193,7 @@ export async function executeAuditSession<T>(
     }
     console.log('[executeAuditSession] disconnecting session...');
     await session.disconnect();
-    
+
     console.log('[executeAuditSession] complete!');
     return result;
   } finally {

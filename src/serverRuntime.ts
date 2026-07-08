@@ -64,7 +64,7 @@ export {
 };
 
 export type { CopilotCreateSessionOptions };
-import { DEFAULT_ROLES_CONFIG } from './config/models';
+import { DEFAULT_ROLES_CONFIG, ProviderType } from './config/models';
 import { runGate, runTests, runLint, runWithTimeout } from './gates';
 import { MODEL_TIERS, getNextTier } from './config/models';
 import { SessionRecord, StateSnapshot, CopilotEventData, Turn, getSequenceId } from './types/session';
@@ -149,7 +149,7 @@ const envPath = path.join(process.cwd(), '.env');
 
 function rebuildSensitiveValuesCache() {
   const newValues = new Set<string>();
-  const SECRET_ENV_WHITELIST = ['GEMINI_API_KEY', 'COPILOT_JWT', 'COPILOT_CLIENT_SECRET', 'GITHUB_OAUTH_CLIENT_SECRET'];
+  const SECRET_ENV_WHITELIST = ['GEMINI_API_KEY', 'COPILOT_JWT', 'COPILOT_CLIENT_SECRET', 'GITHUB_OAUTH_CLIENT_SECRET', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY'] as const;
 
   // Process env keys from the whitelist only
   for (const envKey of SECRET_ENV_WHITELIST) {
@@ -170,7 +170,7 @@ function rebuildSensitiveValuesCache() {
           const parts = trimmed.split('=');
           if (parts.length >= 2) {
             const key = parts[0]?.trim();
-            if (key && SECRET_ENV_WHITELIST.includes(key)) {
+            if (key && (SECRET_ENV_WHITELIST as readonly string[]).includes(key)) {
               const val = parts.slice(1).join('=').trim().replace(/^["']|["']$/g, '');
               if (val && val.length > 4 && val !== 'MY_GEMINI_API_KEY') {
                 newValues.add(val);
@@ -228,6 +228,30 @@ setupEnvWatcherWithBackoff();
  */
 function pruneConversationHistory(history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>) {
   return enforceWorkingMemoryTruncation(history);
+}
+
+/**
+ * Maps a provider type to its corresponding environment variable key.
+ * Falls back to GEMINI_API_KEY when the provider-specific key is not set.
+ */
+function resolveProviderSpecificKey(providerType: ProviderType): string | undefined {
+  switch (providerType) {
+    case "gemini":
+      return process.env.GEMINI_API_KEY;
+    case "openai":
+      return process.env.OPENAI_API_KEY;
+    case "anthropic":
+      return process.env.ANTHROPIC_API_KEY;
+    case "openrouter":
+      return process.env.OPENROUTER_API_KEY;
+    case "copilot-native":
+    case "local":
+      return undefined;
+    default: {
+      const _exhaustiveCheck: never = providerType;
+      return undefined;
+    }
+  }
 }
 
 const { secureWrite, flushSseAndEnd } = createSseWriter({
@@ -332,6 +356,32 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     next();
   });
 
+/**
+ * Session id to stamp onto outgoing OpenRouter request bodies as "session_id",
+ * so requests from a given copilot-sdk session are grouped together in
+ * OpenRouter's dashboard/logs. Set by the caller (e.g. review-pr.ts) right
+ * after a CopilotSession is created, before any prompt is sent.
+ *
+ * NOTE: this is a single module-level value, not per-request. That's fine for
+ * a short-lived, single-session process like review-pr.ts (which starts its
+ * own dedicated instance of this proxy), but it is NOT safe if this server is
+ * ever handling multiple concurrent copilot-sdk sessions at once (e.g. the
+ * main long-running app) -- concurrent sessions would stamp each other's
+ * requests with the wrong session_id. The SDK does not currently send any
+ * per-request session identifier we could forward instead, so a real fix for
+ * the concurrent case would need to come from there.
+ *
+ * TODO: not safe for concurrent multi-session use of this server (e.g. the
+ * main long-running app). Before reusing this proxy for anything beyond a
+ * single-session process like review-pr.ts, either scope this per-request
+ * (e.g. via a header/query param carrying the session id, once the SDK
+ * supports emitting one) or otherwise stop relying on shared module state.
+ */
+let activeOpenRouterSessionId: string | undefined;
+export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
+  activeOpenRouterSessionId = sessionId;
+}
+
   // Generic adapter registry route for model providers (SYS-REQ-004 & SYS-REQ-005)
   app.all('/api/providers/:provider/*', (req, res) => {
     let bodyData = '';
@@ -361,9 +411,36 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         }
       } else if (provider === 'anthropic') {
         targetHostname = 'api.anthropic.com';
+      } else if (provider === 'openrouter') {
+        targetHostname = 'openrouter.ai';
+        try {
+          if (bodyData && activeOpenRouterSessionId) {
+            const data = JSON.parse(bodyData);
+            if (data && typeof data === 'object' && !data.session_id) {
+              data.session_id = activeOpenRouterSessionId;
+              modifiedBody = JSON.stringify(data);
+            }
+          }
+        } catch (e) {
+          writeLog("Provider parse error (openrouter session_id): " + e);
+        }
       }
 
-      const headers = { ...req.headers, host: targetHostname };
+      const headers: Record<string, string | string[] | undefined> = { ...req.headers, host: targetHostname };
+      if (provider === 'openrouter') {
+        if (!headers.authorization) {
+          const key = process.env.OPENROUTER_API_KEY;
+          if (key) {
+            headers.authorization = `Bearer ${key}`;
+          }
+        }
+        if (!headers['http-referer']) {
+          headers['http-referer'] = 'https://github.com/github/copilot';
+        }
+        if (!headers['x-openrouter-title']) {
+          headers['x-openrouter-title'] = 'GitHub Copilot';
+        }
+      }
       delete headers['accept-encoding'];
       headers['content-length'] = Buffer.byteLength(modifiedBody).toString();
 
@@ -542,34 +619,48 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
     let testClient: CopilotClient | null = null;
     try {
       const { apiKey, model } = req.query;
-      const keyToUse = (apiKey as string) || process.env.GEMINI_API_KEY;
+      const activeModel = (typeof model === "string" ? model : undefined) || "gemini-3.1-flash-lite";
 
-      const activeModel = (model as string) || 'gemini-3.1-flash-lite';
+      // Resolve the provider first to determine which env var to check for the key
+      const detectionInstance = new ProviderRegistry(undefined);
+      const activeProviderType = detectionInstance.getProviderType(activeModel);
+
+      // Map the active provider to its specific env var
+      const providerSpecificKey =
+        resolveProviderSpecificKey(activeProviderType);
+      const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;
+
       const registryInstance = new ProviderRegistry(keyToUse);
-      const executionConfig = registryInstance.getExecutionConfig(activeModel);
 
-      // Determine if a key is actually required by checking the mapped provider
-      const activeProviderType = executionConfig.providerType;
-      const requiresKey = activeProviderType !== 'copilot-native' && activeProviderType !== 'local';
+      const requiresKey =
+        activeProviderType !== "copilot-native" &&
+        activeProviderType !== "local";
 
-      if (requiresKey && (!keyToUse || keyToUse === 'MY_GEMINI_API_KEY')) {
-        res.status(400).json({ success: false, error: 'API Key is missing for the selected provider. Please add your key under Settings > Secrets, or type your own key.' });
+      if (requiresKey && (!keyToUse || keyToUse === "MY_GEMINI_API_KEY")) {
+        res.status(400).json({
+          success: false,
+          error:
+            "API Key is missing for the selected provider. Please add your key under Settings > Secrets, or type your own key.",
+        });
         return;
       }
 
+      const executionConfig = registryInstance.getExecutionConfig(activeModel);
+
       const outputLines: string[] = [];
       const addLine = (msg: string) => {
-        const timestamp = new Date().toISOString().split('T')[1]?.slice(0, -1) || '';
+        const timestamp =
+          new Date().toISOString().split("T")[1]?.slice(0, -1) || "";
         outputLines.push(`[${timestamp}] ${msg}`);
       };
 
       addLine("🔧 Starting Client connection test run...");
       addLine(`Using model: ${activeModel}`);
       addLine("Initializing CopilotClient...");
-      
+
       testClient = new CopilotClient({
         workingDirectory: DEFAULT_WORKSPACE_DIR,
-        logLevel: 'none',
+        logLevel: "none",
         useLoggedInUser: false,
       });
 
@@ -581,15 +672,19 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
       testSession = await testClient.createSession({
         model: executionConfig.model,
-        ...(executionConfig.provider ? { provider: executionConfig.provider } : {}),
+        ...(executionConfig.provider
+          ? { provider: executionConfig.provider }
+          : {}),
         streaming: true,
       });
       if (testSession) {
-        addLine(`✓ Test session created successfully. Session ID: ${testSession.sessionId}`);
+        addLine(
+          `✓ Test session created successfully. Session ID: ${testSession.sessionId}`,
+        );
       }
 
       addLine("Sending probe message: 'What is 2+2?'");
-      
+
       let answer = "";
       if (!testSession) throw new Error("testSession is null");
       const currentTestSession = testSession;
@@ -600,10 +695,10 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         }, 12000);
 
         currentTestSession.on((event: SessionEvent) => {
-          if (event.type === 'assistant.message') {
+          if (event.type === "assistant.message") {
             answer = (event.data as { content?: string })?.content || "";
             addLine(`[EVENT] assistant.message: "${answer}"`);
-          } else if (event.type === 'assistant.message_delta') {
+          } else if (event.type === "assistant.message_delta") {
             if ((event.data as { deltaContent?: string })?.deltaContent) {
               // limit delta noise
             }
@@ -611,7 +706,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
             addLine(`[EVENT] ${event.type}`);
           }
 
-          if (event.type === 'session.idle' || event.type === 'session.error') {
+          if (event.type === "session.idle" || event.type === "session.error") {
             clearTimeout(timeout);
             addLine(`✓ Session went idle (run completed). (${event.type})`);
             resolve();
@@ -898,33 +993,45 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
     try {
       const { prompt, apiKey, model, cwd, sessionId } = req.body;
-      const keyToUse = (apiKey as string) || process.env.GEMINI_API_KEY;
+      const targetModel = (typeof model === "string" ? model : undefined) || "gemini-3.1-flash-lite";
+
+      // Resolve the provider first to determine which env var to check for the key
+      const detectionInstance = new ProviderRegistry(undefined);
+      const activeProviderType = detectionInstance.getProviderType(targetModel);
+
+      // Map the active provider to its specific env var
+      const providerSpecificKey =
+        resolveProviderSpecificKey(activeProviderType);
+      const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;
 
       if (sessionId) {
         const sess = activeSessions.get(sessionId);
         if (sess && sess.stateSnapshot?.manualIntervention) {
-          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('Session locked due to manual panic intervention.');
+          res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Session locked due to manual panic intervention.");
           return;
         }
       }
 
-      writeLog(`[API Request] POST /api/copilot/run: model=${model || 'default'}, cwd=${cwd || 'default'}, sessionId=${sessionId || 'none'}, promptLength=${prompt ? prompt.length : 0}`);
+      writeLog(
+        `[API Request] POST /api/copilot/run: model=${model || "default"}, cwd=${cwd || "default"}, sessionId=${sessionId || "none"}, promptLength=${prompt ? prompt.length : 0}`,
+      );
 
-      const targetModel = (model as string) || 'gemini-3.1-flash-lite';
       const registryInstance = new ProviderRegistry(keyToUse);
-      const executionConfig = registryInstance.getExecutionConfig(targetModel);
 
-      // Determine if a key is actually required by checking the mapped provider
-      const activeProviderType = executionConfig.providerType;
+      const requiresKey =
+        activeProviderType !== "copilot-native" &&
+        activeProviderType !== "local";
 
-      const requiresKey = activeProviderType !== 'copilot-native' && activeProviderType !== 'local';
-
-      if (requiresKey && (!keyToUse || keyToUse === 'MY_GEMINI_API_KEY')) {
-        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('API Key is missing for the selected provider. Please add your key under Settings > Secrets, or type your own key in the "Bring Your Own Key" input.');
+      if (requiresKey && (!keyToUse || keyToUse === "MY_GEMINI_API_KEY")) {
+        res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(
+          'API Key is missing for the selected provider. Please add your key under Settings > Secrets, or type your own key in the "Bring Your Own Key" input.',
+        );
         return;
       }
+
+      const executionConfig = registryInstance.getExecutionConfig(targetModel);
 
       const promptStr = prompt as string;
       if (!promptStr || promptStr.trim() === '') {

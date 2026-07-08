@@ -124,7 +124,12 @@ export const submitCodeReviewTool = {
               },
               file: { type: "string", description: "File path the finding applies to." },
               line: { type: "number", description: "Line number in the new version of the file, if applicable." },
-              message: { type: "string", description: "Description of the issue or suggestion." }
+              message: { type: "string", description: "Description of the issue or suggestion." },
+              status: {
+                type: "string",
+                enum: ["new", "still-open", "resolved"],
+                description: "Only set this for 'blocking' findings that were listed in the 'Previously reported blocking findings' section of the prompt. Set 'resolved' if the diff shows it has been fixed, 'still-open' if it persists, or 'new' if it's a blocking issue you're raising for the first time. Omit for suggestion/nit findings, and omit for blocking findings that have no prior-round counterpart (those are implicitly 'new')."
+              }
             },
             required: ["severity", "file", "message"]
           }

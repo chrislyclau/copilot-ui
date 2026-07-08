@@ -26,6 +26,7 @@ jobs:
       - name: Run review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           REVIEWER_PROVIDER: ${{vars.REVIEWER_PROVIDER}}
           REVIEWER_MODEL: ${{vars.REVIEWER_MODEL}}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
