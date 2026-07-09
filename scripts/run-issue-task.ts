@@ -119,16 +119,23 @@ async function main() {
         content: systemPrompt,
       },
       tools: [runGhCommandTool],
-      tool_choice: 'auto',
-      mode: 'empty',
       availableTools: new ToolSet().addCustom(RUN_GH_COMMAND_TOOL_NAME),
       autoApproveAll: false,
       onPermissionRequest: async (req) => {
-        const requestedTool = req.toolName || req.name || (req.toolCalls && req.toolCalls[0]?.function?.name);
+        let requestedTool: string | undefined;
+        if ('toolName' in req) {
+          requestedTool = req.toolName as string;
+        } else if ('name' in req) {
+          requestedTool = req.name as string;
+        } else if ('toolCalls' in req && Array.isArray(req.toolCalls)) {
+          const firstCall = req.toolCalls[0] as { function?: { name?: string } } | undefined;
+          requestedTool = firstCall?.function?.name;
+        }
+
         if (requestedTool === RUN_GH_COMMAND_TOOL_NAME) {
           return { kind: 'approve-once' };
         }
-        return { kind: 'reject', reason: `Tool ${requestedTool} is not permitted.` };
+        return { kind: 'reject', reason: `Tool ${requestedTool || 'unknown'} is not permitted.` };
       },
       streaming: false,
     };
