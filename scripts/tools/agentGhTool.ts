@@ -18,7 +18,6 @@ export const ALLOWED_GH_COMMANDS: readonly string[] = [
   'pr view',
   'pr diff',
   'pr comment',
-  'pr create',
   'label list',
 ];
 
@@ -96,7 +95,7 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
       }
 
       const hasRepoArg = args.some((arg) =>
-        arg === '--repo' || arg === '-R' || arg.startsWith('--repo=') || arg.startsWith('-R=')
+        arg === '--repo' || arg.startsWith('--repo=') || arg.startsWith('-R')
       );
       if (hasRepoArg) {
         const message = 'Rejected: cross-repo access is forbidden. Remove --repo/-R flags.';
@@ -109,6 +108,7 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         const output = execFileSync('gh', args, {
           encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
+          timeout: 60000,
         });
         return { output };
       } catch (err: any) {

@@ -1,4 +1,7 @@
-import { CopilotClient as BaseCopilotClient } from '@github/copilot-sdk';
+import { CopilotClient as BaseCopilotClient, ToolSet } from '@github/copilot-sdk';
+
+export { ToolSet };
+
 import type {
   CopilotSession,
   PermissionRequest,
