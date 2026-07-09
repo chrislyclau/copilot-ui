@@ -15,7 +15,6 @@ import type { Tool } from '../../src/copilotSdk/boundary';
 export const ALLOWED_GH_COMMANDS: readonly string[] = [
   'issue view',
   'issue comment',
-  'issue edit',
   'pr view',
   'pr diff',
   'pr comment',
@@ -93,6 +92,15 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
           `Rejected: "gh ${subcommandOf(args)}" is not on the allowlist. ` +
           `Allowed subcommands: ${ALLOWED_GH_COMMANDS.join(', ')}.`;
         console.warn(`[agentGhTool] Rejected disallowed gh subcommand: "${subcommandOf(args)}" (full args: ${JSON.stringify(args)})`);
+        return { error: message };
+      }
+
+      const hasRepoArg = args.some((arg) =>
+        arg === '--repo' || arg === '-R' || arg.startsWith('--repo=') || arg.startsWith('-R=')
+      );
+      if (hasRepoArg) {
+        const message = 'Rejected: cross-repo access is forbidden. Remove --repo/-R flags.';
+        console.warn(`[agentGhTool] ${message}`);
         return { error: message };
       }
 

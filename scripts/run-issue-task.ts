@@ -10,7 +10,8 @@ import { execFileSync } from 'node:child_process';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig } from '../src/utils/auditorHelper';
-import { CopilotClient } from '../src/copilotSdk/boundary';
+import { CopilotClient, type SessionConfig, type SdkProviderConfig } from '../src/copilotSdk/boundary';
+import { ToolSet } from '@github/copilot-sdk';
 import {
   createRunGhCommandTool,
   ALLOWED_GH_COMMANDS,
@@ -87,7 +88,6 @@ async function main() {
   } catch (err: any) {
     console.error(`[run-issue-task] failed to fetch issue #${issueNumber}:`, err?.message || err);
     process.exit(1);
-    return;
   }
 
   const systemPrompt = buildSystemPrompt(issueNumber);
@@ -111,19 +111,28 @@ async function main() {
     await client.start();
 
     console.log('[run-issue-task] creating session...');
-    const session = await client.createSession({
+    const sessionConfig: SessionConfig & { autoApproveAll?: boolean } = {
       model: executionConfig.model,
-      ...(executionConfig.provider ? { provider: executionConfig.provider as any } : {}),
+      ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
       systemMessage: {
         mode: 'replace',
         content: systemPrompt,
       },
       tools: [runGhCommandTool],
       tool_choice: 'auto',
-      // autoApproveAll left at its default (on, see src/copilotSdk/boundary.ts)
-      // -- this run is fully unattended, no permission prompts to answer.
+      mode: 'empty',
+      availableTools: new ToolSet().addCustom(RUN_GH_COMMAND_TOOL_NAME),
+      autoApproveAll: false,
+      onPermissionRequest: async (req) => {
+        const requestedTool = req.toolName || req.name || (req.toolCalls && req.toolCalls[0]?.function?.name);
+        if (requestedTool === RUN_GH_COMMAND_TOOL_NAME) {
+          return { kind: 'approve-once' };
+        }
+        return { kind: 'reject', reason: `Tool ${requestedTool} is not permitted.` };
+      },
       streaming: false,
-    } as any);
+    };
+    const session = await client.createSession(sessionConfig);
 
     sessionId = session.sessionId;
     console.log(`[run-issue-task] session created: ${sessionId}`);
