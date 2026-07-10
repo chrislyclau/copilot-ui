@@ -54,6 +54,8 @@ function normalizeBotLogin(login: string | undefined): string {
  * callers should treat null as "do a full review", never as a hard error.
  */
 export function loadPreviousReviewState(prNumber: string): ReviewState | null {
+  const INCREMENTAL_IS_SUBOPTIMAL = true; // TODO: We need to optimize it further before enabling it.
+  if(INCREMENTAL_IS_SUBOPTIMAL) return null;
   let comments: GhComment[];
   try {
     const raw = execFileSync(
