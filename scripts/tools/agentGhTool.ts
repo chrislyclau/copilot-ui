@@ -15,11 +15,9 @@ import type { Tool } from '../../src/copilotSdk/boundary';
 export const ALLOWED_GH_COMMANDS: readonly string[] = [
   'issue view',
   'issue comment',
-  'issue edit',
   'pr view',
   'pr diff',
   'pr comment',
-  'pr create',
   'label list',
 ];
 
@@ -96,11 +94,21 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         return { error: message };
       }
 
+      const hasRepoArg = args.some((arg) =>
+        arg === '--repo' || arg.startsWith('--repo=') || arg.startsWith('-R')
+      );
+      if (hasRepoArg) {
+        const message = 'Rejected: cross-repo access is forbidden. Remove --repo/-R flags.';
+        console.warn(`[agentGhTool] ${message}`);
+        return { error: message };
+      }
+
       try {
         console.log(`[agentGhTool] Running: gh ${args.join(' ')}`);
         const output = execFileSync('gh', args, {
           encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
+          timeout: 60000,
         });
         return { output };
       } catch (err: any) {
