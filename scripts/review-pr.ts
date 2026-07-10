@@ -76,20 +76,22 @@ function resolveDiffRange(
   previousState: ReviewState | null,
 ): { range: string; incremental: boolean } {
   if (!previousState) {
+    console.log("no prev");
     return { range: `${baseSha}...${headSha}`, incremental: false };
   }
   if (previousState.lastReviewedSha === headSha) {
+    console.log("not equal", previousState.lastReviewSha, headSha);
     return { range: `${baseSha}...${headSha}`, incremental: false };
   }
   if (!isCommitReachable(previousState.lastReviewedSha)) {
-    console.warn(
+    console.log(
       `[review-pr] previously-reviewed sha ${previousState.lastReviewedSha} is not reachable in this checkout ` +
       `(force-push, rebase, or shallow clone) -- falling back to a full review.`,
     );
     return { range: `${baseSha}...${headSha}`, incremental: false };
   }
   if (!isAncestor(previousState.lastReviewedSha, headSha)) {
-    console.warn(
+    console.log(
       `[review-pr] previously-reviewed sha ${previousState.lastReviewedSha} is not an ancestor of ${headSha} ` +
       `(likely a rebase/force-push rewrote history) -- falling back to a full review.`,
     );
