@@ -76,22 +76,20 @@ function resolveDiffRange(
   previousState: ReviewState | null,
 ): { range: string; incremental: boolean } {
   if (!previousState) {
-    console.log("no prev");
     return { range: `${baseSha}...${headSha}`, incremental: false };
   }
   if (previousState.lastReviewedSha === headSha) {
-    console.log("not equal", previousState.lastReviewSha, headSha);
     return { range: `${baseSha}...${headSha}`, incremental: false };
   }
   if (!isCommitReachable(previousState.lastReviewedSha)) {
-    console.log(
+    console.warn(
       `[review-pr] previously-reviewed sha ${previousState.lastReviewedSha} is not reachable in this checkout ` +
       `(force-push, rebase, or shallow clone) -- falling back to a full review.`,
     );
     return { range: `${baseSha}...${headSha}`, incremental: false };
   }
   if (!isAncestor(previousState.lastReviewedSha, headSha)) {
-    console.log(
+    console.warn(
       `[review-pr] previously-reviewed sha ${previousState.lastReviewedSha} is not an ancestor of ${headSha} ` +
       `(likely a rebase/force-push rewrote history) -- falling back to a full review.`,
     );
@@ -137,8 +135,6 @@ async function main() {
   const previousState = loadPreviousReviewState(prNumber);
   const { range, incremental } = resolveDiffRange(baseSha, headSha, previousState);
 
-// Expect this to be an incremental review 
-  console.log({range, incremental});
   const diff = getFilteredDiff(range);
   if (!diff.trim()) {
     console.log(`No diff to review for range ${range}, skipping.`);
