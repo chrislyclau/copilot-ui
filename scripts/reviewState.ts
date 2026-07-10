@@ -38,6 +38,16 @@ function getBotLogin(): string {
 }
 
 /**
+ * Normalizes a GitHub bot login for comparison. `gh`'s `--json comments`
+ * (GraphQL-backed) has been observed reporting the standard Actions bot as
+ * plain "github-actions", while the REST API / UI show "github-actions[bot]".
+ * Stripping the suffix on both sides makes the comparison robust to either form.
+ */
+function normalizeBotLogin(login: string | undefined): string {
+  return (login || '').replace(/\[bot\]$/, '');
+}
+
+/**
  * Fetches all comments on the PR and returns the most recent one authored by
  * this bot that contains a parseable state marker. Returns null if there is no
  * prior state, the marker is malformed, or the gh call fails for any reason --
@@ -52,44 +62,27 @@ export function loadPreviousReviewState(prNumber: string): ReviewState | null {
       { maxBuffer: 1024 * 1024 * 20 },
     ).toString();
     comments = JSON.parse(raw).comments || [];
-    console.log(`[review-pr][debug] fetched ${comments.length} comment(s) for PR #${prNumber}`);
   } catch (err) {
     console.warn('[review-pr] failed to fetch PR comments for prior state, doing full review:', (err as Error)?.message || err);
     return null;
   }
 
   const botLogin = getBotLogin();
-  console.log(`[review-pr][debug] expecting botLogin="${botLogin}" (REVIEW_BOT_LOGIN env=${process.env.REVIEW_BOT_LOGIN ?? '<unset>'})`);
-  console.log(`[review-pr][debug] comment authors seen: ${JSON.stringify(comments.map(c => c?.author?.login))}`);
-
   for (let i = comments.length - 1; i >= 0; i--) {
     const comment = comments[i];
-    if (comment?.author?.login !== botLogin) {
-      console.log(`[review-pr][debug] skipping comment #${i} — author "${comment?.author?.login}" !== "${botLogin}"`);
-      continue;
-    }
-    console.log(`[review-pr][debug] comment #${i} matches botLogin; body length=${comment.body?.length ?? 0}, contains marker start=${comment.body?.includes(STATE_MARKER_START)}`);
+    if (normalizeBotLogin(comment?.author?.login) !== normalizeBotLogin(botLogin)) continue;
     const state = parseStateMarker(comment.body);
-    if (state) {
-      console.log(`[review-pr][debug] parsed prior state: lastReviewedSha=${state.lastReviewedSha}, blockingFindings=${state.blockingFindings.length}`);
-      return state;
-    }
+    if (state) return state;
   }
-  console.log('[review-pr][debug] no usable prior state found among fetched comments');
+  console.log(`[review-pr] no prior state found among ${comments.length} comment(s) on PR #${prNumber} (expected bot login "${botLogin}"; saw authors: ${JSON.stringify(comments.map(c => c?.author?.login))})`);
   return null;
 }
 
 function parseStateMarker(body: string): ReviewState | null {
   const startIdx = body.indexOf(STATE_MARKER_START);
-  if (startIdx === -1) {
-    console.log('[review-pr][debug] parseStateMarker: no start marker found in comment body');
-    return null;
-  }
+  if (startIdx === -1) return null;
   const endIdx = body.indexOf(STATE_MARKER_END, startIdx);
-  if (endIdx === -1) {
-    console.log('[review-pr][debug] parseStateMarker: start marker found but no end marker');
-    return null;
-  }
+  if (endIdx === -1) return null;
 
   // Payload is base64-encoded (see renderStateMarker) specifically so that
   // arbitrary finding text -- which could itself contain "-->" -- can't
@@ -104,7 +97,6 @@ function parseStateMarker(body: string): ReviewState | null {
       !Array.isArray(parsed?.blockingFindings) ||
       (parsed?.session_id !== undefined && typeof parsed.session_id !== 'string')
     ) {
-      console.log('[review-pr][debug] parseStateMarker: decoded JSON failed shape validation:', JSON.stringify(parsed));
       return null;
     }
     return parsed as ReviewState;
