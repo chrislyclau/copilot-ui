@@ -135,7 +135,7 @@ async function main() {
   const previousState = loadPreviousReviewState(prNumber);
   const { range, incremental } = resolveDiffRange(baseSha, headSha, previousState);
 
-
+// Expect this to be an incremental review 
   console.log({range, incremental});
   const diff = getFilteredDiff(range);
   if (!diff.trim()) {
