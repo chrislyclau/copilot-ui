@@ -2,10 +2,16 @@
 
 Format: [EARS](https://alistairmavin.com/ears/) (Easy Approach to Requirements Syntax).
 Scope: `scripts/review-pr.ts` and its supporting modules (`reviewState.ts`, `diffFilter.ts`,
-`config/tools.ts`). Single-repo consumer — no multi-tenant/override mechanism required.
+`src/config/tools.ts`). Single-repo consumer — no multi-tenant/override mechanism required.
 
 Legend: **U** = Ubiquitous, **E** = Event-driven, **S** = State-driven, **O** = Optional
 feature, **UB** = Unwanted behavior.
+
+**Status note:** This document currently leads the implementation, not describes it. In
+particular, §2.1 (file-first context delivery), §6.2 (marker cleanup — removal of
+`PersistedBlockingFinding`/`blockingFindings`), and §6.4 (comment-history-as-file) are not yet
+enacted in `review-pr.ts`/`reviewState.ts` as of this revision. This spec is the target those
+modules should be brought into compliance with, not a record of current behavior.
 
 ---
 
@@ -17,8 +23,14 @@ feature, **UB** = Unwanted behavior.
   ancestor of `PR_HEAD_SHA`, the system shall compute an incremental diff using
   `lastReviewedSha..headSha`.
 - **E-1.3** When no previous review state exists, or the previous `lastReviewedSha` is
-  unreachable, is not an ancestor of `headSha`, or is equal to `headSha`, the system shall fall
-  back to a full diff using `baseSha...headSha`.
+  unreachable, or is not an ancestor of `headSha`, the system shall fall back to a full diff
+  using `baseSha...headSha`.
+- **E-1.3.1** When a previous review state exists and its `lastReviewedSha` is equal to
+  `headSha`, the system shall treat this as nothing-to-review (there is no new head commit since
+  the last review) and shall exit without posting a comment, per UB-1.4 — it shall NOT fall
+  through to E-1.3's full-diff path, since a full diff against an unchanged head is non-empty and
+  would otherwise bypass UB-1.4's bail-out, reposting a duplicate full review on every re-run
+  that targets an unchanged head (e.g. a manual workflow re-run).
 - **UB-1.4** If the resolved diff is empty, the system shall log that there is nothing to review
   and shall exit without posting a comment.
 
@@ -36,10 +48,10 @@ feature, **UB** = Unwanted behavior.
 - **U-2.1.2** The diff artifact shall be a standard unified diff (`.patch`), unmodified by
   markdown fences or inline commentary, so it parses the way any diff the model has seen in
   training does.
-- **O-2.1.3** The diff artifact should be preceded by a `git diff --stat`-style file-list summary,
+- **O-2.1.3** The diff artifact may be preceded by a `git diff --stat`-style file-list summary,
   so the model can decide which files warrant closer reading before consuming the full patch.
   This matters most on large diffs; the system may omit it below some size threshold.
-- **O-2.2** Where PR title, description, or linked-issue metadata is available, the system shall
+- **O-2.2** Where PR title, description, or linked-issue metadata is available, the system may
   write it to its own labeled file (e.g. `pr-meta.md`) rather than concatenating it with the
   diff. If no description is present, the system shall emit an explicit placeholder (e.g.
   `_No description provided._`) rather than an empty or missing file.
@@ -84,14 +96,17 @@ feature, **UB** = Unwanted behavior.
 ## 5. Finding Classification
 
 - **U-5.1** Each finding shall carry a `severity` of `blocking`, `suggestion`, or `nit`.
-- **O-5.2** Each finding shall carry an optional `category` of `bug`, `security`, `performance`,
+- **O-5.2** Each finding may carry an optional `category` of `bug`, `security`, `performance`,
   or `style`, independent of `severity`.
 - **U-5.3** Each finding shall carry `file`, optional `line`, and `message`.
 - **U-5.4** The system shall instruct the model to keep each finding's `message` concise (target:
   under ~150 words) unless a code snippet is necessary for clarity.
-- **O-5.5** Each finding may carry an optional `status` of `new` or `resolved`, used to render
-  §7.2's inline resolution marker. Deferred (see §6.9) — the model may populate this today purely
-  from its own reasoning over comment history and diff (§6.5–6.8) with no code-side verification.
+- **O-5.5** Each finding may carry an optional `status` of `new`, `still-open`, or `resolved`,
+  used to render §7.2's inline resolution marker. `still-open` is used when a prior finding is
+  judged not yet addressed and is being re-surfaced rather than re-reported as new (§6.7). This
+  mirrors the runtime `CodeReviewFinding.status` type already present in `review-pr.ts`. Deferred
+  (see §6.9) — the model may populate this today purely from its own reasoning over comment
+  history and diff (§6.5–6.8) with no code-side verification.
 
 ## 6. State Carried Across Runs
 
@@ -141,15 +156,15 @@ State is split into two independent kinds, tracked by different mechanisms:
 - **O-6.9** (Deferred, not required for v1.) A deterministic, code-tracked finding-status
   mechanism — e.g. a stable per-finding identifier carried in the state marker purely to verify
   the model's own resolved/open judgment against, without reintroducing full finding payloads
-  into the marker (§6.2) — is worth revisiting once the model-judged approach (§6.5–6.8) has
-  enough runs to show whether its false-negative/false-positive rate on resolution calls is
-  acceptable. Out of scope until then.
+  into the marker (§6.2) — may be revisited once the model-judged approach (§6.5–6.8) has enough
+  runs to show whether its false-negative/false-positive rate on resolution calls is acceptable.
+  Out of scope until then.
 
 ## 7. Output / Comment Formatting
 
 - **U-7.1** The system shall group findings by severity in the posted comment body (Blocking,
   Suggestions, Nits), omitting empty sections.
-- **O-7.2** Where a finding carries a `status` (§5.5), the system shall render it inline (e.g.
+- **O-7.2** Where a finding carries a `status` (§5.5), the system may render it inline (e.g.
   `_(resolved)_`).
 - **UB-7.3** If the model returns zero findings, the system shall post a single summary stating
   no actionable findings were identified, and shall not fabricate filler content.
