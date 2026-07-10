@@ -61,6 +61,14 @@ modules should be brought into compliance with, not a record of current behavior
   from the checkout rather than copied into the scratch context directory, so they cannot go
   stale relative to the actual repo state and remain fully greppable alongside the rest of the
   repo. Their absence is not an error — this is best-effort context, not a hard requirement.
+- **O-2.4** The system may write the commit messages for the commits included in the resolved
+  diff range (§1) to their own labeled file (e.g. `commits.md`), one entry per commit with its
+  short sha and full message. Commit messages often carry author intent that isn't recoverable
+  from the diff alone (e.g. what a fix was targeting, or why a change was made), which is useful
+  context both for the initial review and, in incremental mode, for judging whether a later
+  commit's stated intent matches what §6.6–6.8 need to reason about resolution. This file shall
+  reflect only the commits in the currently resolved range (full or incremental), not the PR's
+  entire commit history, to avoid re-surfacing intent context already consumed in a prior run.
 
 ## 3. Finding-Admission Gate
 
