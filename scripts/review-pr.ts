@@ -133,9 +133,7 @@ async function main() {
   }
 
   const previousState = loadPreviousReviewState(prNumber);
-  const { range } = resolveDiffRange(baseSha, headSha, previousState);
-  const INCREMENTAL_IS_SUBOPTIMAL = true; // TODO: We need to optimize it further before enabling it.
-  const incremental = !INCREMENTAL_IS_SUBOPTIMAL;
+  const { range, incremental } = resolveDiffRange(baseSha, headSha, previousState);
   const diff = getFilteredDiff(range);
   if (!diff.trim()) {
     console.log(`No diff to review for range ${range}, skipping.`);
