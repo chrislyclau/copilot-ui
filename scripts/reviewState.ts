@@ -70,7 +70,10 @@ export function loadPreviousReviewState(prNumber: string): ReviewState | null {
   const botLogin = getBotLogin();
   for (let i = comments.length - 1; i >= 0; i--) {
     const comment = comments[i];
-    if (normalizeBotLogin(comment?.author?.login) !== normalizeBotLogin(botLogin)) continue;
+    if(!comment) {
+      throw new Error("[review-pr] Unexpected: comment is falsy");
+    }
+    if (normalizeBotLogin(comment.author?.login) !== normalizeBotLogin(botLogin)) continue;
     const state = parseStateMarker(comment.body);
     if (state) return state;
   }
