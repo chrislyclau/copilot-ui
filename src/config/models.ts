@@ -37,9 +37,10 @@ export const KNOWN_MODELS_CONFIG: readonly ModelProviderConfig[] = [
   { provider: "openai", model: "gpt-4o-mini", tokenRatio: 1.5 },
   { provider: "local", model: "llama3:8b", tokenRatio: 1.0 },
   { provider: "openrouter", model: "z-ai/glm-5.2", tokenRatio: 1.3 },
-  { provider: "openrouter", model: "deepseek/deepseek-v4-flash", tokenRatio: 1.0 },
+  { provider: "openrouter", model: "google/gemma-4-26b-a4b-it:free", tokenRatio: 1.0 },
   { provider: "openrouter", model: "deepseek/deepseek-v4-pro", tokenRatio: 1.0 },
   { provider: "copilot-native", model: "copilot-default", tokenRatio: 1.0 },
+  
 ];
 
 /**
