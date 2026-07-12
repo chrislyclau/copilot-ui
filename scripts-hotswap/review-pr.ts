@@ -69,9 +69,12 @@ function stopProviderProxy(server: Server): Promise<void> {
  * safe: no prior state, the prior sha is unreachable (force-push/rebase, or a
  * shallow checkout that never had it), it's not actually an ancestor of head
  * (e.g. rebase that dropped it from history but left the commit object
- * dangling locally), or it's identical to the current head (nothing new to
- * review incrementally, though we still may want to bail out entirely --
- * handled by the caller).
+ * dangling locally), or it's identical to the current head -- that last case
+ * is nothing-to-review (per E-1.3.1) and is signaled via nothingToReview
+ * rather than resolved to a range, since a base...head full diff against an
+ * unchanged head is generally non-empty and would otherwise bypass UB-1.4's
+ * bail-out, reposting a duplicate full review on every re-run that targets
+ * an unchanged head (e.g. a manual workflow re-run).
  *
  * Uses double-dot (`a..b`) rather than triple-dot for the incremental range:
  * triple-dot diffs against the merge-base of the two commits, which is only
@@ -82,12 +85,12 @@ function resolveDiffRange(
   baseSha: string,
   headSha: string,
   previousState: ReviewState | null,
-): { range: string; incremental: boolean } {
+): { range: string; incremental: boolean; nothingToReview?: false } | { nothingToReview: true } {
   if (!previousState) {
     return { range: `${baseSha}...${headSha}`, incremental: false };
   }
   if (previousState.lastReviewedSha === headSha) {
-    return { range: `${baseSha}...${headSha}`, incremental: false };
+    return { nothingToReview: true };
   }
   if (!isCommitReachable(previousState.lastReviewedSha)) {
     console.warn(
@@ -171,7 +174,12 @@ async function main() {
   const comments = fetchComments(prNumber);
 
   const previousState = loadPreviousReviewState(prNumber, comments);
-  const { range, incremental } = resolveDiffRange(baseSha, headSha, previousState);
+  const resolved = resolveDiffRange(baseSha, headSha, previousState);
+  if (resolved.nothingToReview) {
+    console.log(`Nothing to review: head ${headSha} was already reviewed in the last run, skipping.`);
+    return;
+  }
+  const { range, incremental } = resolved;
   const diff = getFilteredDiff(range);
   if (!diff.trim()) {
     console.log(`No diff to review for range ${range}, skipping.`);
