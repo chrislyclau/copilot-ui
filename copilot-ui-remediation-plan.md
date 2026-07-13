@@ -1,230 +1,88 @@
-# copilot-ui Remediation Plan
+# copilot-ui Remediation Plan — Status: Complete
 
-Status of each item: **confirmed** (traced/verified), **suspected** (static trace only,
-needs a repro), or **structural** (no bug, just a seam to add).
+All phases below have landed in the codebase. This document is kept as a historical
+record of what was done and why, and as a pointer to where each change now lives — not
+as a forward-looking task list. If you're looking for current architectural rules, see
+`AGENTS.md` and `README.md` (SYS-REQ-022 through SYS-REQ-025); if you're looking for
+upcoming work, see `roadmap-spec.md`.
 
----
-
-## Phase 0 — Resolve open hypotheses (before any refactor)
-
-Two items are suspected bugs. Verify them first; the Phase 2 work differs depending on
-the outcome.
-
-### 0-A — Gate `cwd` resolution in Docker mode (suspected)
-
-**What to check:**
-`serverRuntime.ts` line ~87 sets:
-```ts
-const DEFAULT_WORKSPACE_DIR = getWorkspaceHostLocation(); // e.g. "./workspace"
-```
-`AgentWorkspace.tsx` never passes an explicit `cwd` to `runWithGates`, so
-`handleGateLoop` falls back to `DEFAULT_WORKSPACE_DIR` as `runCwd`.
-`runGate(gateName, runCwd)` in `gates/index.ts` passes that value straight to
-`runTests(cwd)` / `runLint(cwd)` (lines ~22 and ~55), whose default is `process.cwd()`.
-In Docker mode `getWorkspaceHostLocation()` returns the *host* path
-(`process.env.WORKSPACE_HOST_LOCATION || "./workspace"`), not the container path
-(`/app`). The gate shell command therefore runs `cd ./workspace && npm test` inside the
-container, which resolves to a path that probably does not exist.
-
-**Verification step:** Run one gate-loop turn in Docker mode with an injected log
-immediately before `runGate` that prints the resolved `runCwd`. Compare it against
-`/app`. If they differ, the bug is confirmed.
-
-**Outcome determines:** Whether Phase 2-A is a code fix or an AGENTS.md note.
+Original status legend: **confirmed** (traced/verified), **suspected** (static trace
+only, needed a repro), or **structural** (no bug, just a seam to add). All items below
+resolved one way or another; the outcome is noted per item.
 
 ---
 
-### 0-B — Orphan process on abort/panic (suspected)
+## Phase 0 — Resolve open hypotheses ✅ both confirmed
 
-**What to check:**
-`dockerRunner.ts:runDockerProcess` and `nativeRunner.ts:runNativeProcess` kill only the
-`docker exec` / `bash` *spawned process* (`child.kill("SIGKILL")`). If the agent turn
-backgrounded a long-running child inside the container, that inner process is not a
-direct child of Node and will not be killed by `child.kill`.
+### 0-A — Gate `cwd` resolution in Docker mode — **confirmed, fixed**
 
-**Verification step:** Have an agent turn run a background process
-(e.g. `sleep 300 &`), trigger an abort, then list container processes
-(`docker exec <container> ps aux`). If `sleep` is still running, the bug is confirmed.
+The suspected bug was real: gate execution fell back to `DEFAULT_WORKSPACE_DIR`
+(`getWorkspaceHostLocation()`, a host path) instead of the container-side
+`getWorkspaceRoot()`. Fixed in Phase 2-A. See `AGENTS.md`'s "Workspace path spaces"
+entry for the current rule, and SYS-REQ-022/023 in `README.md` for the formalized
+requirement.
 
-**Outcome determines:** Whether Phase 2-B is a code fix or an AGENTS.md note.
+### 0-B — Orphan process on abort/panic — **confirmed, fixed**
 
----
-
-## Phase 1 — Structural seams (do as one combined pass)
-
-Extract the orchestrator AND create the SDK boundary in the same branch. Both touch the
-same call-sites in `serverRuntime.ts`; splitting them doubles the merge work.
-
-### 1-A — Create `src/copilotSdk/boundary.ts`
-
-**Goal:** Every `@github/copilot-sdk` import in the app goes through one file.
-
-**Files that currently import `@github/copilot-sdk` directly (must all be updated):**
-- `src/serverRuntime.ts` — line 5: `CopilotClient`, `PermissionRequestResult`,
-  `SessionConfig`, `ProviderConfig as SdkProviderConfig`, `Tool`
-- `src/utils/auditorHelper.ts` — line 1: `CopilotClient`
-- `src/mockEvents.ts` — line 1: `SessionEvent`, `ToolExecutionCompleteContent`
-- `src/types/events.ts` — check for `SessionEvent` and related type imports
-- `src/parser.test.ts` — line 5: `SessionEvent`
-- any other test files that import from `@github/copilot-sdk` directly
-
-**Steps:**
-1. Create `src/copilotSdk/boundary.ts`. Re-export every type and the `CopilotClient`
-   class that the rest of the app uses:
-   ```ts
-   export { CopilotClient } from '@github/copilot-sdk';
-   export type {
-     SessionEvent,
-     ToolExecutionCompleteContent,
-     PermissionRequestResult,
-     SessionConfig,
-     Tool,
-   } from '@github/copilot-sdk';
-   // Re-export as alias used by serverRuntime.ts
-   export type { ProviderConfig as SdkProviderConfig } from '@github/copilot-sdk';
-   ```
-2. In each file listed above, replace the `@github/copilot-sdk` import path with
-   `'../copilotSdk/boundary'` (adjust relative depth as needed). Do not change any
-   other code in those files.
-3. Run `npm run lint` and `npm test` — no functional change should occur.
+Backgrounded child processes inside a container/native shell survived `child.kill()`
+on the direct spawned process. Fixed in Phase 2-B via detached process groups. See
+`AGENTS.md`'s "Orphan processes on abort" entry.
 
 ---
 
-### 1-B — Create `src/orchestrator/gateLoop.ts`
+## Phase 1 — Structural seams ✅ landed
 
-**Goal:** Move `handleGateLoop` (currently
-`serverRuntime.ts` lines 1468–2833, roughly 1365 lines) into its own module.
-Route handlers become thin: parse request → call orchestrator → stream response.
+### 1-A — `src/copilotSdk/boundary.ts` — **done**
 
-**Steps:**
-1. Create `src/orchestrator/gateLoop.ts`.
-2. Move the `handleGateLoop` async function body into it. The function signature
-   accepted by Express is:
-   ```ts
-   export async function handleGateLoop(
-     req: express.Request,
-     res: express.Response,
-   ): Promise<void>
-   ```
-3. Move any file-scoped helpers that are *only* used by `handleGateLoop` into the same
-   file or a sibling module (e.g. `src/orchestrator/sessionLifecycle.ts` for
-   `getOrCreateSession`).
-4. Update imports: `serverRuntime.ts` should import `handleGateLoop` from
-   `'./orchestrator/gateLoop'` and register the routes exactly as before:
-   ```ts
-   app.post('/api/copilot/gate-run', handleGateLoop);
-   app.post('/api/copilot/gate-resume', handleGateLoop);
-   ```
-5. Symbols that stay in `serverRuntime.ts` (still used by other routes): `activeSessions`,
-   `sseResToSessionId`, `sessionWritePromises`, `activeLocks`, `getGlobalClient`,
-   `resetSessionForNewRun`, `updateStateSnapshot`, `writeLog`, `DEFAULT_WORKSPACE_DIR`.
-6. Run `npm run lint` and `npm test` — no functional change should occur.
+All `@github/copilot-sdk` imports now route through `src/copilotSdk/boundary.ts`.
+Enforced going forward by SYS-REQ-024 (`README.md`).
 
-**Note on `getGlobalClient`:** It is currently defined in `serverRuntime.ts` and called
-inside `handleGateLoop`. After extraction, import it from `serverRuntime.ts` (or from
-`src/copilotSdk/boundary.ts` once Phase 1-A is complete and you choose to move it
-there). Moving it to the boundary is the cleaner final state but is not required in the
-same commit — do it only if the diff stays focused.
+### 1-B — `src/orchestrator/gateLoop.ts` — **done**
+
+`handleGateLoop` was extracted out of `serverRuntime.ts` into
+`src/orchestrator/gateLoop.ts`, with session lifecycle helpers split into
+`src/orchestrator/sessionState.ts`. `serverRuntime.ts` dropped from ~2800+ lines to
+~1500, retaining route registration and cross-cutting session/lock state. Enforced
+going forward by SYS-REQ-025 (`README.md`).
 
 ---
 
-## Phase 2 — Correctness fixes (contingent on Phase 0)
+## Phase 2 — Correctness fixes ✅ landed
 
-Do these *after* Phase 1. Phase 1 localises both changes to a single small file each.
+### 2-A — Gate `cwd` fix — **done**
 
-### 2-A — Gate `cwd` fix (only if Phase 0-A confirms the bug)
+`runCwd` now sources from `getWorkspaceRoot()` in both `serverRuntime.ts` and
+`src/orchestrator/gateLoop.ts`; `DEFAULT_WORKSPACE_DIR` is reserved for the SDK
+client's `workingDirectory` only.
 
-**File:** `src/serverRuntime.ts` (or `src/orchestrator/gateLoop.ts` after Phase 1)
+### 2-B — Orphan process fix — **done (Option A: detached process groups)**
 
-**Current code (line ~87):**
-```ts
-const DEFAULT_WORKSPACE_DIR = getWorkspaceHostLocation();
-```
-
-**Fix:**
-```ts
-// DEFAULT_WORKSPACE_DIR is used as CopilotClient.workingDirectory — host path is
-// correct here. A separate constant is used as the gate cwd.
-const DEFAULT_WORKSPACE_DIR = getWorkspaceHostLocation(); // for SDK client only
-```
-
-Then, wherever `runCwd` falls back to `DEFAULT_WORKSPACE_DIR` for gate execution, 
-replace with `getWorkspaceRoot()`:
-```ts
-// Before (wrong in Docker mode — host path, not container path):
-const runCwd = req.body.cwd || DEFAULT_WORKSPACE_DIR;
-
-// After:
-const runCwd = req.body.cwd || getWorkspaceRoot();
-```
-
-`getWorkspaceRoot` is already imported from `'./workspace'` in `serverRuntime.ts` (line
-~19 import block). No new dependency needed.
-
-**If Phase 0-A does NOT confirm the bug:** Add a comment at the `DEFAULT_WORKSPACE_DIR`
-assignment and the `runCwd` fallback explaining that the host path and container path
-coincide in non-Docker mode, so the fallback is safe.
+`dockerRunner.ts` and `nativeRunner.ts` spawn with `{ detached: true }` and kill via
+`killProcessGroup()` (`src/workspace/processGroup.ts`). Docker mode layers on an
+additional container-side kill pass keyed on an `EXEC_RUN_ID` marker, since a
+process-group kill on the host-side `docker exec` process doesn't reach processes
+inside the container's own PID namespace. No new dependency (`tree-kill`) was needed.
 
 ---
 
-### 2-B — Orphan process fix (only if Phase 0-B confirms the bug)
+## Phase 3 — Type discipline ratchet ✅ landed
 
-**Files:** `src/workspace/dockerRunner.ts`, `src/workspace/nativeRunner.ts`
-
-**Option A (preferred, no new dependency):** Use `detached: true` + process group kill.
-In `runDockerProcess` / `runNativeProcess`, spawn with `{ detached: true }` and replace
-`child.kill("SIGKILL")` with `process.kill(-child.pid!, "SIGKILL")` to kill the entire
-process group.
-
-**Option B:** Add `tree-kill` package and call it on abort.
-```ts
-import treeKill from 'tree-kill';
-// replace: child.kill("SIGKILL")
-// with:    treeKill(child.pid!, 'SIGKILL')
-```
-
-**If Phase 0-B does NOT confirm the bug:** Add an AGENTS.md note that `docker exec`
-commands run in the container's process namespace, so inner children are scoped to the
-container lifecycle and orphan concerns don't apply in Docker mode. Note the remaining
-native-mode risk separately.
+`eslint.config.js` enforces `@typescript-eslint/no-explicit-any` as an **error** (the
+plan's draft suggested starting as a warning; the landed version went straight to
+error) in `src/orchestrator/**` and `src/copilotSdk/boundary.ts`. A secondary check,
+`scripts/check-explicit-any.ts`, guards against `eslint-disable` escape hatches on top
+of the native rule. `serverRuntime.ts`'s pre-existing `any` instances were left alone,
+per the original plan.
 
 ---
 
-## Phase 3 — Type discipline ratchet (independent, start anytime)
+## Phase 4 — Documentation ✅ landed
 
-**Goal:** Prevent new `any` from being introduced in touched files. Not a cleanup of the
-existing ~450 legacy instances.
+`README.md` sections SYS-REQ-022 through SYS-REQ-025 and `AGENTS.md` now describe the
+boundary module, the orchestrator extraction, and the path-space rule as implemented
+architecture, not aspiration.
 
-**Steps:**
-1. Add an ESLint rule (or extend an existing `tsconfig`) that enables
-   `@typescript-eslint/no-explicit-any` as a warning (not error) in a specific set of
-   files — start with `src/orchestrator/` and `src/copilotSdk/boundary.ts` since those
-   are new files that should be clean.
-2. Add a lint step to CI that fails on new `any` added in a PR diff. A lightweight way:
-   `git diff origin/main...HEAD -- 'src/orchestrator/**' 'src/copilotSdk/**' | grep '+.*: any'`
-   fails the build if it finds matches.
-3. Do NOT touch `serverRuntime.ts`'s existing `any` instances unless already modifying
-   those lines for another reason.
-
----
-
-## Phase 4 — Documentation (after Phases 1–2 land)
-
-README sections `SYS-REQ-022` through `SYS-REQ-025` and AGENTS.md should describe the
-*actual* architecture after the refactor, not the aspirational one. Update them in the
-same PR that lands Phase 1-B so the docs and code are always consistent.
-
----
-
-## Sequencing summary
-
-```
-Phase 0-A (verify gate cwd) ─┐
-Phase 0-B (verify orphans)   ─┤─→ Phase 1 (boundary + orchestrator, one pass)
-                               │       → Phase 2 (targeted fixes, small diffs)
-                               │       → Phase 4 (docs against real code)
-                               └── Phase 3 (type ratchet) — independent, anytime
-```
-
-**Do not skip Phase 0.** Building Phase 2 fixes around an unconfirmed bug wastes effort
-and risks introducing a regression. The verification is cheap (one manual test each).
+One documentation debt called out during this work remains open and is now tracked in
+`roadmap-spec.md` (RM-REQ-050's note) instead of here: the `/api/copilot/spec-patch`
+route in `serverRuntime.ts` is still commented `SYS-REQ-015/016`, which should read
+`ORCH-REQ-015/016` to match `README.md`'s actual numbering.
