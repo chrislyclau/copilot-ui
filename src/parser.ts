@@ -5,7 +5,6 @@ import {
   AssistantStreamingDeltaEvent
 } from './copilotSdk/boundary';
 import { ExtendedSessionEvent } from './types/events';
-import { assertNever } from './types';
 
 /**
  * Smartly extracts readable user-facing content/text from an assistant response event payload.
@@ -15,39 +14,62 @@ export function extractAssistantText(
 ): string {
   if (typeof sessionEvent === 'string') return sessionEvent;
   if (!sessionEvent || typeof sessionEvent !== 'object') return '';
-  
-  const event = sessionEvent as any; // Still need this for now because of the loose structure
-  if (event.type === 'assistant.message_delta' || event.type === 'assistant.reasoning_delta') {
-    return event.data?.deltaContent || '';
-  }
 
+  const event = sessionEvent as Record<string, unknown>;
+  const eventType = event.type as string | undefined;
+  if (eventType === 'assistant.message_delta' || eventType === 'assistant.reasoning_delta') {
+    const data = event.data as Record<string, unknown> | undefined;
+    return (data?.deltaContent as string | undefined) || '';
+  }
   // Handle unit tests mock structure and various wrappers
-  if (event.choices?.[0]?.message?.content) {
-    return event.choices[0].message.content;
+  const choices = event.choices as readonly unknown[] | undefined;
+  if (choices?.[0] && typeof choices[0] === 'object') {
+    const firstChoice = choices[0] as Record<string, unknown>;
+    const message = firstChoice.message as Record<string, unknown> | undefined;
+    if (message?.content) {
+      return String(message.content);
+    }
   }
-  if (event.choices?.[0]?.delta?.content) {
-    return event.choices[0].delta.content;
+  if (choices?.[0] && typeof choices[0] === 'object') {
+    const firstChoice = choices[0] as Record<string, unknown>;
+    const delta = firstChoice.delta as Record<string, unknown> | undefined;
+    if (delta?.content) {
+      return String(delta.content);
+    }
   }
-  if (event.candidates?.[0]?.content?.parts?.[0]?.text) {
-    return event.candidates[0].content.parts[0].text;
+  const candidates = event.candidates as readonly unknown[] | undefined;
+  if (candidates?.[0] && typeof candidates[0] === 'object') {
+    const firstCandidate = candidates[0] as Record<string, unknown>;
+    const content = firstCandidate.content as Record<string, unknown> | undefined;
+    const parts = content?.parts as readonly unknown[] | undefined;
+    if (parts?.[0] && typeof parts[0] === 'object') {
+      const firstPart = parts[0] as Record<string, unknown>;
+      if (firstPart.text) {
+        return String(firstPart.text);
+      }
+    }
   }
-  if (event.message?.content) {
-    return event.message.content;
+  const message = event.message as Record<string, unknown> | undefined;
+  if (message?.content) {
+    return String(message.content);
   }
-  if (event.content?.text) {
-    return event.content.text;
-  }
-  if (event.content && typeof event.content === 'string') {
-    return event.content;
+  const content = event.content as Record<string, unknown> | string | undefined;
+  if (content && typeof content === 'object') {
+    if (content.text) {
+      return String(content.text);
+    }
+  } else if (content && typeof content === 'string') {
+    return content;
   }
   if (event.text && typeof event.text === 'string') {
     return event.text;
   }
   if (event.data && typeof event.data === 'object') {
-    const data = event.data;
+    const data = event.data as Record<string, unknown>;
     if (data.deltaContent) return String(data.deltaContent);
     if (data.content && typeof data.content === 'string') return data.content;
-    if (data.result?.content) return String(data.result.content);
+    const result = data.result as Record<string, unknown> | undefined;
+    if (result?.content) return String(result.content);
   }
   return '';
 }
@@ -59,10 +81,9 @@ export const isDeltaEvent = (evt: CopilotEvent): evt is CopilotEvent & {
   sessionEvent: AssistantMessageDeltaEvent | AssistantReasoningDeltaEvent | AssistantStreamingDeltaEvent;
 } => {
   if (!evt || !evt.sessionEvent || !evt.sessionEvent.type) return false;
-
   // Ensure delta event has valid data payload if provided
-  if ((evt.sessionEvent as any).data === null) return false;
-
+  const se = evt.sessionEvent as Record<string, unknown>;
+  if (se.data === null) return false;
   const t = evt.sessionEvent.type.toLowerCase();
   return (
     t === 'assistant.message_delta' ||
@@ -73,33 +94,33 @@ export const isDeltaEvent = (evt: CopilotEvent): evt is CopilotEvent & {
 };
 
 export interface ParsedEventPayload {
-  pText: string;
-  pPrompt: string;
-  pAttachments: unknown[];
-  pSessionId: string;
-  pWorkingDirectory: string;
-  pClientName: string;
-  pModel: string;
-  pClientMode: string;
-  pSysSections: number;
-  pToolCallId: string;
-  pToolName: string;
-  pArguments: unknown;
-  pResultType: string;
-  pExecutionMs: number | string;
-  pError: string;
-  pTextResult: string;
-  pBinaryResults: unknown[];
-  pThought: string;
-  pEffort: string;
-  pFileName: string;
-  pKind: string;
-  pDiff: string;
-  pDecision: string;
-  pComments: string;
-  pDetails: string;
-  pReason: string;
-  pSummary: string;
+  readonly pText: string;
+  readonly pPrompt: string;
+  readonly pAttachments: readonly unknown[];
+  readonly pSessionId: string;
+  readonly pWorkingDirectory: string;
+  readonly pClientName: string;
+  readonly pModel: string;
+  readonly pClientMode: string;
+  readonly pSysSections: number;
+  readonly pToolCallId: string;
+  readonly pToolName: string;
+  readonly pArguments: unknown;
+  readonly pResultType: string;
+  readonly pExecutionMs: number | string;
+  readonly pError: string;
+  readonly pTextResult: string;
+  readonly pBinaryResults: readonly unknown[];
+  readonly pThought: string;
+  readonly pEffort: string;
+  readonly pFileName: string;
+  readonly pKind: string;
+  readonly pDiff: string;
+  readonly pDecision: string;
+  readonly pComments: string;
+  readonly pDetails: string;
+  readonly pReason: string;
+  readonly pSummary: string;
 }
 
 export { deriveEventMeta } from './utils/deriveEventMeta';
@@ -110,10 +131,9 @@ export { deriveEventMeta } from './utils/deriveEventMeta';
  */
 export const parseEvent = (event: CopilotEvent): ParsedEventPayload => {
   const sessionEvent = event.sessionEvent;
-
   let pText = '';
   let pPrompt = '';
-  let pAttachments: unknown[] = [];
+  let pAttachments: readonly unknown[] = [];
   let pSessionId = '';
   let pWorkingDirectory = '';
   let pClientName = '';
@@ -127,7 +147,7 @@ export const parseEvent = (event: CopilotEvent): ParsedEventPayload => {
   let pExecutionMs: number | string = '';
   let pError = '';
   let pTextResult = '';
-  let pBinaryResults: unknown[] = [];
+  let pBinaryResults: readonly unknown[] = [];
   let pThought = '';
   let pEffort = 'medium';
   let pFileName = '';
@@ -140,54 +160,56 @@ export const parseEvent = (event: CopilotEvent): ParsedEventPayload => {
   let pSummary = '';
 
   if (event.isBundle) {
+    const se = sessionEvent as Record<string, unknown>;
+    const seData = se.data as Record<string, unknown> | undefined;
     pText = sessionEvent.type === 'assistant.message'
-      ? (sessionEvent as any).data?.content || ''
+      ? (seData?.content as string | undefined) || ''
       : '';
   } else {
     // Discriminated union handling for custom and standard events
     const type = sessionEvent.type;
-    const data = sessionEvent.data as any; // Temporary fallback for SDK types that are complex
-
+    const data = (sessionEvent.data && typeof sessionEvent.data === 'object' 
+      ? sessionEvent.data as Record<string, unknown> 
+      : {}) as Record<string, unknown>;
     switch (type) {
       case 'session.start':
-        pSessionId = data.sessionId;
-        pWorkingDirectory = data.context?.cwd ?? '';
+        pSessionId = data.sessionId as string;
+        pWorkingDirectory = (data.context as Record<string, unknown> | undefined)?.cwd as string ?? '';
         pClientName = `${data.producer} (v${data.copilotVersion})`;
-        pModel = data.selectedModel ?? '';
-        pEffort = data.reasoningEffort ?? 'medium';
+        pModel = data.selectedModel as string ?? '';
+        pEffort = data.reasoningEffort as string ?? 'medium';
         break;
-
       case 'user.message':
-        pPrompt = data.content;
-        pAttachments = data.attachments ?? [];
+        pPrompt = data.content as string;
+        pAttachments = (data.attachments as unknown[]) ?? [];
         break;
-
       case 'assistant.reasoning':
-        pThought = data.content;
-        pText = data.content;
+        pThought = data.content as string;
+        pText = data.content as string;
         break;
-
       case 'tool.execution_start':
-        pToolCallId = data.toolCallId;
-        pToolName = data.toolName;
+        pToolCallId = data.toolCallId as string;
+        pToolName = data.toolName as string;
         pArguments = data.arguments ?? {};
-        pModel = data.model ?? '';
+        pModel = data.model as string ?? '';
         break;
-
-      case 'tool.execution_complete':
-        pToolCallId = data.toolCallId;
-        pToolName = data.toolDescription?.name || data.toolName || '';
+      case 'tool.execution_complete': {
+        pToolCallId = data.toolCallId as string;
+        const toolDescription = data.toolDescription as Record<string, unknown> | undefined;
+        pToolName = toolDescription?.name as string || data.toolName as string || '';
         pResultType = data.success ? 'success' : 'failure';
-        pError = data.error?.message ?? '';
+        const errorVal = data.error as Record<string, unknown> | undefined;
+        pError = errorVal?.message as string ?? '';
         if (data.result && typeof data.result === 'object') {
-          const result = data.result;
+          const result = data.result as Record<string, unknown>;
           if ('content' in result && typeof result.content === 'string') {
             pTextResult = result.content;
           }
-          if (Array.isArray(result.contents)) {
+          const contents = result.contents as readonly unknown[] | undefined;
+          if (Array.isArray(contents)) {
             try {
-              pBinaryResults = result.contents.filter((c: any) => {
-                return c && typeof c === 'object' && 'type' in c && c.type !== 'text';
+              pBinaryResults = contents.filter((c: unknown) => {
+                return c && typeof c === 'object' && 'type' in c && (c as Record<string, unknown>).type !== 'text';
               });
             } catch (e) {
               console.error('Failed to parse binary results:', e);
@@ -196,115 +218,107 @@ export const parseEvent = (event: CopilotEvent): ParsedEventPayload => {
           }
         }
         pText = pTextResult;
-        pModel = data.model ?? '';
-        if (data.toolTelemetry?.executionTimeMs !== undefined) {
-          pExecutionMs = String(data.toolTelemetry.executionTimeMs);
-        }
-        break;
-
-      case 'permission.requested': {
-        const req = data.permissionRequest;
-        pKind = req.kind;
-        if ('intention' in req && typeof req.intention === 'string') {
-          pReason = req.intention;
-        }
-        if (req.kind === 'write') {
-          pFileName = req.fileName;
-          pDiff = req.diff;
-        } else if (req.kind === 'shell') {
-          pPrompt = req.fullCommandText;
+        pModel = data.model as string ?? '';
+        const toolTelemetry = data.toolTelemetry as Record<string, unknown> | undefined;
+        if (toolTelemetry?.executionTimeMs !== undefined) {
+          pExecutionMs = String(toolTelemetry.executionTimeMs);
         }
         break;
       }
-
-      case 'permission.completed':
-        pDecision = data.result?.kind ?? '';
+      case 'permission.requested': {
+        const req = data.permissionRequest as Record<string, unknown>;
+        pKind = req.kind as string;
+        if (req && 'intention' in req && typeof req.intention === 'string') {
+          pReason = req.intention;
+        }
+        if (req.kind === 'write') {
+          pFileName = req.fileName as string;
+          pDiff = req.diff as string;
+        } else if (req.kind === 'shell') {
+          pPrompt = req.fullCommandText as string;
+        }
         break;
-
+      }
+      case 'permission.completed': {
+        const resultVal = data.result as Record<string, unknown> | undefined;
+        pDecision = resultVal?.kind as string ?? '';
+        break;
+      }
       case 'session.error':
-        pError = data.message;
-        pDetails = data.stack ?? '';
+        pError = data.message as string;
+        pDetails = data.stack as string ?? '';
         break;
-
       case 'assistant.message':
-        pText = data.content;
+        pText = data.content as string;
         break;
-
       case 'session.shutdown':
         pSummary = 'Session ended';
         break;
-
       case 'gate.start':
-        pToolName = data.gateName;
+        pToolName = data.gateName as string;
         pSummary = `Initiated Gate Check: ${data.gateName}`;
         break;
-
       case 'gate.result':
-        pToolName = data.gateName;
+        pToolName = data.gateName as string;
         pResultType = data.pass ? 'success' : 'failure';
-        pText = data.feedback;
-        pExecutionMs = data.durationMs;
+        pText = data.feedback as string;
+        pExecutionMs = data.durationMs as number | string;
         break;
-      
-      case 'composer.plan':
+      case 'composer.plan': {
         pSummary = `Dynamic Routing Complete: ${data.taskType}`;
-        pDetails = `Resolved Gates: ${(data.gates || data.resolvedGates || []).join(', ') || 'None'}`;
-        pText = data.taskType;
+        const gates = (data.gates || data.resolvedGates || []) as readonly string[];
+        pDetails = `Resolved Gates: ${gates.join(', ') || 'None'}`;
+        pText = data.taskType as string;
         break;
-
-      case 'composer.plan_mutated':
+      }
+      case 'composer.plan_mutated': {
         pSummary = `Dynamic Blueprint Mutated (Healed)`;
-        pDetails = `New Gates: ${(data.gates || data.newGates || []).join(', ') || 'None'}`;
+        const gates = (data.gates || data.newGates || []) as readonly string[];
+        pDetails = `New Gates: ${gates.join(', ') || 'None'}`;
         pText = `Cycle: ${data.cycle}`;
         break;
-
+      }
       case 'loop.retry':
         pSummary = `Retrying cycle (attempt ${data.retryCount})`;
-        pDetails = data.feedback;
-        pModel = data.nextModel;
+        pDetails = data.feedback as string;
+        pModel = data.nextModel as string;
         break;
-
       case 'loop.complete':
         if (data.reason === 'CEILING_BREACHED') {
           pSummary = `Execution stopped: Iteration ceiling reached (${data.maxCycles} max).`;
           pResultType = 'failure';
-          pError = data.feedback;
+          pError = data.feedback as string;
         } else {
           pSummary = `Verification cycle finished successfully.`;
           pResultType = 'success';
         }
-        pDetails = `Retries: ${data.totalRetries ?? 0}, Gates: ${data.gatesRun?.join(', ') ?? 'N/A'}`;
-        pExecutionMs = data.durationMs;
+        pDetails = `Retries: ${data.totalRetries ?? 0}, Gates: ${((data.gatesRun || []) as readonly string[]).join(', ') ?? 'N/A'}`;
+        pExecutionMs = data.durationMs as number | string;
         break;
-
       case 'loop.escalate_human':
         pSummary = 'Halted for Human Review';
-        pError = data.summary;
+        pError = data.summary as string;
         break;
-
       case 'loop.clarity_check_failed':
         pSummary = 'Goal Ambiguity Detected';
         pResultType = 'failure';
-        pError = data.feedback;
+        pError = data.feedback as string;
         pDetails = `Clarity Score: ${data.score}`;
         break;
-
       case 'tool.result':
-        pToolName = data.toolName;
-        pTextResult = data.stdout || data.stderr || '';
+        pToolName = data.toolName as string;
+        pTextResult = (data.stdout as string | undefined) || (data.stderr as string | undefined) || '';
         pResultType = data.exitCode === 0 ? 'success' : 'failure';
         pText = pTextResult;
         break;
-      
       case 'TURN_COMPLETED':
         pSummary = `Milestone: ${data.taskLabel}`;
         pDetails = `Commit SHA: ${data.commitSha || 'Pending'}`;
         break;
-
       case 'gate.legacyAudit':
-        pToolName = data.action;
-        pText = data.rationale;
-        pModel = data.tier;
+        pToolName = data.action as string;
+        pText = data.rationale as string;
+        pModel = data.tier as string;
         break;
       default:
         // Do nothing for unhandled event types
@@ -329,7 +343,7 @@ export const parseEvent = (event: CopilotEvent): ParsedEventPayload => {
     pExecutionMs,
     pError,
     pTextResult,
-    pBinaryResults,
+    pBinaryResults: [...pBinaryResults],
     pThought,
     pEffort,
     pFileName,
@@ -352,18 +366,14 @@ export const getBundledEvents = (
   if (!events || events.length === 0) return [];
   const result: CopilotEvent[] = [];
   let currentBundle: CopilotEvent[] = [];
-
   const flushBundle = () => {
     if (currentBundle.length === 0) return;
-
     const firstEvt = currentBundle[0]!;
-
     // Concatenate text
     let assembledText = '';
     currentBundle.forEach(evt => {
       assembledText += extractAssistantText(evt.sessionEvent);
     });
-
     // Sum telemetry
     let promptTokens = 0;
     let completionTokens = 0;
@@ -371,7 +381,6 @@ export const getBundledEvents = (
     let totalNanoAiu = 0;
     let creditsCost = 0;
     let hasTelemetry = false;
-
     currentBundle.forEach(evt => {
       if (evt.telemetryUsage) {
         hasTelemetry = true;
@@ -382,7 +391,6 @@ export const getBundledEvents = (
         creditsCost += evt.telemetryUsage.creditsCost || 0;
       }
     });
-
     const bundledEvent: CopilotEvent = {
       title: `Assistant Stream (${currentBundle.length} consecutive events)`,
       category: 'assistant',
@@ -408,11 +416,9 @@ export const getBundledEvents = (
         }
       } : {})
     };
-
     result.push(bundledEvent);
     currentBundle = [];
   };
-
   events.forEach(evt => {
     if (isDeltaEvent(evt)) {
       currentBundle.push(evt);
@@ -421,7 +427,6 @@ export const getBundledEvents = (
       result.push(evt);
     }
   });
-
   flushBundle();
   return result;
 };

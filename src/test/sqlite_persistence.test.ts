@@ -106,8 +106,15 @@ describe('SQLite Persistence layer', () => {
       failedGate: 'budget_guard',
       failedGateFeedback: 'budget exceeded',
       retryHistory: [],
-      stateSnapshot: { isRunning: false },
-      conversationHistory: [{ role: 'system', content: 'hello' }],
+      stateSnapshot: {
+        isRunning: false,
+        retryCount: 0,
+        currentTier: 'gemini-3.1-flash-lite',
+        activeGate: undefined,
+        hasFailureState: false,
+        awaitingHuman: false,
+      },
+      conversationHistory: [{ role: 'user', content: 'hello' }],
       turns: [],
       cwd: '/workspace',
       currentModel: 'gemini'

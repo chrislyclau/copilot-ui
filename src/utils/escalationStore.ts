@@ -1,26 +1,47 @@
 import { db } from '../db/index';
+import { StateSnapshot, Turn } from '../types/session';
 
 export interface EscalationEntry {
-  id: string;
-  sessionId: string;
-  escalatedAt: number;
-  summary: string;
-  failedGate: string | undefined;
-  failedGateFeedback: string | undefined;
-  retryHistory: any[];
-  status: 'pending' | 'resumed' | 'resolved';
+  readonly id: string;
+  readonly sessionId: string;
+  readonly escalatedAt: number;
+  readonly summary: string;
+  readonly failedGate: string | undefined;
+  readonly failedGateFeedback: string | undefined;
+  readonly retryHistory: ReadonlyArray<unknown>;
+  readonly status: 'pending' | 'resumed' | 'resolved';
   // Context for rehydration
-  stateSnapshot?: any;
-  conversationHistory?: readonly any[];
-  turns?: readonly any[];
-  cwd?: string;
-  currentModel?: string;
+  readonly stateSnapshot?: StateSnapshot;
+  readonly conversationHistory?: ReadonlyArray<{ readonly role: 'user' | 'assistant'; readonly content: string }>;
+  readonly turns?: ReadonlyArray<Turn>;
+  readonly cwd?: string;
+  readonly currentModel?: string;
 }
 
-export function getEscalations(): EscalationEntry[] {
-  const rows = db.prepare('SELECT * FROM escalations ORDER BY escalatedAt DESC').all() as any[];
+interface EscalationRow {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly escalatedAt: number;
+  readonly summary: string;
+  readonly failedGate: string | null;
+  readonly failedGateFeedback: string | null;
+  readonly retryHistory: string;
+  readonly status: 'pending' | 'resumed' | 'resolved';
+  readonly stateSnapshot?: string | null;
+  readonly conversationHistory?: string | null;
+  readonly turns?: string | null;
+  readonly cwd?: string | null;
+  readonly currentModel?: string | null;
+}
+
+export function getEscalations(): ReadonlyArray<EscalationEntry> {
+  const rows = db.prepare('SELECT * FROM escalations ORDER BY escalatedAt DESC').all() as ReadonlyArray<EscalationRow>;
   return rows.map(row => ({
     ...row,
+    failedGate: row.failedGate ?? undefined,
+    failedGateFeedback: row.failedGateFeedback ?? undefined,
+    cwd: row.cwd ?? undefined,
+    currentModel: row.currentModel ?? undefined,
     retryHistory: row.retryHistory ? JSON.parse(row.retryHistory) : [],
     stateSnapshot: row.stateSnapshot ? JSON.parse(row.stateSnapshot) : undefined,
     conversationHistory: row.conversationHistory ? JSON.parse(row.conversationHistory) : undefined,
@@ -70,12 +91,16 @@ export function getPendingEscalation(sessionId: string): EscalationEntry | undef
     SELECT * FROM escalations 
     WHERE sessionId = @sessionId AND status = 'pending' 
     ORDER BY escalatedAt DESC LIMIT 1
-  `).get({ sessionId }) as any;
+  `).get({ sessionId }) as EscalationRow | undefined;
   
   if (!row) return undefined;
   
   return {
     ...row,
+    failedGate: row.failedGate ?? undefined,
+    failedGateFeedback: row.failedGateFeedback ?? undefined,
+    cwd: row.cwd ?? undefined,
+    currentModel: row.currentModel ?? undefined,
     retryHistory: row.retryHistory ? JSON.parse(row.retryHistory) : [],
     stateSnapshot: row.stateSnapshot ? JSON.parse(row.stateSnapshot) : undefined,
     conversationHistory: row.conversationHistory ? JSON.parse(row.conversationHistory) : undefined,

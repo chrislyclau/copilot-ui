@@ -1,5 +1,6 @@
 import { db } from './index';
 import { SessionRecord } from '../types/session';
+import { ModelTier } from '../config/models';
 
 interface SessionRow {
   readonly sessionId: string;
@@ -24,7 +25,7 @@ export function getSession(sessionId: string): Partial<SessionRecord> | undefine
   return {
     sessionId: row.sessionId,
     taskId: row.taskId,
-    currentModel: row.currentModel as any, // TODO: refine Model type
+    currentModel: row.currentModel as ModelTier, // TODO: refine Model type
     cwd: row.cwd,
     lastUsedAt: row.lastUsedAt,
     currentTierIndex: row.currentTierIndex,
@@ -91,7 +92,7 @@ export function getAllSessions(): ReadonlyArray<Partial<SessionRecord>> {
   return rows.map(row => ({
     sessionId: row.sessionId,
     taskId: row.taskId,
-    currentModel: row.currentModel as any,
+    currentModel: row.currentModel as ModelTier,
     cwd: row.cwd,
     lastUsedAt: row.lastUsedAt,
     currentTierIndex: row.currentTierIndex,

@@ -1,7 +1,7 @@
 import { CapiProxy } from './CapiProxy';
 import * as path from 'path';
 import * as fs from 'fs';
-import { initializeWorkspace } from '../../workspace';
+import { initializeWorkspace, resetWorkspaceForTests, resetNativeWorkspace } from '../../workspace';
 
 class ServerHarness {
   private serverProcess: any = null;
@@ -82,20 +82,17 @@ class ServerHarness {
     return { serverPort: this.serverPort, proxyUrl: this.proxyUrl, proxy: this.proxy };
   }
 
-  async stop(force = false): Promise<void> {
-    // If not forced, we keep the singleton alive across test files for performance
-    if (!force) return;
-
+  async stop(): Promise<void> {
     if (this.serverProcess) {
-      console.log('[ServerHarness] Stopping in-process server...');
       this.serverProcess.close();
       this.serverProcess = null;
     }
     if (this.proxy) {
-      console.log('[ServerHarness] Stopping in-process CapiProxy...');
       await this.proxy.stop();
       this.proxy = null;
     }
+    resetWorkspaceForTests();
+    resetNativeWorkspace();
     this.isStarted = false;
   }
 }

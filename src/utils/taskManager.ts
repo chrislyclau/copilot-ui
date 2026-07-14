@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getGitSandbox, getWorkspaceRoot } from '../workspace';
 import { saveSpec, saveTask, getTasksForSpec, SpecRecord, TaskRecord } from '../db/taskStore';
-import { savePbi, PbiRecord } from '../db/pbiStore';
+import { savePbi, getPbi, PbiRecord } from '../db/pbiStore';
+import { db } from '../db';
 import crypto from 'crypto';
 
 export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecRecord; tasks: TaskRecord[] } | null> {
@@ -26,7 +27,41 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
 
   // 3. Define specId based on the relative path to avoid absolute path discrepancies
   const relativePath = path.relative(getWorkspaceRoot(), specPath);
-  const specId = 'spec-' + crypto.createHash('sha256').update(relativePath).digest('hex').substring(0, 12);
+  let specId = 'spec-' + crypto.createHash('sha256').update(relativePath).digest('hex').substring(0, 12);
+
+  // Check if we already have a record for this exact filePath
+  const existingSpecByPath = db.prepare('SELECT * FROM specs WHERE filePath = ?').get(relativePath) as SpecRecord | undefined;
+  if (existingSpecByPath) {
+    specId = existingSpecByPath.specId;
+  } else {
+    // Look for a moved/renamed spec
+    const allSpecs = db.prepare('SELECT * FROM specs').all() as SpecRecord[];
+    const missingSpecs = allSpecs.filter(s => !fs.existsSync(path.resolve(getWorkspaceRoot(), s.filePath)));
+    
+    let migratedSpecId = null;
+    if (missingSpecs.length > 0) {
+      const basenameMatch = missingSpecs.find(s => {
+        if (path.basename(s.filePath) !== path.basename(relativePath)) {
+          return false;
+        }
+        // Require identical parent folder name to avoid mismatches
+        if (path.basename(path.dirname(s.filePath)) !== path.basename(path.dirname(relativePath))) {
+          return false;
+        }
+        return true;
+      });
+
+      if (basenameMatch) {
+        migratedSpecId = basenameMatch.specId;
+      }
+    }
+
+    if (migratedSpecId) {
+      db.prepare('UPDATE specs SET filePath = ?, version = ?, createdAt = ? WHERE specId = ?')
+        .run(relativePath, gitSha, Date.now(), migratedSpecId);
+      specId = migratedSpecId;
+    }
+  }
 
   // 4. Save Spec
   const spec: SpecRecord = {
@@ -39,15 +74,16 @@ export async function decomposeSpecIntoTasks(cwd: string): Promise<{ spec: SpecR
 
   // Create and save catch-all PBI per spec
   const pbiId = specId + '-pbi-default';
+  const existingPbi = getPbi(pbiId);
   const catchAllPbi: PbiRecord = {
     pbiId,
     specId,
     title: 'Default PBI',
     description: 'Catch-all Product Backlog Item for the specification.',
-    status: 'pending',
+    status: existingPbi ? existingPbi.status : 'pending',
     dependsOn: null,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    createdAt: existingPbi ? existingPbi.createdAt : Date.now(),
+    updatedAt: existingPbi ? existingPbi.updatedAt : Date.now(),
   };
   savePbi(catchAllPbi);
 

@@ -82,14 +82,13 @@ db.exec(`
   );
 `);
 
-try {
+// Robustly check and add missing columns
+const sessionsColumns = db.pragma('table_info(sessions)') as { name: string }[];
+if (!sessionsColumns.some(col => col.name === 'taskId')) {
   db.prepare('ALTER TABLE sessions ADD COLUMN taskId TEXT').run();
-} catch (e) {
-  // Ignored if column already exists or table is empty
 }
 
-try {
+const tasksColumns = db.pragma('table_info(tasks)') as { name: string }[];
+if (!tasksColumns.some(col => col.name === 'pbiId')) {
   db.prepare('ALTER TABLE tasks ADD COLUMN pbiId TEXT REFERENCES pbis(pbiId)').run();
-} catch (e) {
-  // Ignored if column already exists or table is empty
 }

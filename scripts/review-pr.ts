@@ -124,9 +124,6 @@ Compliance information is located in AGENTS.md and README.md.
 - If the PR consists primarily of code movement/refactoring, limit findings to newly introduced bugs, regressions, or meaningful performance problems.
 - DO NOT raise style/preference findings unless they create a real readability, consistency, or maintenance problem, or violate an established repo standard.
 
-**Tool Use Policy:**
-- You may only use tools to read files from the repository context and call 'submit_code_review'.
-- Do not invoke any other arbitrary tools or commands.
 
 **Classification and Output Rules:**
 - Keep each finding's message concise (target: under ~150 words) unless a code snippet is necessary for clarity.

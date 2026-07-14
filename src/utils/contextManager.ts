@@ -188,8 +188,10 @@ export class SlidingWindowCircularBuffer<T> {
     for (let i = 0; i < arr.length; i++) {
       const item = arr[i];
       if (item && typeof item === 'object') {
-        const itemObj = item as any;
-        const seq = itemObj.sequenceId ?? itemObj.data?.sequenceId;
+        const itemObj = item as Record<string, unknown>;
+        const dataObj = (itemObj.data && typeof itemObj.data === 'object') ? (itemObj.data as Record<string, unknown>) : undefined;
+        const seq = (typeof itemObj.sequenceId === 'number' ? itemObj.sequenceId : undefined) ?? 
+                    (dataObj && typeof dataObj.sequenceId === 'number' ? dataObj.sequenceId : undefined);
         if (seq !== undefined && seq < minId) {
           minId = seq;
         }
