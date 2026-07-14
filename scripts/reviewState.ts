@@ -6,26 +6,19 @@ import { execFileSync } from 'node:child_process';
  * without any external/persistent storage -- CI containers are not assumed to
  * persist anything between runs, but PR comments obviously do.
  */
-const STATE_MARKER_START = '<!-- review-pr:state';
-const STATE_MARKER_END = '-->';
-
-/** Only blocking findings are carried across runs -- see discussion in PR review. */
-export interface PersistedBlockingFinding {
-  file: string;
-  line?: number;
-  message: string;
-}
+export const STATE_MARKER_START = '<!-- review-pr:state';
+export const STATE_MARKER_END = '-->';
 
 export interface ReviewState {
   lastReviewedSha: string;
-  blockingFindings: PersistedBlockingFinding[];
   /** copilot-sdk session id for the run that produced this state, for correlating with logs. */
   session_id?: string;
 }
 
-interface GhComment {
+export interface GhComment {
   author?: { login?: string };
   body: string;
+  createdAt?: string;
 }
 
 /**
@@ -33,7 +26,7 @@ interface GhComment {
  * GITHUB_TOKEN in Actions. Overridable via REVIEW_BOT_LOGIN for other setups
  * (e.g. a GitHub App with its own bot identity).
  */
-function getBotLogin(): string {
+export function getBotLogin(): string {
   return process.env.REVIEW_BOT_LOGIN || 'github-actions[bot]';
 }
 
@@ -43,8 +36,22 @@ function getBotLogin(): string {
  * plain "github-actions", while the REST API / UI show "github-actions[bot]".
  * Stripping the suffix on both sides makes the comparison robust to either form.
  */
-function normalizeBotLogin(login: string | undefined): string {
+export function normalizeBotLogin(login: string | undefined): string {
   return (login || '').replace(/\[bot\]$/, '');
+}
+
+export function fetchComments(prNumber: string): GhComment[] {
+  try {
+    const raw = execFileSync(
+      'gh',
+      ['pr', 'view', prNumber, '--json', 'comments'],
+      { maxBuffer: 1024 * 1024 * 20 },
+    ).toString();
+    return JSON.parse(raw).comments || [];
+  } catch (err) {
+    console.warn('[review-pr] failed to fetch PR comments for prior state, doing full review:', (err as Error)?.message || err);
+    return [];
+  }
 }
 
 /**
@@ -53,20 +60,9 @@ function normalizeBotLogin(login: string | undefined): string {
  * prior state, the marker is malformed, or the gh call fails for any reason --
  * callers should treat null as "do a full review", never as a hard error.
  */
-export function loadPreviousReviewState(prNumber: string): ReviewState | null {
-  const INCREMENTAL_IS_SUBOPTIMAL = true; // TODO: We need to optimize it further before enabling it.
-  if(INCREMENTAL_IS_SUBOPTIMAL) return null;
-  let comments: GhComment[];
-  try {
-    const raw = execFileSync(
-      'gh',
-      ['pr', 'view', prNumber, '--json', 'comments'],
-      { maxBuffer: 1024 * 1024 * 20 },
-    ).toString();
-    comments = JSON.parse(raw).comments || [];
-  } catch (err) {
-    console.warn('[review-pr] failed to fetch PR comments for prior state, doing full review:', (err as Error)?.message || err);
-    return null;
+export function loadPreviousReviewState(prNumber: string, comments?: GhComment[]): ReviewState | null {
+  if (!comments) {
+    comments = fetchComments(prNumber);
   }
 
   const botLogin = getBotLogin();
@@ -99,7 +95,6 @@ function parseStateMarker(body: string): ReviewState | null {
     const parsed = JSON.parse(jsonText);
     if (
       typeof parsed?.lastReviewedSha !== 'string' ||
-      !Array.isArray(parsed?.blockingFindings) ||
       (parsed?.session_id !== undefined && typeof parsed.session_id !== 'string')
     ) {
       return null;
