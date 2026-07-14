@@ -137,9 +137,7 @@ Read \`.review-context/comments.md\` to determine if previously reported blockin
 - Do not re-raise a prior finding as newly reported once you judge it addressed; instead, acknowledge it as 'resolved' in the finding output.
 - When a fix introduced in response to prior feedback is found to have introduced a new issue that did not previously exist, raise it as a new finding (regression check).
 - Only set the 'status' field to 'still-open' or 'resolved' on findings that correspond to a prior finding from the comment history.`
-    : `This is a full review of the entire PR diff in \`.review-context/diff.patch\`. Do not set the 'status' field on any findings.`}
-
-Suggestions and nits are not tracked across review rounds -- just report whatever you currently observe, with no 'status' field.
+    : `This is a full review of the entire PR diff in \`.review-context/diff.patch\`.`}
 
 You must not answer conversationally and must strictly invoke 'submit_code_review'.`;
 }
