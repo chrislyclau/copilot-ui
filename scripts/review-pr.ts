@@ -107,13 +107,6 @@ function resolveDiffRange(
 }
 
 const submitCodeReviewTool = typeof structuredClone === 'function' ? structuredClone(baseSubmitCodeReviewTool) : JSON.parse(JSON.stringify(baseSubmitCodeReviewTool));
-const findingsProps = submitCodeReviewTool.function.parameters.properties.findings.items.properties;
-findingsProps.category = {
-  type: "string",
-  enum: ["bug", "security", "performance", "style"],
-  description: "Optional category of the finding."
-};
-findingsProps.status.description = "Only set this to 'still-open' or 'resolved' for findings that correspond to a prior finding from the comment history. Omit for new findings.";
 
 function buildSystemPrompt(incremental: boolean): string {
   return `You are a code review agent. Review the given PR diff for bugs, compliance issues, and quality concerns.
