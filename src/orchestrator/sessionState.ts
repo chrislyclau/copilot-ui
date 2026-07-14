@@ -432,7 +432,6 @@ You MUST submit structured verification feedback, logic checks, and compiler gat
       auditPrompt,
       {
         toolChoice: { type: 'function', function: { name: submitAuditFindingsTool.function.name } },
-        allowOthers: false
       },
       abortSignal
     );

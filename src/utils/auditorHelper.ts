@@ -12,11 +12,6 @@ export interface ResponseRequirement {
    * Use { type: 'function', function: { name: '...' } } for forced single tool call.
    */
   toolChoice: any;
-  /**
-   * If true, allows tools other than the primary auditor tool.
-   * If false, rejects any tool call that doesn't match the primary tool.
-   */
-  allowOthers: boolean;
 }
 
 /**
@@ -131,8 +126,15 @@ export function buildAuditorSessionSettings(
         }
       } ],
     tool_choice: responseRequirements.toolChoice,
+    // NOTE: this onPermissionRequest is currently unreachable in practice --
+    // CopilotClient.createSession/resumeSession (src/copilotSdk/boundary.ts)
+    // default `autoApproveAll` to `true`, which replaces whatever
+    // onPermissionRequest is passed here with an unconditional approve-once.
+    // Actual tool-use narrowing happens via the `availableTools` restriction
+    // applied on retry in executeAuditSession, not via this callback. Kept
+    // here (rather than removed) so it takes effect automatically if a caller
+    // ever passes `autoApproveAll: false`.
     onPermissionRequest: async (req: any) => {
-      if (responseRequirements.allowOthers) return { kind: 'approve-once' };
       const requestedTool = req.toolName || req.name || (req.toolCalls && req.toolCalls[0]?.function?.name);
       const allowed = !requestedTool || requestedTool === toolName || 
         (Array.isArray(req.toolCalls) && req.toolCalls.every((tc: any) => tc.function?.name === toolName));
@@ -272,7 +274,7 @@ export async function executeAuditSession<T>(
         systemPrompt,
         tool,
         (args) => { result = args as T; },
-        { toolChoice: responseRequirements.toolChoice, allowOthers: false }
+        { toolChoice: responseRequirements.toolChoice }
       );
 
       const nudge = lastAssistantText.trim()

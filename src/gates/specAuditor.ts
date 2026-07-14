@@ -57,7 +57,6 @@ You must not answer conversationally and must strictly invoke 'submit_spec_audit
       auditPrompt,
       {
         toolChoice: { type: 'function', function: { name: submitSpecAuditTool.function.name } },
-        allowOthers: false
       },
       abortSignal
     );
