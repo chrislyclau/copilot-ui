@@ -250,8 +250,7 @@ ${hasDiffStat ? '- `diff-stat.txt`: A summary of the changed files and lines.\n'
       submitCodeReviewTool,
       userPrompt,
       {
-        toolChoice: 'auto',
-        allowOthers: true
+        
       },
       undefined,
       600000,
