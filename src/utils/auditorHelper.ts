@@ -153,6 +153,14 @@ export function buildAuditorSessionSettings(
         }
       }
     ],
+    // NOTE: this onPermissionRequest is currently unreachable in practice --
+    // CopilotClient.createSession/resumeSession (src/copilotSdk/boundary.ts)
+    // default `autoApproveAll` to `true`, which replaces whatever
+    // onPermissionRequest is passed here with an unconditional approve-once.
+    // Actual tool-use narrowing happens via the `availableTools` restriction
+    // applied on retry in executeAuditSession, not via this callback. Kept
+    // here (rather than removed) so it takes effect automatically if a caller
+    // ever passes `autoApproveAll: false`.
     onPermissionRequest: async (req: PermissionRequest): Promise<PermissionRequestResult> => {
       const record = req as unknown as Record<string, unknown>;
       const requestedTool = (record.toolName as string | undefined) || 
