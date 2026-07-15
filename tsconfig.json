@@ -35,6 +35,6 @@
     "resolveJsonModule": true,
     "maxNodeModuleJsDepth": 0
   },
-  "include": ["src", "server.ts", "scripts"],
+  "include": ["src", "server.ts", "scripts", "server.entry.ts", "request.ts"],
   "exclude": ["node_modules"]
 }
