@@ -11,15 +11,19 @@ export interface ToolDefinition {
 }
 
 /**
- * Requirements for the auditor session response.
- * Controls how tool calls are enforced and guarded.
+ * Additional context to help a session comply on retry (see executeAuditSession).
+ * Does not enforce anything by itself -- @github/copilot-sdk has no tool_choice-style
+ * enforcement primitive at the session or message level.
  */
 export interface ResponseRequirement {
   /**
-   * The tool_choice setting for the session.
-   * Use { type: 'function', function: { name: '...' } } for forced single tool call.
+   * Optional worked example of valid tool-call arguments (as a JSON string).
+   * Weaker models sometimes end their turn by writing a text pseudo-call
+   * (e.g. `call:toolName{...}`) instead of a real function/tool call. Re-showing
+   * a concrete example on retry gives the model something to pattern-match
+   * against instead of just being told again to "call the tool".
    */
-  readonly toolChoice: unknown;
+  readonly toolCallExample?: string;
 }
 
 /**
@@ -96,16 +100,21 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
 
 /**
  * Shared session settings for auditors:
- * - Configurable tool-call enforcement via responseRequirements
- * - No-conversational-reply enforcement
+ * - No-conversational-reply enforcement (via systemPrompt)
  * - Tool-specific permission guarding
+ *
+ * Note: @github/copilot-sdk's SessionConfig has no `tool_choice`-style field --
+ * this SDK is an agentic session (the model has a standing toolbox and decides
+ * per-turn what to call), not a raw chat-completions call with a per-turn
+ * choice policy. Tool-call compliance is instead driven by restricting
+ * `availableTools` (see executeAuditSession's retry loop) and by prompting
+ * (system prompt + retry nudge with a worked example).
  */
 export function buildAuditorSessionSettings(
   executionConfig: ExecutionConfig,
   systemPrompt: string,
   tool: ToolDefinition,
-  onResult: (result: unknown) => void,
-  responseRequirements: ResponseRequirement
+  onResult: (result: unknown) => void
 ) {
   const toolName = tool.function.name;
   return {
@@ -144,7 +153,6 @@ export function buildAuditorSessionSettings(
         }
       }
     ],
-    tool_choice: responseRequirements.toolChoice,
     onPermissionRequest: async (req: PermissionRequest): Promise<PermissionRequestResult> => {
       const record = req as unknown as Record<string, unknown>;
       const requestedTool = (record.toolName as string | undefined) || 
@@ -249,8 +257,7 @@ export async function executeAuditSession<T>(
       executionConfig,
       systemPrompt,
       tool,
-      (args) => { result = args as T; },
-      responseRequirements
+      (args) => { result = args as T; }
     );
     
     console.log('[executeAuditSession] creating session...');
@@ -273,14 +280,10 @@ export async function executeAuditSession<T>(
         `(attempt ${attempt}/${maxRetries}); resuming session with restricted toolset...`
       );
       
-      // const retrySettings = buildAuditorSessionSettings(
-      //   executionConfig,
-      //   systemPrompt,
-      //   tool,
-      //   (args) => { result = args as T; },
-      //   { toolChoice: responseRequirements.toolChoice }
-      // );
-      
+      const exampleBlock = responseRequirements.toolCallExample
+        ? `\n\nUse your tool-calling capability (a real function/tool call) -- not text in your message. Example of correctly-shaped arguments:\n\n${responseRequirements.toolCallExample}`
+        : '';
+
       const nudge = lastAssistantText.trim()
         ? `You did not call '${toolName}'. Your last message was:
 
@@ -288,11 +291,27 @@ export async function executeAuditSession<T>(
 ${truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH)}
 """
 
-You must now call '${toolName}' with your findings. Do not respond conversationally, do not ask clarifying questions, and do not call any other tool -- call '${toolName}' now.`
-        : `You ended your turn without calling '${toolName}'. You must now call '${toolName}' with your findings. Do not respond conversationally and do not call any other tool -- call '${toolName}' now.`;
+You must now call '${toolName}' with your findings. Do not respond conversationally, do not ask clarifying questions, and do not call any other tool -- call '${toolName}' now.${exampleBlock}`
+        : `You ended your turn without calling '${toolName}'. You must now call '${toolName}' with your findings. Do not respond conversationally and do not call any other tool -- call '${toolName}' now.${exampleBlock}`;
         
       session = await client.resumeSession(sessionId, {
         availableTools: [toolName],
+        // Re-supply BYOK credentials on every resume. Per the SDK docs, `provider`
+        // is NOT persisted across a resume the way most other session config is --
+        // it must be re-provided each time, or the resumed session silently loses
+        // BYOK and falls back off the configured provider.
+        //
+        // This currently happens to be harmless here: `client` is never stopped and
+        // `session` is never disconnected between the original createSession and this
+        // resumeSession call, so the CLI process/connection never actually let go of
+        // the credentials -- the resume is live/in-memory, not a cold resume from disk.
+        // But that's a lifecycle detail, not a guarantee. If this loop is ever changed
+        // to retry after a disconnect, a process restart, or on a different client
+        // instance (e.g. a queue/worker picking up the retry), omitting `provider`
+        // here would start silently downgrading BYOK sessions to copilot-native on
+        // retry. Keep this passed explicitly so correctness doesn't depend on the
+        // current call not disconnecting in between.
+        ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
       } as SessionConfig & { autoApproveAll?: boolean });
       
       sessionId = session.sessionId;

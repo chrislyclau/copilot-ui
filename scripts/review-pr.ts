@@ -108,6 +108,20 @@ function resolveDiffRange(
 
 const submitCodeReviewTool = typeof structuredClone === 'function' ? structuredClone(baseSubmitCodeReviewTool) : JSON.parse(JSON.stringify(baseSubmitCodeReviewTool));
 
+const SUBMIT_CODE_REVIEW_EXAMPLE = `{
+  "findings": [
+    {
+      "severity": "suggestion",
+      "category": "bug",
+      "file": "src/utils/foo.ts",
+      "line": 42,
+      "message": "Off-by-one when slicing the buffer; drops the last byte on exact-length input.",
+      "status": "new"
+    }
+  ],
+  "summary": "One bug found in buffer slicing; otherwise clean."
+}`;
+
 function buildSystemPrompt(incremental: boolean): string {
   return `You are a code review agent. Review the given PR diff for bugs, compliance issues, and quality concerns.
 
@@ -139,7 +153,14 @@ Read \`.review-context/comments.md\` to determine if previously reported blockin
 - Only set the 'status' field to 'still-open' or 'resolved' on findings that correspond to a prior finding from the comment history.`
     : `This is a full review of the entire PR diff in \`.review-context/diff.patch\`.`}
 
-You must not answer conversationally and must strictly invoke 'submit_code_review'.`;
+You must not answer conversationally and must strictly invoke 'submit_code_review'.
+
+**How to call the tool:**
+Call 'submit_code_review' using your tool-calling capability (a real function/tool call), not as text in your message. Example of correctly-shaped arguments:
+
+${SUBMIT_CODE_REVIEW_EXAMPLE}
+
+If there are no findings, still call the tool with "findings": [] and a summary explaining that.`;
 }
 
 function buildUserPrompt(): string {
@@ -238,7 +259,7 @@ ${hasDiffStat ? '- `diff-stat.txt`: A summary of the changed files and lines.\n'
       submitCodeReviewTool,
       userPrompt,
       {
-        toolChoice: 'auto',
+        toolCallExample: SUBMIT_CODE_REVIEW_EXAMPLE,
       },
       undefined,
       600000,

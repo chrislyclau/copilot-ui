@@ -56,9 +56,7 @@ export async function runSpecAudit(cwd: string, abortSignal?: AbortSignal): Prom
       systemPrompt,
       submitSpecAuditTool,
       auditPrompt,
-      {
-        toolChoice: { type: 'function', function: { name: submitSpecAuditTool.function.name } },
-      },
+      {},
       abortSignal
     );
 
