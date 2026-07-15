@@ -1,7 +1,36 @@
 import { CapiProxy } from './CapiProxy';
 import * as path from 'path';
 import * as fs from 'fs';
-import { initializeWorkspace, resetWorkspaceForTests, resetNativeWorkspace } from '../../workspace';
+import { initializeWorkspace } from '../../workspace';
+import { GitSandbox } from '../../workspace/git';
+import * as native from '../../workspace/nativeRunner';
+import { __setGitSandboxForTests } from '../vitest.setup';
+
+// Test-only reset helpers. These replace the old resetWorkspaceForTests()/
+// resetNativeWorkspace() exports (removed from workspace.ts/nativeRunner.ts,
+// which no longer have any mutable state of their own to reset). Built
+// entirely from the public surface: GitSandbox, and nativeRunner's exported
+// getWorkspaceRoot/getGitDir/execCommand. The fresh sandbox is installed via
+// the vitest.setup.ts mock's setter so getGitSandbox() picks it up.
+async function resetNativeWorkspace(): Promise<void> {
+  const root = native.getWorkspaceRoot();
+  for (const entry of fs.readdirSync(root)) {
+    fs.rmSync(path.join(root, entry), { recursive: true, force: true });
+  }
+}
+
+async function resetWorkspaceForTests(): Promise<void> {
+  // Wipe first, then reinitialize — reinitializing before wiping would
+  // delete the fresh .git the new sandbox just created.
+  await resetNativeWorkspace();
+  const sandbox = new GitSandbox(
+    native.getWorkspaceRoot(),
+    native.getGitDir(),
+    native.execCommand
+  );
+  await sandbox.initializeGitSandboxAsync();
+  __setGitSandboxForTests(sandbox);
+}
 
 class ServerHarness {
   private serverProcess: any = null;
@@ -91,8 +120,7 @@ class ServerHarness {
       await this.proxy.stop();
       this.proxy = null;
     }
-    resetWorkspaceForTests();
-    resetNativeWorkspace();
+    await resetWorkspaceForTests();
     this.isStarted = false;
   }
 }
