@@ -8,7 +8,7 @@ import { killProcessGroup } from "./processGroup";
 // OS temp root (respects TMPDIR/TEMP/TMP) and returns its path — avoiding
 // the need to hand-roll uniqueness with crypto.randomUUID() plus a
 // separate mkdirSync call.
-let FIXED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "app-"));
+const FIXED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "app-"));
 
 const FIXED_PATH = "/usr/local/bin:/usr/bin:/bin";
 
@@ -142,12 +142,4 @@ export function getWorkspaceHostLocation(): string {
 
 export function getGitDir(): string {
   return FIXED_WORKSPACE_ROOT + "/snapshots/.git";
-}
-
-export function resetNativeWorkspace(): void {
-  if (process.env.NODE_ENV === "test" || process.env.VITEST === "true") {
-    fs.rmSync(FIXED_WORKSPACE_ROOT, { recursive: true, force: true });
-    FIXED_WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "app-"));
-    fs.mkdirSync(FIXED_WORKSPACE_ROOT, { recursive: true });
-  }
 }

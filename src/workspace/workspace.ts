@@ -66,12 +66,3 @@ export function getWorkspaceRoot(): string {
 export function getWorkspaceHostLocation(): string {
   return getRunner().getWorkspaceHostLocation();
 }
-
-/**
- * Resets the workspace singleton for tests.
- */
-export function resetWorkspaceForTests(): void {
-  if (process.env.NODE_ENV === "test" || process.env.VITEST === "true") {
-    _sandbox = null;
-  }
-}

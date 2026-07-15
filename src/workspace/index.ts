@@ -4,6 +4,4 @@ export {
   getWorkspaceHostLocation,
   getWorkspaceRoot,
   initializeWorkspace,
-  resetWorkspaceForTests,
 } from "./workspace";
-export { resetNativeWorkspace } from "./nativeRunner";
