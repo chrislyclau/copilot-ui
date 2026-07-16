@@ -19,7 +19,7 @@ if [ "$MODE" = "--json" ]; then
   # Structured output: just the inline review comments, since those are the
   # ones that map to specific file/line locations in a diff.
   gh api "repos/$REPO/pulls/$PR_NUMBER/comments" \
-    --jq '[.[] | {path: .path, line: (.line // .original_line), author: .user.login, body: .body}]'
+    --jq '[.[] | {path: .path, line: .line, original_line: .original_line, side: .side, author: .user.login, body: .body}]'
   exit 0
 fi
 

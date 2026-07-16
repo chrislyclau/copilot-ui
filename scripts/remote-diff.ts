@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -23,7 +23,9 @@ interface DiffConfig {
 
 interface PRComment {
   path: string;
-  line: number;
+  line: number | null;
+  original_line: number | null;
+  side?: string;
   author: string;
   body: string;
 }
@@ -63,38 +65,88 @@ function loadComments(commentsPath?: string): Map<string, PRComment[]> {
 function annotateDiffWithComments(diff: string, comments: PRComment[]): string {
   if (comments.length === 0) return diff;
 
-  const commentsByLine = new Map<number, PRComment[]>();
+  const leftCommentsByLine = new Map<number, PRComment[]>();
+  const rightCommentsByLine = new Map<number, PRComment[]>();
+
   for (const c of comments) {
-    const list = commentsByLine.get(c.line) ?? [];
-    list.push(c);
-    commentsByLine.set(c.line, list);
+    const side = (c.side || 'RIGHT').toUpperCase();
+    if (side === 'LEFT') {
+      const lineNum = c.original_line ?? c.line;
+      if (lineNum !== null && lineNum !== undefined) {
+        const list = leftCommentsByLine.get(lineNum) ?? [];
+        list.push(c);
+        leftCommentsByLine.set(lineNum, list);
+      }
+    } else {
+      const lineNum = c.line ?? c.original_line;
+      if (lineNum !== null && lineNum !== undefined) {
+        const list = rightCommentsByLine.get(lineNum) ?? [];
+        list.push(c);
+        rightCommentsByLine.set(lineNum, list);
+      }
+    }
   }
 
   const lines = diff.split('\n');
   const out: string[] = [];
+  let currentOldLine = 0;
   let currentNewLine = 0;
+  let inHunk = false;
 
   for (const line of lines) {
     out.push(line);
 
-    // Track the current line number in the "new" file version from hunk
-    // headers like "@@ -10,7 +12,8 @@"
-    const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    // Track both old and new line numbers in the diff from hunk headers
+    // like "@@ -10,7 +12,8 @@" or "@@ -1,4 +1,4 @@" or "@@ -10 +12 @@"
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunkMatch) {
-      currentNewLine = parseInt(hunkMatch[1] || "", 10) - 1;
+      currentOldLine = parseInt(hunkMatch[1] || "0", 10) - 1;
+      currentNewLine = parseInt(hunkMatch[2] || "0", 10) - 1;
+      inHunk = true;
+      continue;
+    }
+
+    if (!inHunk) {
       continue;
     }
 
     if (line.startsWith('+') && !line.startsWith('+++')) {
       currentNewLine += 1;
-      const matches = commentsByLine.get(currentNewLine);
+      const matches = rightCommentsByLine.get(currentNewLine);
       if (matches) {
         for (const m of matches) {
-          out.push(`💬 [${m.author} on line ${m.line}]: ${m.body}`);
+          const displayLine = m.line ?? m.original_line ?? currentNewLine;
+          out.push(`💬 [${m.author} on line ${displayLine}]: ${m.body}`);
+        }
+      }
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      currentOldLine += 1;
+      const matches = leftCommentsByLine.get(currentOldLine);
+      if (matches) {
+        for (const m of matches) {
+          const displayLine = m.original_line ?? m.line ?? currentOldLine;
+          out.push(`💬 [${m.author} on line ${displayLine} (original)]: ${m.body}`);
         }
       }
     } else if (!line.startsWith('-') && !line.startsWith('---') && !line.startsWith('\\')) {
+      currentOldLine += 1;
       currentNewLine += 1;
+
+      const leftMatches = leftCommentsByLine.get(currentOldLine);
+      if (leftMatches) {
+        for (const m of leftMatches) {
+          const displayLine = m.original_line ?? m.line ?? currentOldLine;
+          out.push(`💬 [${m.author} on line ${displayLine} (original)]: ${m.body}`);
+        }
+      }
+
+      const rightMatches = rightCommentsByLine.get(currentNewLine);
+      if (rightMatches) {
+        for (const m of rightMatches) {
+          const displayLine = m.line ?? m.original_line ?? currentNewLine;
+          out.push(`💬 [${m.author} on line ${displayLine}]: ${m.body}`);
+        }
+      }
     }
   }
 
@@ -260,14 +312,14 @@ export function runRemoteDiff(config: DiffConfig): string {
         }
         const env = { ...process.env, REPO: repo };
 
-        const jsonOutput = execSync(`bash scripts/list_pr_comments.sh ${config.prNumber} --json`, { encoding: 'utf-8', env });
+        const jsonOutput = execFileSync('bash', ['scripts/list_pr_comments.sh', config.prNumber, '--json'], { encoding: 'utf-8', env });
         const comments: PRComment[] = JSON.parse(jsonOutput);
         for (const c of comments) {
           const list = commentsByFile.get(c.path) ?? [];
           list.push(c);
           commentsByFile.set(c.path, list);
         }
-        prTextInfo = execSync(`bash scripts/list_pr_comments.sh ${config.prNumber}`, { encoding: 'utf-8', env });
+        prTextInfo = execFileSync('bash', ['scripts/list_pr_comments.sh', config.prNumber], { encoding: 'utf-8', env });
       } catch (err: any) {
         console.warn(`⚠️  Failed to fetch PR comments: ${err.message}`);
       }
