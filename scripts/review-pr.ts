@@ -122,7 +122,7 @@ const SUBMIT_CODE_REVIEW_EXAMPLE = `{
   "summary": "One bug found in buffer slicing; otherwise clean."
 }`;
 
-function buildSystemPrompt(incremental: boolean): string {
+function buildSystemPrompt(incremental: boolean, hasFullDiff: boolean): string {
   return `You are a code review agent. Review the given PR diff for bugs, compliance issues, and quality concerns.
 
 Compliance information is located in AGENTS.md and README.md.
@@ -145,7 +145,7 @@ Compliance information is located in AGENTS.md and README.md.
 - If there are zero findings, your summary must state that no actionable findings were identified, and you must not fabricate filler content.
 
 ${incremental
-    ? `The PR DIFF in \`.review-context/diff.patch\` only covers changes since the last review round. The full unified diff of all changes in the PR is available in \`.review-context/full-diff.patch\`. The full comment history of the PR is available in \`.review-context/comments.md\`.
+    ? `The PR DIFF in \`.review-context/diff.patch\` only covers changes since the last review round. ${hasFullDiff ? 'The full unified diff of all changes in the PR is available in `.review-context/full-diff.patch`. ' : ''}The full comment history of the PR is available in \`.review-context/comments.md\`.
 Read \`.review-context/comments.md\` to determine if previously reported blocking findings are now resolved, still open, or no longer applicable.
 - Treat a prior finding as still open unless the comment history and current diff together indicate it was addressed — i.e., silence in the incremental diff about a prior finding is not evidence of resolution.
 - Do not re-raise a prior finding as newly reported once you judge it addressed; instead, acknowledge it as 'resolved' in the finding output.
@@ -255,7 +255,7 @@ async function main() {
   ].filter(Boolean).join('\n');
   writeFileSync(join(contextDir, 'README.md'), manifest);
 
-  const systemPrompt = buildSystemPrompt(incremental);
+  const systemPrompt = buildSystemPrompt(incremental, hasFullDiff);
   const userPrompt = buildUserPrompt();
 
   const executionConfig = getReviewerExecutionConfig();
