@@ -46,6 +46,10 @@ export function getPbisForSpec(specId: string): PbiRecord[] {
   return db.prepare('SELECT * FROM pbis WHERE specId = ? ORDER BY createdAt ASC').all(specId) as PbiRecord[];
 }
 
+export function deletePbi(pbiId: string): void {
+  db.prepare('DELETE FROM pbis WHERE pbiId = ?').run(pbiId);
+}
+
 export function deletePbisForSpec(specId: string): void {
   db.prepare('DELETE FROM pbis WHERE specId = ?').run(specId);
 }

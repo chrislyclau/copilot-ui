@@ -74,7 +74,10 @@ import { makeDockerToolHandler } from './utils/toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from './config/tools';
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from './config/gates';
 import { runSpecAudit } from './gates/specAuditor';
-import { runPbiDerivation } from './gates/pbiDerivation';
+import { runPbiDerivation, DerivedPbi } from './gates/pbiDerivation';
+import { computePbiDiff } from './utils/pbiDiff';
+import { acceptPbiDiff, BlockingRemovalError } from './gates/pbiAcceptance';
+import { getPbisForSpec } from './db/pbiStore';
 import { sanitizeSensitives } from './utils/sanitizers';
 import { truncateOutput } from './utils/formatters';
 import { initializeWorkspace, getGitSandbox, getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from './workspace';
@@ -1397,6 +1400,66 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
       res.json({ success: true, specId: result.specId, pbis: result.pbis });
     } catch (err: unknown) {
       writeLog(`[PbiDerivation] Derivation failed for specId ${specId}: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Diff a proposed derivation batch against the persisted PBI set for a
+  // spec (RM-REQ-072). Read-only -- does not persist anything. This is the
+  // step a human reviews before calling /api/copilot/pbi-accept.
+  app.post('/api/copilot/pbi-diff', (req, res) => {
+    const { specId, pbis } = req.body;
+
+    if (!specId || typeof specId !== 'string') {
+      res.status(400).json({ success: false, error: 'specId is required.' });
+      return;
+    }
+    if (!Array.isArray(pbis)) {
+      res.status(400).json({ success: false, error: 'pbis (array) is required.' });
+      return;
+    }
+
+    try {
+      const existing = getPbisForSpec(specId);
+      const diff = computePbiDiff(specId, existing, pbis as DerivedPbi[]);
+      res.json({ success: true, diff });
+    } catch (err: unknown) {
+      res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Persist an accepted derivation/re-derivation diff (RM-REQ-073). Requires
+  // the human to have reviewed the /api/copilot/pbi-diff output first; PBIs
+  // are never persisted automatically by the derivation step itself.
+  app.post('/api/copilot/pbi-accept', (req, res) => {
+    const { specId, pbis, allowStatusIncompatibleRemovals } = req.body;
+
+    if (!specId || typeof specId !== 'string') {
+      res.status(400).json({ success: false, error: 'specId is required.' });
+      return;
+    }
+    if (!Array.isArray(pbis)) {
+      res.status(400).json({ success: false, error: 'pbis (array) is required.' });
+      return;
+    }
+
+    try {
+      const existing = getPbisForSpec(specId);
+      const result = acceptPbiDiff(specId, existing, pbis as DerivedPbi[], {
+        allowStatusIncompatibleRemovals: Boolean(allowStatusIncompatibleRemovals),
+      });
+      res.json({
+        success: true,
+        created: result.created,
+        updated: result.updated,
+        removed: result.removed,
+        skippedRemovals: result.skippedRemovals,
+      });
+    } catch (err: unknown) {
+      if (err instanceof BlockingRemovalError) {
+        res.status(409).json({ success: false, error: err.message, diff: err.diff });
+        return;
+      }
       res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
     }
   });
