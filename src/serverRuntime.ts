@@ -1389,8 +1389,11 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
 
     writeLog(`[PbiDerivation] Received derivation request for specId: ${specId}`);
 
+    const controller = new AbortController();
+    req.on('close', () => controller.abort());
+
     try {
-      const result = await runPbiDerivation(targetCwd, specId);
+      const result = await runPbiDerivation(targetCwd, specId, controller.signal);
       res.json({ success: true, specId: result.specId, pbis: result.pbis });
     } catch (err: unknown) {
       writeLog(`[PbiDerivation] Derivation failed for specId ${specId}: ${err instanceof Error ? err.message : String(err)}`);
