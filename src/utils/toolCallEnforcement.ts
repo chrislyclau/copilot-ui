@@ -1,4 +1,4 @@
-import { CopilotClient, CopilotSession, ProviderConfig, SessionConfig, MessageOptions } from '@github/copilot-sdk';
+import { CopilotClient, CopilotSession, SdkProviderConfig as ProviderConfig, SessionConfig, MessageOptions } from '../copilotSdk/boundary';
 
 /**
  * How much of the model's last assistant message to include when we give up

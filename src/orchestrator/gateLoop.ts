@@ -2206,6 +2206,7 @@ export const handleGateLoop = async (
                       currentPrompt,
                       {
                         client,
+                        abortSignal: abortController.signal,
                         timeoutMs: 600000,
                         maxRetries: 1,
                         getResult: () => undefined,
@@ -2225,11 +2226,36 @@ export const handleGateLoop = async (
                   if (retryResult) {
                     if (retryResult.session) {
                       session = retryResult.session;
+                      // `runForcedToolTurn` may have resumed into a brand-new
+                      // CopilotSession object (client.resumeSession() returns a
+                      // different handle than the one passed in). The next loop
+                      // iteration's getOrCreateSession() reads the cached
+                      // copilotSession for this sessionId, so if we don't
+                      // repoint the cache here, the next turn silently goes to
+                      // the stale pre-retry session and loses this retry's tool
+                      // call + result -- the exact context-loss bug this fixes.
+                      if (sessionId && activeSessions.has(sessionId)) {
+                        const sRecAfterRetry = activeSessions.get(sessionId)!;
+                        activeSessions.set(sessionId, {
+                          ...sRecAfterRetry,
+                          copilotSession: retryResult.session,
+                        });
+                      }
                     }
                     if (retryResult.toolCalled) {
                       toolWasCalledInThisTurn = true;
                     }
                     assistantMessage = retryResult.lastAssistantText; // update assistant message so it doesn't just fail downstream logic
+                    if (sessionId && activeSessions.has(sessionId)) {
+                      const sRecForHistory = activeSessions.get(sessionId)!;
+                      activeSessions.set(sessionId, {
+                        ...sRecForHistory,
+                        conversationHistory: [
+                          ...(sRecForHistory.conversationHistory || []),
+                          { role: "assistant", content: assistantMessage },
+                        ],
+                      });
+                    }
                   }
                 } catch (retryErr: unknown) {
                   writeLog(
