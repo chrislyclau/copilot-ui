@@ -34,7 +34,7 @@ recommends tackling them:
 | 0. Hierarchy prerequisite | **Start here** | Blocks everything below; schema-only change |
 | 1. Async HITL | Already implemented | No new work; kept for traceability |
 | 2. PBI Derivation | **Ready to implement** | Self-contained; only depends on Section 0's schema |
-| 3. PBI Compliance Audit | Ready pending branch-strategy decision | Needs Section 0 schema + an integration-branch choice (RM-REQ-014) made before coding |
+| 3. PBI Compliance Audit | Ready — branch-strategy decision resolved in Issue 83 | Needs Section 0 schema (done); integration-branch choice (RM-REQ-014/017) now decided |
 | 4. Tiered Escalation (Compliance) | Ready, depends on Section 3 | Reuses existing ladder; low risk |
 | 4a. Dependency-Blocked PBI Escalation | Ready, depends on Section 0 + 2 | Graph queries now well-defined (see revision note in RM-REQ-062) |
 | 5. Auditor Model Rotation | **Ready to implement now** | Fully independent of the PBI work; no dependencies on Sections 0–4a |
@@ -175,6 +175,14 @@ below.
   forced-tool-call discipline used for the Auditor and PR Reviewer), not by writing
   prose into `architecture-spec.md` for the existing regex-based decomposer to
   reparse, and shall mark the PBI's completion state as not-yet-satisfied.
+- **RM-REQ-017 (E) [New — resolves Issue 83]:** When a compliance audit for `pbiId`
+  reports zero findings, the system shall mark the PBI as PR-ready and surface it in
+  the async queue (RM-REQ-003) for human review, but shall **not** automatically merge
+  `pbi/<pbiId>` into trunk. Per `SYS-REQ-021`, trunk remains untouched until human
+  review and final merge/approval; `pbi/<pbiId>` is the agent-owned integration branch
+  that a human subsequently opens as a PR against trunk. `pbi/<pbiId>` functions as the
+  agents' equivalent of a default branch, scoped per-PBI — no separate agent-wide
+  default branch is introduced by this document.
 
 ---
 
