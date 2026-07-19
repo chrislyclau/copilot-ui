@@ -226,12 +226,14 @@ export class GitSandbox {
     public async mergeTaskIntoPbi(taskId: string, pbiId: string): Promise<void> {
         return this.withLock(async () => {
             const pbiBranch = `pbi/${pbiId}`;
-            await this.git(["checkout", pbiBranch]);
             try {
+                await this.git(["checkout", pbiBranch]);
                 await this.git(["merge", "--ff-only", `task/${taskId}`]);
             } finally {
-                // Always return to base branch afterward, success or failure,
-                // so the sandbox is left in a known state for the next task.
+                // Always return to base branch afterward, success or failure —
+                // including if the checkout of pbiBranch itself failed (e.g.
+                // pbi/<pbiId> doesn't exist) — so the sandbox is never left
+                // stuck mid-operation for the next task.
                 try {
                     await this.checkoutBaseBranch();
                 } catch (e) {

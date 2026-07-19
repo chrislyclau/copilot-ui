@@ -2744,6 +2744,27 @@ export const handleGateLoop = async (
                     `[GateLoop] Fast-forward merge of task/${doneTask.taskId} into pbi/${doneTask.pbiId} failed: ${mergeErr}`,
                     LogLevel.ERROR,
                   );
+                  // Revert the done marking: RM-REQ-014 ties "done" to a
+                  // successfully merged task. Leaving it "done" here would
+                  // let RM-REQ-011 (all-tasks-done → compliance audit) and
+                  // RM-REQ-017 (PR-ready marking) treat the PBI as complete
+                  // when its work never actually landed on pbi/<pbiId>.
+                  try {
+                    const staleTask = getTask(doneTask.taskId);
+                    if (staleTask) {
+                      saveTask({
+                        ...staleTask,
+                        status: "blocked",
+                        blockedReason: `pbi-ff-merge failed: ${String(mergeErr)}`,
+                        updatedAt: Date.now(),
+                      });
+                    }
+                  } catch (revertErr) {
+                    writeLog(
+                      `[GateLoop] Failed to revert task status after merge failure: ${revertErr}`,
+                      LogLevel.ERROR,
+                    );
+                  }
                   try {
                     appendEscalation({
                       sessionId,
@@ -2753,7 +2774,8 @@ export const handleGateLoop = async (
                         `branch has diverged from the PBI integration branch. ` +
                         `Manual resolution required: rebase task/${doneTask.taskId} ` +
                         `onto the current pbi/${doneTask.pbiId} tip, or restart the ` +
-                        `task fresh off the current PBI tip.`,
+                        `task fresh off the current PBI tip. Task status reverted to ` +
+                        `'blocked' pending resolution.`,
                       failedGate: "pbi-ff-merge",
                       failedGateFeedback: String(mergeErr),
                       retryHistory: [],

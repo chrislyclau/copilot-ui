@@ -179,4 +179,36 @@ describe('PBI-level integration branch + fast-forward merge (Issue 84 / RM-REQ-0
     await sandbox.parkTaskBranch(taskId);
     db.prepare('DELETE FROM tasks WHERE taskId = ?').run(taskId);
   });
+
+  it('returns to base branch even when the pbi/<pbiId> checkout itself fails (e.g. pbi branch never created)', async () => {
+    const sandbox = getGitSandbox();
+    const pbiId = 'pbi-never-created-006';
+    const taskId = 'task-no-pbi-branch-006';
+
+    // Register the task with a pbiId, but never call ensurePbiBranch /
+    // checkoutTaskBranch(taskId, pbiId) for it — simulates the case where
+    // pbi branch creation was silently swallowed upstream (checkoutTaskBranch
+    // catches ensurePbiBranchImpl failures), so pbi/<pbiId> never exists.
+    registerPbi(pbiId);
+    registerTask(taskId, pbiId);
+
+    // Task still needs *a* branch to attempt a merge from, so it's fine for
+    // this to be a plain trunk-based branch — the point under test is the
+    // checkout of the (nonexistent) pbi branch failing, not the merge itself.
+    await sandbox.checkoutTaskBranch(taskId);
+
+    await expect(sandbox.mergeTaskIntoPbi(taskId, pbiId)).rejects.toThrow();
+
+    // Regression check: previously the checkout of pbi/<pbiId> sat outside
+    // the try/finally, so a failure here left the sandbox on whatever branch
+    // it was on rather than returning to base. Verify recovery is clean by
+    // confirming a fresh checkoutTaskBranch call succeeds immediately after.
+    const otherTaskId = 'task-followup-006';
+    registerTask(otherTaskId, pbiId);
+    await expect(sandbox.checkoutTaskBranch(otherTaskId)).resolves.toBeDefined();
+
+    await sandbox.parkTaskBranch(otherTaskId);
+    db.prepare('DELETE FROM tasks WHERE taskId IN (?, ?)').run(taskId, otherTaskId);
+    db.prepare('DELETE FROM pbis WHERE pbiId = ?').run(pbiId);
+  });
 });
