@@ -139,6 +139,13 @@ export function checkPbiDependencies(pbiId: string): PbiStartEligibility {
 
   const dependsOn: string[] = pbi.dependsOn ? JSON.parse(pbi.dependsOn) : [];
 
+  // Two-pass scan, not a single early-return loop: a `blocked` dependency
+  // must take priority over a merely-pending one regardless of array order.
+  // (A single-pass loop that returns on the first non-done dependency it
+  // sees would miss a blocked dependency listed after a pending one --
+  // order-dependent behavior that silently skips parking + escalation.)
+  let waitingOnPbiId: string | undefined;
+
   for (const depId of dependsOn) {
     const dep: PbiRecord | undefined = getPbi(depId);
     if (!dep || dep.status === 'done') {
@@ -153,8 +160,16 @@ export function checkPbiDependencies(pbiId: string): PbiStartEligibility {
       return { canStart: false, reason: 'blocked-by-dependency', dependencyPbiId: depId };
     }
 
-    // pending or in_progress: ordinary "not ready yet" -- no escalation.
-    return { canStart: false, reason: 'waiting-on-dependency', dependencyPbiId: depId };
+    // pending or in_progress: ordinary "not ready yet" -- keep scanning in
+    // case a later dependency is actually blocked, but remember this one in
+    // case none are.
+    if (!waitingOnPbiId) {
+      waitingOnPbiId = depId;
+    }
+  }
+
+  if (waitingOnPbiId) {
+    return { canStart: false, reason: 'waiting-on-dependency', dependencyPbiId: waitingOnPbiId };
   }
 
   return { canStart: true };

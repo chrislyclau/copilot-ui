@@ -13,6 +13,7 @@ describe('Dependency-blocked PBI escalation (Issue 80 / RM-REQ-060/061/062)', ()
   const specId = 'spec-dep-gate-test';
 
   beforeEach(() => {
+    db.prepare('DELETE FROM sessions').run();
     db.prepare('DELETE FROM tasks').run();
     db.prepare('DELETE FROM pbis').run();
     db.prepare('DELETE FROM specs').run();
@@ -84,6 +85,28 @@ describe('Dependency-blocked PBI escalation (Issue 80 / RM-REQ-060/061/062)', ()
 
       // Still just one pending escalation despite two checks (RM-REQ-061: "a single async escalation").
       expect(getEscalations()).toHaveLength(1);
+    });
+
+    it('detects a blocked dependency even when it is listed after a merely-pending one (regression)', () => {
+      // Order-dependent bug regression: a single-pass loop that returns on
+      // the FIRST non-done dependency would stop at pbi-pending and never
+      // reach pbi-blocked-dep, silently skipping the park + escalation.
+      savePbi(makePbi('pbi-pending', 'in_progress', null));
+      savePbi(makePbi('pbi-blocked-dep', 'blocked', null));
+      savePbi(makePbi('pbi-c', 'pending', ['pbi-pending', 'pbi-blocked-dep']));
+
+      const result = checkPbiDependencies('pbi-c');
+
+      expect(result).toEqual({
+        canStart: false,
+        reason: 'blocked-by-dependency',
+        dependencyPbiId: 'pbi-blocked-dep',
+      });
+      expect(getPbi('pbi-c')?.status).toBe('blocked');
+
+      const escalations = getEscalations();
+      expect(escalations).toHaveLength(1);
+      expect(escalations[0]?.summary).toContain('pbi-blocked-dep');
     });
   });
 
