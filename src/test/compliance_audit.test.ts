@@ -239,12 +239,20 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
       });
       const first = await runComplianceAudit(getWorkspaceRoot(), pbiId);
       expect(first.scenario).toBe('findings-first-pass');
+      expect(first.remediationTaskIds).toHaveLength(1);
 
-      // Simulate the remediation cycle completing and drifting further.
+      // Simulate the remediation cycle actually completing: the remediation
+      // task's work lands on pbi/<pbiId> AND the task itself is marked done
+      // (both are required for allTasksForPbiDone -- merely merging more
+      // commits onto the branch without completing the task is exactly the
+      // premature-escalation bug this guards against).
+      const remediationTaskId = first.remediationTaskIds[0]!;
       fs.writeFileSync(path.join(getWorkspaceRoot(), 'remediation-output.txt'), 'still incomplete', 'utf8');
-      await getGitSandbox().checkoutTaskBranch('remediation-cycle-branch', pbiId);
+      await getGitSandbox().checkoutTaskBranch(remediationTaskId, pbiId);
       await getGitSandbox().commitAllChangesAsync('Remediation attempt');
-      await getGitSandbox().mergeTaskIntoPbi('remediation-cycle-branch', pbiId);
+      await getGitSandbox().mergeTaskIntoPbi(remediationTaskId, pbiId);
+      const remediationTask = getTasksForPbi(pbiId).find((t) => t.taskId === remediationTaskId)!;
+      saveTask({ ...remediationTask, status: 'done', updatedAt: Date.now() });
 
       // Second (repeat) audit: still finds an issue -- must escalate tier.
       mockedExecuteAuditSession.mockResolvedValue({
@@ -272,10 +280,13 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
 
       // A third audit run (after the tier-1 remediation cycle completes)
       // must actually use the escalated tier.
+      const secondRemediationTaskId = second.remediationTaskIds[0]!;
       fs.writeFileSync(path.join(getWorkspaceRoot(), 'remediation-2-output.txt'), 'yet another attempt', 'utf8');
-      await getGitSandbox().checkoutTaskBranch('remediation-cycle-branch-2', pbiId);
+      await getGitSandbox().checkoutTaskBranch(secondRemediationTaskId, pbiId);
       await getGitSandbox().commitAllChangesAsync('Second remediation attempt');
-      await getGitSandbox().mergeTaskIntoPbi('remediation-cycle-branch-2', pbiId);
+      await getGitSandbox().mergeTaskIntoPbi(secondRemediationTaskId, pbiId);
+      const secondRemediationTask = getTasksForPbi(pbiId).find((t) => t.taskId === secondRemediationTaskId)!;
+      saveTask({ ...secondRemediationTask, status: 'done', updatedAt: Date.now() });
 
       mockedExecuteAuditSession.mockResolvedValue({ pass: true, findings: [] });
       await runComplianceAudit(getWorkspaceRoot(), pbiId);
@@ -345,6 +356,54 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
       expect(getPbi(pbiId)?.auditTierIndex).toBe(0);
       expect(getPbi(pbiId)?.lastAuditHadFindings).toBe(false);
       expect(getPbi(pbiId)?.status).toBe('done');
+    });
+    it('does not escalate the tier or park the PBI when a repeat finding fires mid-cycle (remediation tasks still pending)', async () => {
+      // Regression test for the reviewer-flagged bug: shouldTriggerComplianceAudit's
+      // periodic trigger can re-run this audit while some of the prior cycle's
+      // remediation tasks are still pending. lastAuditHadFindings alone must not
+      // be treated as "a full remediation cycle completed and still failed".
+      const pbiId = 'pbi-midcycle-repeat';
+      const taskId = 'task-midcycle-repeat';
+      registerPbi(pbiId);
+      saveTask({
+        taskId, specId, specVersion: 'v1', title: 'Do work', description: null,
+        status: 'done', touches: null, dependsOn: null, branchName: `task/${taskId}`,
+        blockedReason: null, createdAt: Date.now(), updatedAt: Date.now(), pbiId,
+      });
+      await markPbiTaskDone(pbiId, taskId, 'incomplete work');
+
+      // First audit: finds an issue, creates a remediation task, tier stays at 0.
+      mockedExecuteAuditSession.mockResolvedValue({
+        pass: false,
+        findings: [{ title: 'Missing validation', description: 'Spec requires input validation.' }],
+      });
+      const first = await runComplianceAudit(getWorkspaceRoot(), pbiId);
+      expect(first.scenario).toBe('findings-first-pass');
+      expect(first.remediationTaskIds).toHaveLength(1);
+
+      // The remediation task from the first audit is still 'pending' -- the
+      // remediation cycle has NOT completed. Simulate a periodic re-trigger
+      // (e.g. an unrelated task on the same PBI merging) firing this audit
+      // again anyway, while that remediation task is still outstanding.
+      const pendingRemediationTask = getTasksForPbi(pbiId).find((t) => t.taskId !== taskId)!;
+      expect(pendingRemediationTask.status).toBe('pending');
+
+      mockedExecuteAuditSession.mockResolvedValue({
+        pass: false,
+        findings: [{ title: 'Missing validation', description: 'Spec requires input validation.' }],
+      });
+      const second = await runComplianceAudit(getWorkspaceRoot(), pbiId);
+
+      // Must NOT be treated as a genuine repeat failure: the remediation
+      // cycle from the first audit never actually finished.
+      expect(second.scenario).toBe('findings-first-pass');
+      expect(second.pbiParked).toBe(false);
+      expect(second.auditTierIndex).toBe(0);
+      expect(getPbi(pbiId)?.auditTierIndex).toBe(0);
+      expect(getPbi(pbiId)?.status).toBe('in_progress');
+
+      const secondCallConfig = (mockedExecuteAuditSession.mock.calls[1] as unknown[])[1] as { model: string };
+      expect(secondCallConfig.model).toBe('mock-model-tier-0');
     });
   });
 

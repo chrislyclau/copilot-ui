@@ -194,12 +194,23 @@ export async function runComplianceAudit(
   }
 
   // RM-REQ-021: distinguish a first-time finding (mid-cycle, tier
-  // unchanged) from a *repeat* finding -- this audit is only reached again
-  // for the same PBI once the prior cycle's remediation tasks have all
-  // completed (shouldTriggerComplianceAudit's end-of-pbi trigger), so
-  // `lastAuditHadFindings` being true here means a full remediation cycle
-  // ran and the problem persists.
-  const isRepeatFailure = pbi.lastAuditHadFindings === true;
+  // unchanged) from a *repeat* finding after a full remediation cycle.
+  // `lastAuditHadFindings` alone is not sufficient: shouldTriggerComplianceAudit's
+  // periodic trigger (RM-REQ-012) can fire this audit again while some of the
+  // prior cycle's remediation tasks (which carry this same pbiId) are still
+  // pending -- e.g. one remediation task done, others not, but doneCount hits
+  // another periodic multiple. Escalating the audit tier or parking the PBI
+  // in that situation would be premature: the remediation cycle hasn't
+  // actually finished yet, so this audit run doesn't tell us anything about
+  // whether the remediation worked. Only treat this as a genuine repeat
+  // failure once every task on the PBI (including all remediation tasks) is
+  // done -- i.e. this audit was reached via the end-of-pbi trigger, or a
+  // periodic trigger that happens to coincide with full completion.
+  const allTasksForPbiDone = (() => {
+    const tasks = getTasksForPbi(pbiId);
+    return tasks.length > 0 && tasks.every((t) => t.status === 'done');
+  })();
+  const isRepeatFailure = pbi.lastAuditHadFindings === true && allTasksForPbiDone;
   const now = Date.now();
 
   if (isRepeatFailure) {
