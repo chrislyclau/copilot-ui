@@ -1983,6 +1983,36 @@ export const handleGateLoop = async (
               }
               const activeSession: CopilotSession = session;
 
+              // Upstream provider (e.g. OpenRouter) can occasionally issue a tool
+              // call and then go silent for the remainder of the turn -- no
+              // finish_reason, no further chunks, connection just idles. The SDK
+              // has no way to signal this (no session.error is ever emitted), so
+              // without a watchdog we'd wait out the full sendAndWait timeout
+              // (10 minutes) before anything happens. Track time since the last
+              // SDK event and treat prolonged silence as a distinct, retryable
+              // "stall" rather than a hard failure.
+              const STALL_TIMEOUT_MS = 90000;
+              let lastEventAt = Date.now();
+              let stallTimer: ReturnType<typeof setInterval> | null = null;
+              const clearStallWatchdog = () => {
+                if (stallTimer) {
+                  clearInterval(stallTimer);
+                  stallTimer = null;
+                }
+              };
+              const stallPromise = new Promise<never>((_, reject) => {
+                stallTimer = setInterval(() => {
+                  if (Date.now() - lastEventAt > STALL_TIMEOUT_MS) {
+                    clearStallWatchdog();
+                    const stallErr = new Error(
+                      `Upstream stream stalled: no SDK event received for over ${STALL_TIMEOUT_MS / 1000}s (model=${currentModel}).`,
+                    );
+                    (stallErr as Error & { isStall?: boolean }).isStall = true;
+                    reject(stallErr);
+                  }
+                }, 5000);
+              });
+
               let eventChain = Promise.resolve();
               const pDone = new Promise<void>((resolve, reject) => {
                 const onAbort = () => {
@@ -1995,6 +2025,7 @@ export const handleGateLoop = async (
                 abortController.signal.addEventListener("abort", onAbort);
 
                 unsubscribe = activeSession.on((event: SessionEvent) => {
+                  lastEventAt = Date.now();
                   eventChain = eventChain.then(async () => {
                     const extEvent = event as ExtendedSessionEvent;
                     if (sessionId && activeSessions.has(sessionId)) {
@@ -2138,14 +2169,149 @@ export const handleGateLoop = async (
               // Wait for session.idle / turn completion
               writeLog(`[SESSION] Awaiting pDone resolution`);
               try {
-                await Promise.race([pDone, abortPromise]);
+                await Promise.race([pDone, abortPromise, stallPromise]);
                 writeLog(`[SESSION] pDone resolved successfully`);
               } catch (pErr: unknown) {
+                const isStall =
+                  pErr instanceof Error &&
+                  (pErr as Error & { isStall?: boolean }).isStall === true;
                 writeLog(
-                  `[GateLoop] Stream delivery broken or aborted during execution: ${pErr instanceof Error ? pErr.message : String(pErr)}. Aborting loop.`,
+                  `[GateLoop] Stream delivery broken or aborted during execution: ${pErr instanceof Error ? pErr.message : String(pErr)}. ${isStall ? "Treating as retryable upstream stall." : "Aborting loop."}`,
                   LogLevel.WARN,
                 );
+                if (unsubscribe) {
+                  unsubscribe();
+                  unsubscribe = null;
+                }
+
+                // Only prolonged upstream silence is retryable here -- genuine
+                // client aborts / request closures should still terminate the
+                // loop immediately, same as before.
+                if (isStall && !abortController.signal.aborted && !isRequestClosed) {
+                  const stallMessage =
+                    pErr instanceof Error ? pErr.message : String(pErr);
+                  retryHistory.push({
+                    retryCount,
+                    model: currentModel,
+                    failedGate: "UpstreamStreamStall",
+                    feedback: stallMessage,
+                  });
+
+                  if (retryCount < maxRetries) {
+                    retryCount++;
+                    totalRetries++;
+                    failedGateName = "UpstreamStreamStall";
+                    failedGateFeedback = stallMessage;
+                    writeLog(
+                      `[GateLoop] Retrying after upstream stall (attempt ${retryCount}/${maxRetries}) on same model ${currentModel}.`,
+                    );
+                    const stallRetryEvent = {
+                      type: "loop.retry",
+                      data: {
+                        retryCount,
+                        maxRetries,
+                        currentModel,
+                        nextModel: currentModel,
+                        failedGate: failedGateName,
+                        feedback: failedGateFeedback,
+                      },
+                    };
+                    await secureWrite(
+                      res,
+                      `data: ${JSON.stringify(stallRetryEvent)}\n\n`,
+                      isRequestClosed,
+                    );
+
+                    let history: ReadonlyArray<{
+                      readonly role: "user" | "assistant";
+                      readonly content: string;
+                    }> = [];
+                    if (sessionId && activeSessions.has(sessionId)) {
+                      const narrowedSession = activeSessions.get(sessionId)!;
+                      const pruned = pruneConversationHistory(
+                        narrowedSession.conversationHistory,
+                      );
+                      activeSessions.set(sessionId, {
+                        ...narrowedSession,
+                        conversationHistory: pruned,
+                      });
+                      history = pruned;
+                    } else {
+                      history = pruneConversationHistory([]);
+                    }
+                    currentPrompt = formatContextNarrowingPrompt(
+                      promptStr,
+                      failedGateName,
+                      failedGateFeedback,
+                      history,
+                    );
+                    continue;
+                  }
+
+                  const isFinalModel =
+                    currentModelIndex === uniqueModelTiers.length - 1;
+                  if (!isFinalModel) {
+                    currentModelIndex++;
+                    retryCount = 0;
+                    totalRetries++;
+                    const nextModel = uniqueModelTiers[currentModelIndex];
+                    failedGateName = "UpstreamStreamStall";
+                    failedGateFeedback = stallMessage;
+                    writeLog(
+                      `[GateLoop] Reached max retries after repeated upstream stalls. Escalating model tier from ${currentModel} to ${nextModel}.`,
+                    );
+                    const stallEscalateEvent = {
+                      type: "loop.retry",
+                      data: {
+                        retryCount,
+                        maxRetries,
+                        currentModel,
+                        nextModel,
+                        failedGate: failedGateName,
+                        feedback: failedGateFeedback,
+                      },
+                    };
+                    await secureWrite(
+                      res,
+                      `data: ${JSON.stringify(stallEscalateEvent)}\n\n`,
+                      isRequestClosed,
+                    );
+
+                    let history: ReadonlyArray<{
+                      readonly role: "user" | "assistant";
+                      readonly content: string;
+                    }> = [];
+                    if (sessionId && activeSessions.has(sessionId)) {
+                      const escalatedSession = activeSessions.get(sessionId)!;
+                      const pruned = pruneConversationHistory(
+                        escalatedSession.conversationHistory,
+                      );
+                      activeSessions.set(sessionId, {
+                        ...escalatedSession,
+                        conversationHistory: pruned,
+                      });
+                      history = pruned;
+                    } else {
+                      history = pruneConversationHistory([]);
+                    }
+                    currentPrompt = formatEscalationPrompt(
+                      promptStr,
+                      failedGateName,
+                      failedGateFeedback,
+                      history,
+                    );
+                    continue;
+                  }
+
+                  writeLog(
+                    `[GateLoop] All model tiers exhausted after repeated upstream stalls. Ending loop.`,
+                    LogLevel.WARN,
+                  );
+                }
+
                 break;
+              } finally {
+                clearStallWatchdog();
               }
 
               if (sessionId && activeSessions.has(sessionId)) {
