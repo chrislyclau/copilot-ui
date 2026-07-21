@@ -33,24 +33,77 @@ export function trackLastAssistantMessage(session: CopilotSession): { readonly g
   return { getText: () => text, unsubscribe };
 }
 
+/**
+ * How long to tolerate total silence from the SDK (no events of any kind)
+ * before treating the current send as a stalled upstream stream rather than
+ * a genuine timeout. Matches the watchdog gateLoop.ts uses for the same
+ * failure mode (upstream provider issues a tool call, or nothing at all,
+ * and then the connection just idles with no session.error ever emitted).
+ */
+export const STALL_TIMEOUT_MS = 90000;
+const STALL_POLL_INTERVAL_MS = 5000;
+
+export interface StallError extends Error {
+  readonly isStall: true;
+}
+
+function isStallError(err: unknown): err is StallError {
+  return err instanceof Error && (err as Partial<StallError>).isStall === true;
+}
+
+/**
+ * Races `session.sendAndWait` against an abort signal (as before) *and* a
+ * stall watchdog: if no SDK event of any kind arrives for STALL_TIMEOUT_MS,
+ * this rejects with a distinguishable `isStall`-tagged error instead of
+ * silently waiting out the full `timeoutMs`. Does not retry by itself --
+ * callers (runForcedToolTurn) decide whether/how to retry on a stall, same
+ * as gateLoop.ts's own stall watchdog leaves retry policy to its caller.
+ */
 export async function sendAndWaitWithAbort(
   session: CopilotSession,
   prompt: MessageOptions,
   timeoutMs: number,
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  if (!abortSignal) {
-    await session.sendAndWait(prompt, timeoutMs);
-    return;
+  let lastEventAt = Date.now();
+  const unsubscribeStallTracker = session.on(() => {
+    lastEventAt = Date.now();
+  });
+
+  let stallTimer: ReturnType<typeof setInterval> | null = null;
+  const stallPromise = new Promise<never>((_, reject) => {
+    stallTimer = setInterval(() => {
+      if (Date.now() - lastEventAt > STALL_TIMEOUT_MS) {
+        if (stallTimer) clearInterval(stallTimer);
+        const err = new Error(
+          `Upstream stream stalled: no SDK event received for over ${STALL_TIMEOUT_MS / 1000}s.`,
+        ) as StallError;
+        (err as { isStall?: boolean }).isStall = true;
+        reject(err);
+      }
+    }, STALL_POLL_INTERVAL_MS);
+  });
+
+  const racers: Promise<void>[] = [
+    session.sendAndWait(prompt, timeoutMs).then(() => undefined),
+    stallPromise,
+  ];
+  if (abortSignal) {
+    racers.push(
+      new Promise<never>((_, reject) => {
+        const onAbort = () => reject(new Error('Auditor session aborted by client or timeout'));
+        if (abortSignal.aborted) onAbort();
+        else abortSignal.addEventListener('abort', onAbort, { once: true });
+      }),
+    );
   }
-  await Promise.race([
-    session.sendAndWait(prompt, timeoutMs),
-    new Promise<never>((_, reject) => {
-      const onAbort = () => reject(new Error('Auditor session aborted by client or timeout'));
-      if (abortSignal.aborted) onAbort();
-      else abortSignal.addEventListener('abort', onAbort, { once: true });
-    })
-  ]);
+
+  try {
+    await Promise.race(racers);
+  } finally {
+    if (stallTimer) clearInterval(stallTimer);
+    unsubscribeStallTracker();
+  }
 }
 
 export interface ForcedToolTurnOptions<T> {
@@ -73,6 +126,15 @@ export interface ForcedToolTurnOptions<T> {
    * an unsubscribe function so it can be cleaned up before the next resume.
    */
   onSession?: (session: CopilotSession) => (() => void) | void;
+  /**
+   * How many times to retry after an upstream stall (STALL_TIMEOUT_MS of
+   * total SDK silence) before giving up. Tracked separately from
+   * `maxRetries` (which governs "turn ended without calling the tool"
+   * retries) -- a stall means the model never got a chance to respond at
+   * all, so it shouldn't eat into that budget. Default 2, matching
+   * gateLoop.ts's per-model stall-retry allowance.
+   */
+  maxStallRetries?: number;
 }
 
 export async function runForcedToolTurn<T>(
@@ -86,6 +148,7 @@ export async function runForcedToolTurn<T>(
   let currentSessionId = session.sessionId;
   const timeoutMs = opts.timeoutMs ?? 300000;
   const maxRetries = opts.maxRetries ?? 2;
+  const maxStallRetries = opts.maxStallRetries ?? 2;
   const responseRequirements = opts.responseRequirements ?? {};
   
   let toolCalled = false;
@@ -110,8 +173,47 @@ export async function runForcedToolTurn<T>(
   
   let unsubTool = setupToolListener(currentSession);
   let unsubOnSession = opts.onSession?.(currentSession) ?? undefined;
-  
-  await sendAndWaitWithAbort(currentSession, { prompt: initialPrompt }, timeoutMs, opts.abortSignal);
+
+  /**
+   * Sends `promptOpts` to the current session, resuming on a fresh session
+   * and retrying the *exact same prompt* (not consuming `maxRetries`, the
+   * "tool not called" budget) whenever the send stalls -- mirrors
+   * gateLoop.ts's own upstream-stall handling, but generalized here so
+   * every executeAuditSession caller (including scripts/review-pr.ts, which
+   * has no stall protection of its own) benefits directly.
+   */
+  const sendWithStallRetry = async (
+    promptOpts: { prompt: string; tool_choice?: unknown },
+    resumeConfig: { availableTools?: string[]; tools?: unknown; provider?: ProviderConfig },
+  ): Promise<void> => {
+    let stallAttempt = 0;
+    while (true) {
+      try {
+        await sendAndWaitWithAbort(currentSession, promptOpts as MessageOptions, timeoutMs, opts.abortSignal);
+        return;
+      } catch (err) {
+        if (!isStallError(err) || stallAttempt >= maxStallRetries) {
+          throw err;
+        }
+        stallAttempt++;
+        console.warn(
+          `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
+          `resuming session and retrying the same prompt...`,
+        );
+        unsubOnSession?.();
+        tracker.unsubscribe();
+        unsubTool();
+        currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig as SessionConfig);
+        currentSessionId = currentSession.sessionId;
+        tracker = trackLastAssistantMessage(currentSession);
+        toolCalled = false;
+        unsubTool = setupToolListener(currentSession);
+        unsubOnSession = opts.onSession?.(currentSession) ?? undefined;
+      }
+    }
+  };
+
+  await sendWithStallRetry({ prompt: initialPrompt }, { tools: opts.tools, ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}) });
   
   let lastAssistantText = tracker.getText();
   tracker.unsubscribe();
@@ -154,7 +256,7 @@ export async function runForcedToolTurn<T>(
       promptOpts.tool_choice = { type: 'function', function: { name: targetTools[0] } };
     }
     
-    await sendAndWaitWithAbort(currentSession, promptOpts, timeoutMs, opts.abortSignal);
+    await sendWithStallRetry(promptOpts, resumeConfig);
     
     lastAssistantText = tracker.getText() || lastAssistantText;
     tracker.unsubscribe();
