@@ -2161,14 +2161,15 @@ export const handleGateLoop = async (
                 `[SESSION] sendAndWait called with prompt length=${currentPrompt.length}`,
                 LogLevel.DEBUG,
               );
-              await Promise.race([
-                session.sendAndWait({ prompt: currentPrompt }, 600000),
-                abortPromise,
-              ]);
-              writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
-              // Wait for session.idle / turn completion
-              writeLog(`[SESSION] Awaiting pDone resolution`);
               try {
+                await Promise.race([
+                  session.sendAndWait({ prompt: currentPrompt }, 600000),
+                  abortPromise,
+                  stallPromise,
+                ]);
+                writeLog(`[SESSION] sendAndWait finished.`, LogLevel.DEBUG);
+                // Wait for session.idle / turn completion
+                writeLog(`[SESSION] Awaiting pDone resolution`);
                 await Promise.race([pDone, abortPromise, stallPromise]);
                 writeLog(`[SESSION] pDone resolved successfully`);
               } catch (pErr: unknown) {
