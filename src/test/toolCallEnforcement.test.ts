@@ -366,4 +366,25 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       expect(mockClient.createSession).not.toHaveBeenCalled();
     });
   });
+
+  describe('sendAndWaitWithAbort SDK timeout decoupling', () => {
+    it('does not pass a short caller timeoutMs straight through as the SDK\'s own absolute deadline', async () => {
+      let capturedTimeout: number | undefined;
+      const session = {
+        sessionId: 's-long-healthy-turn',
+        on: vi.fn().mockReturnValue(vi.fn()),
+        sendAndWait: vi.fn().mockImplementation((_opts, timeout: number) => {
+          capturedTimeout = timeout;
+          return Promise.resolve();
+        }),
+      } as any;
+
+      // Caller asks for a short 10-minute budget (review-pr.ts's real value).
+      // Without decoupling, this would be forwarded verbatim to the SDK's
+      // own absolute deadline, which fires regardless of ongoing progress.
+      await sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 600000);
+
+      expect(capturedTimeout).toBeGreaterThan(600000);
+    });
+  });
 });
