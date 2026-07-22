@@ -1,0 +1,26 @@
+models:
+  - gemini-3.1-flash-lite
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: I looked at the change but have no further comments.
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: I looked at the change but have no further comments.
+      - role: user
+        content: ${user}
+      - role: assistant
+        tool_calls:
+          - id: aud_call_0
+            type: function
+            function:
+              name: submit_finding
+              arguments: '{"pass":true}'
