@@ -43,6 +43,29 @@ export function trackLastAssistantMessage(session: CopilotSession): { readonly g
 export const STALL_TIMEOUT_MS = 90000;
 const STALL_POLL_INTERVAL_MS = 5000;
 
+/**
+ * Passed to the SDK's own `session.sendAndWait()` as its internal timeout
+ * parameter. Per the SDK's docs, that parameter is an ABSOLUTE deadline --
+ * it "does not abort in-flight agent work" and fires purely based on
+ * elapsed time, regardless of whether the turn is actively making
+ * progress. That's a mismatch with what callers actually want: e.g.
+ * review-pr.ts passes 600000 (10 min) meaning "give up if this looks
+ * dead", but a legitimately long, healthy, reasoning-heavy turn (many
+ * chained tool calls, each punctuated by reasoning-delta events -- see
+ * reasoningSummary in buildAuditorSessionSettings) can genuinely take
+ * longer than that while still making steady progress, and the SDK's
+ * absolute clock doesn't care.
+ *
+ * The stall watchdog below (STALL_TIMEOUT_MS, reset on every SDK event
+ * including deltas) is what should actually decide "is this turn dead or
+ * alive" -- so the SDK's own parameter is deliberately raised to a
+ * generous ceiling well past any healthy turn's real duration, and only
+ * serves as a last-resort circuit breaker for the pathological case where
+ * the SDK never reaches idle at all (not even a stall watchdog would catch
+ * that, since it fires on *any* event, not just meaningful ones).
+ */
+const SDK_HARD_TIMEOUT_CEILING_MS = 30 * 60 * 1000; // 30 minutes
+
 export interface StallError extends Error {
   readonly isStall: true;
 }
@@ -58,6 +81,10 @@ function isStallError(err: unknown): err is StallError {
  * silently waiting out the full `timeoutMs`. Does not retry by itself --
  * callers (runForcedToolTurn) decide whether/how to retry on a stall, same
  * as gateLoop.ts's own stall watchdog leaves retry policy to its caller.
+ *
+ * `timeoutMs` is intentionally NOT passed straight through to the SDK's own
+ * sendAndWait deadline -- see SDK_HARD_TIMEOUT_CEILING_MS. It's still used
+ * as-is for callers who explicitly want longer than that ceiling.
  */
 export async function sendAndWaitWithAbort(
   session: CopilotSession,
@@ -85,7 +112,7 @@ export async function sendAndWaitWithAbort(
   });
 
   const racers: Promise<void>[] = [
-    session.sendAndWait(prompt, timeoutMs).then(() => undefined),
+    session.sendAndWait(prompt, Math.max(timeoutMs, SDK_HARD_TIMEOUT_CEILING_MS)).then(() => undefined),
     stallPromise,
   ];
   if (abortSignal) {
@@ -109,6 +136,13 @@ export async function sendAndWaitWithAbort(
 export interface ForcedToolTurnOptions<T> {
   client: CopilotClient;
   abortSignal?: AbortSignal;
+  /**
+   * Passed down to sendAndWaitWithAbort. In practice, normal termination is
+   * governed by the idle-based stall watchdog (STALL_TIMEOUT_MS), not this
+   * value directly -- see SDK_HARD_TIMEOUT_CEILING_MS for why. Set this
+   * higher than the ceiling if a turn genuinely needs to run longer than 30
+   * minutes even while idle-stalled.
+   */
   timeoutMs?: number;
   maxRetries?: number;
   getResult: () => T | undefined;
@@ -217,7 +251,23 @@ export async function runForcedToolTurn<T>(
         await sendAndWaitWithAbort(currentSession, currentPromptOpts as MessageOptions, timeoutMs, opts.abortSignal);
         return;
       } catch (err) {
-        if (!isStallError(err) || stallAttempt >= maxStallRetries) {
+        if (!isStallError(err)) {
+          throw err;
+        }
+        if (toolCalled) {
+          // The target tool already fired (we saw its event) before the
+          // stream went quiet -- this "stall" is just the SDK never
+          // emitting a final closing event afterward, not a failure to
+          // respond. Treat the send as successful rather than discarding
+          // the already-completed turn and resending the prompt, which
+          // would risk the model calling the tool a second time.
+          console.warn(
+            `[runForcedToolTurn] upstream went quiet after '${targetTools.join("', '")}' was already called; ` +
+            `treating turn as complete instead of retrying.`,
+          );
+          return;
+        }
+        if (stallAttempt >= maxStallRetries) {
           throw err;
         }
         stallAttempt++;

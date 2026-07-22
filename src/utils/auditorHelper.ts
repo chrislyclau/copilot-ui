@@ -185,6 +185,16 @@ export function buildAuditorSessionSettings(
   return {
     model: executionConfig.model,
     ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
+    // Requests incremental reasoning-summary streaming (assistant.reasoning_delta
+    // events) for models that support it. Without this, a model's thinking phase
+    // produces no SDK events at all until it finishes -- observed in practice as
+    // single generations running 60-170s+ of near-total silence (almost entirely
+    // reasoning tokens) that our stall watchdog in toolCallEnforcement.ts
+    // (STALL_TIMEOUT_MS = 90s of total SDK silence) can't distinguish from a
+    // genuinely dead connection. "concise" gives the watchdog a periodic
+    // heartbeat during long reasoning turns without the token overhead of
+    // "detailed". Models that don't support reasoning summaries ignore this.
+    reasoningSummary: 'concise' as const,
     systemMessage: {
         mode: "replace",
         content: `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}`,
