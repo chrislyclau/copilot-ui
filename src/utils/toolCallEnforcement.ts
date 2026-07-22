@@ -217,7 +217,23 @@ export async function runForcedToolTurn<T>(
         await sendAndWaitWithAbort(currentSession, currentPromptOpts as MessageOptions, timeoutMs, opts.abortSignal);
         return;
       } catch (err) {
-        if (!isStallError(err) || stallAttempt >= maxStallRetries) {
+        if (!isStallError(err)) {
+          throw err;
+        }
+        if (toolCalled) {
+          // The target tool already fired (we saw its event) before the
+          // stream went quiet -- this "stall" is just the SDK never
+          // emitting a final closing event afterward, not a failure to
+          // respond. Treat the send as successful rather than discarding
+          // the already-completed turn and resending the prompt, which
+          // would risk the model calling the tool a second time.
+          console.warn(
+            `[runForcedToolTurn] upstream went quiet after '${targetTools.join("', '")}' was already called; ` +
+            `treating turn as complete instead of retrying.`,
+          );
+          return;
+        }
+        if (stallAttempt >= maxStallRetries) {
           throw err;
         }
         stallAttempt++;

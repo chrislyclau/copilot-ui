@@ -324,5 +324,46 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       expect(sentPrompts[2]).toBe('test prompt');
       expect(mockClient.createSession).toHaveBeenCalledTimes(1);
     });
+
+    it('does not retry or discard the turn when the stall happens after the tool was already called', async () => {
+      const handlers: Array<(e: unknown) => void> = [];
+      const session = {
+        sessionId: 's-tool-then-stall',
+        on: vi.fn().mockImplementation((handler: (e: unknown) => void) => {
+          handlers.push(handler);
+          return vi.fn();
+        }),
+        sendAndWait: vi.fn().mockImplementation(() => {
+          // Simulate the tool firing shortly after send, then the SDK
+          // going completely quiet afterward (no closing event) -- the
+          // exact shape of "submit_code_review called, then stream stalls".
+          setTimeout(() => {
+            handlers.forEach((h) => h({ type: 'tool.execution_complete', data: { toolName: 'my_tool' } }));
+          }, 1000);
+          return new Promise(() => {}); // sendAndWait itself never resolves
+        }),
+      };
+
+      const mockClient = {
+        createSession: vi.fn(),
+        resumeSession: vi.fn(),
+      } as any;
+
+      const runPromise = runForcedToolTurn(session as any, {}, 'my_tool', 'test prompt', {
+        client: mockClient,
+        maxRetries: 2,
+        maxStallRetries: 2,
+        getResult: () => ({ ok: true }),
+        tools: [],
+      });
+
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+      const result = await runPromise;
+
+      expect(result.toolCalled).toBe(true);
+      expect(result.result).toEqual({ ok: true });
+      expect(mockClient.resumeSession).not.toHaveBeenCalled();
+      expect(mockClient.createSession).not.toHaveBeenCalled();
+    });
   });
 });
