@@ -368,7 +368,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
   });
 
   describe('sendAndWaitWithAbort SDK timeout decoupling', () => {
-    it('does not pass a short caller timeoutMs straight through as the SDK\'s own absolute deadline', async () => {
+    it('does not pass a long caller timeoutMs straight through as the SDK\'s own absolute deadline', async () => {
       let capturedTimeout: number | undefined;
       const session = {
         sessionId: 's-long-healthy-turn',
@@ -379,12 +379,35 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         }),
       } as any;
 
-      // Caller asks for a short 10-minute budget (review-pr.ts's real value).
-      // Without decoupling, this would be forwarded verbatim to the SDK's
-      // own absolute deadline, which fires regardless of ongoing progress.
+      // Caller asks for a 10-minute budget (review-pr.ts's real value),
+      // which exceeds STALL_TIMEOUT_MS -- so this should be raised past
+      // SDK_HARD_TIMEOUT_CEILING_MS rather than forwarded verbatim, since
+      // the SDK's own deadline would otherwise fire regardless of ongoing
+      // progress.
       await sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 600000);
 
       expect(capturedTimeout).toBeGreaterThan(600000);
+    });
+
+    it('passes a short caller timeoutMs straight through unchanged (fail-fast callers)', async () => {
+      let capturedTimeout: number | undefined;
+      const session = {
+        sessionId: 's-short-deadline',
+        on: vi.fn().mockReturnValue(vi.fn()),
+        sendAndWait: vi.fn().mockImplementation((_opts, timeout: number) => {
+          capturedTimeout = timeout;
+          return Promise.resolve();
+        }),
+      } as any;
+
+      // gateLoop.ts's clarity-check/classification callers pass short,
+      // genuinely-hard deadlines (20s/30s) below STALL_TIMEOUT_MS and rely
+      // on them firing before stall detection would ever engage -- these
+      // must NOT be raised, or a real hang goes from failing in ~20-30s to
+      // failing in ~90s x (maxStallRetries + 1).
+      await sendAndWaitWithAbort(session, { prompt: 'hi' } as any, 20000);
+
+      expect(capturedTimeout).toBe(20000);
     });
   });
 });

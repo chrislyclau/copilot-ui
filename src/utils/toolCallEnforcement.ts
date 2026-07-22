@@ -48,21 +48,23 @@ const STALL_POLL_INTERVAL_MS = 5000;
  * parameter. Per the SDK's docs, that parameter is an ABSOLUTE deadline --
  * it "does not abort in-flight agent work" and fires purely based on
  * elapsed time, regardless of whether the turn is actively making
- * progress. That's a mismatch with what callers actually want: e.g.
- * review-pr.ts passes 600000 (10 min) meaning "give up if this looks
- * dead", but a legitimately long, healthy, reasoning-heavy turn (many
- * chained tool calls, each punctuated by reasoning-delta events -- see
- * reasoningSummary in buildAuditorSessionSettings) can genuinely take
+ * progress. That's a mismatch with what long-running callers actually
+ * want: e.g. review-pr.ts passes 600000 (10 min) meaning "give up if this
+ * looks dead", but a legitimately long, healthy, reasoning-heavy turn
+ * (many chained tool calls, each punctuated by reasoning-delta events --
+ * see reasoningSummary in buildAuditorSessionSettings) can genuinely take
  * longer than that while still making steady progress, and the SDK's
  * absolute clock doesn't care.
  *
- * The stall watchdog below (STALL_TIMEOUT_MS, reset on every SDK event
- * including deltas) is what should actually decide "is this turn dead or
- * alive" -- so the SDK's own parameter is deliberately raised to a
- * generous ceiling well past any healthy turn's real duration, and only
- * serves as a last-resort circuit breaker for the pathological case where
- * the SDK never reaches idle at all (not even a stall watchdog would catch
- * that, since it fires on *any* event, not just meaningful ones).
+ * Only applied when the caller's own `timeoutMs` already exceeds
+ * STALL_TIMEOUT_MS -- i.e. they've already opted into a budget long enough
+ * that the idle-based stall watchdog below is expected to be the real
+ * governor. Callers with a short, genuinely-hard deadline (e.g.
+ * gateLoop.ts's clarity/classification checks at 20s/30s) rely on that
+ * value firing before stall detection even engages; raising it for them
+ * would turn a ~20-30s fail-fast into a multi-minute one (90s stall
+ * detection x up to maxStallRetries+1 attempts) for no benefit, since
+ * those calls aren't the long-reasoning-turn case this ceiling exists for.
  */
 const SDK_HARD_TIMEOUT_CEILING_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -112,7 +114,10 @@ export async function sendAndWaitWithAbort(
   });
 
   const racers: Promise<void>[] = [
-    session.sendAndWait(prompt, Math.max(timeoutMs, SDK_HARD_TIMEOUT_CEILING_MS)).then(() => undefined),
+    session.sendAndWait(
+      prompt,
+      timeoutMs > STALL_TIMEOUT_MS ? Math.max(timeoutMs, SDK_HARD_TIMEOUT_CEILING_MS) : timeoutMs,
+    ).then(() => undefined),
     stallPromise,
   ];
   if (abortSignal) {
@@ -137,11 +142,14 @@ export interface ForcedToolTurnOptions<T> {
   client: CopilotClient;
   abortSignal?: AbortSignal;
   /**
-   * Passed down to sendAndWaitWithAbort. In practice, normal termination is
-   * governed by the idle-based stall watchdog (STALL_TIMEOUT_MS), not this
-   * value directly -- see SDK_HARD_TIMEOUT_CEILING_MS for why. Set this
-   * higher than the ceiling if a turn genuinely needs to run longer than 30
-   * minutes even while idle-stalled.
+   * Passed down to sendAndWaitWithAbort. If this exceeds STALL_TIMEOUT_MS,
+   * termination is effectively governed by the idle-based stall watchdog
+   * instead of this value directly (see SDK_HARD_TIMEOUT_CEILING_MS) --
+   * intended for long-running, healthy multi-tool-call turns. If this is
+   * at or below STALL_TIMEOUT_MS, it's treated as a genuine hard deadline
+   * and passed straight through to the SDK unchanged, so short-timeout
+   * callers (e.g. gateLoop.ts's clarity/classification checks) still fail
+   * fast on a real hang rather than waiting out a stall-detection cycle.
    */
   timeoutMs?: number;
   maxRetries?: number;
