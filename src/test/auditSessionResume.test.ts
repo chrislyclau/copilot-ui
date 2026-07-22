@@ -88,10 +88,29 @@ describe('executeAuditSession retry against real SDK/proxy transport', () => {
     // must not have rewritten history to alter it, duplicate it, or fold the
     // nudge into it.
     //
-    // (The system message is deliberately not compared for exact equality:
-    // resumeSession narrows `availableTools`, and the real SDK regenerates
-    // tool-availability-dependent sections of the system message accordingly
-    // -- that's expected SDK behavior, not prefix mutation.)
+    // (Exact equality isn't asserted for the whole system message:
+    // resumeSession narrows `availableTools`, and the real SDK responds by
+    // excising the per-tool instruction blocks for tools that are no longer
+    // available from the middle of the <tools> section -- confirmed by
+    // diffing the two system messages directly. It is NOT append or
+    // truncate: the header before <tools> and the fixed trailing blocks
+    // (file_paths_for_edit_view_create onward) are byte-identical in both;
+    // only the specific removed-tool blocks are gone from the middle. We
+    // assert that precisely below rather than a loose "prefix" claim.)
+    const firstSystemMessage = firstRequest.messages[0];
+    const secondSystemMessage = secondRequest.messages[0];
+    expect(firstSystemMessage.role).toBe('system');
+    expect(secondSystemMessage.role).toBe('system');
+
+    const header = (content: string) => content.split('<tools>')[0];
+    const trailer = (content: string) => {
+      const marker = '<file_paths_for_edit_view_create>';
+      const idx = content.indexOf(marker);
+      return idx === -1 ? null : content.slice(idx);
+    };
+
+    expect(header(secondSystemMessage.content)).toBe(header(firstSystemMessage.content));
+    expect(trailer(secondSystemMessage.content)).toBe(trailer(firstSystemMessage.content));
     const secondUserMessage = secondRequest.messages[1];
     expect(secondUserMessage.role).toBe('user');
     expect(secondUserMessage.content).toBe(firstUserMessage.content);
