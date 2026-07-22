@@ -135,7 +135,31 @@ export interface ForcedToolTurnOptions<T> {
    * gateLoop.ts's per-model stall-retry allowance.
    */
   maxStallRetries?: number;
+  /**
+   * When provided, a stall recovery creates a brand-new session via
+   * `client.createSession(freshSessionConfig)` instead of resuming the
+   * stalled one. Resuming a session that never got a response from the
+   * upstream provider re-sends into the same (likely still-wedged)
+   * conversation; starting fresh avoids that. Because a fresh session has
+   * no conversation history, recovery always restarts from `initialPrompt`
+   * rather than replaying whatever prompt was in flight (e.g. a nudge),
+   * since the fresh session wouldn't have the context a nudge presupposes.
+   * If omitted, falls back to the previous `client.resumeSession()`
+   * behavior (which does replay the exact in-flight prompt, since resuming
+   * preserves conversation history).
+   */
+  freshSessionConfig?: SessionConfig & { autoApproveAll?: boolean };
+  /**
+   * Called with the id of every session this turn runs on, including ones
+   * created mid-turn by stall recovery (`createSession` or `resumeSession`).
+   * Callers that correlate outbound requests via a session id stored
+   * globally (e.g. scripts/review-pr.ts's setActiveOpenRouterSessionId)
+   * need this to stay in sync across retries -- `onSession` above is for
+   * attaching per-session listeners, this is for tracking the id itself.
+   */
+  onSessionId?: (sessionId: string) => void;
 }
+
 
 export async function runForcedToolTurn<T>(
   session: CopilotSession,
@@ -187,24 +211,37 @@ export async function runForcedToolTurn<T>(
     resumeConfig: { availableTools?: string[]; tools?: unknown; provider?: ProviderConfig },
   ): Promise<void> => {
     let stallAttempt = 0;
+    let currentPromptOpts = promptOpts;
     while (true) {
       try {
-        await sendAndWaitWithAbort(currentSession, promptOpts as MessageOptions, timeoutMs, opts.abortSignal);
+        await sendAndWaitWithAbort(currentSession, currentPromptOpts as MessageOptions, timeoutMs, opts.abortSignal);
         return;
       } catch (err) {
         if (!isStallError(err) || stallAttempt >= maxStallRetries) {
           throw err;
         }
         stallAttempt++;
-        console.warn(
-          `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
-          `resuming session and retrying the same prompt...`,
-        );
         unsubOnSession?.();
         tracker.unsubscribe();
         unsubTool();
-        currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig as SessionConfig);
-        currentSessionId = currentSession.sessionId;
+        if (opts.freshSessionConfig) {
+          console.warn(
+            `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
+            `starting a new session and retrying the original prompt...`,
+          );
+          currentSession = await opts.client.createSession(opts.freshSessionConfig);
+          currentSessionId = currentSession.sessionId;
+          opts.onSessionId?.(currentSessionId);
+          currentPromptOpts = { prompt: initialPrompt };
+        } else {
+          console.warn(
+            `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
+            `resuming session and retrying the same prompt...`,
+          );
+          currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig as SessionConfig);
+          currentSessionId = currentSession.sessionId;
+          opts.onSessionId?.(currentSessionId);
+        }
         tracker = trackLastAssistantMessage(currentSession);
         toolCalled = false;
         unsubTool = setupToolListener(currentSession);
@@ -244,6 +281,7 @@ export async function runForcedToolTurn<T>(
     
     currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig);
     currentSessionId = currentSession.sessionId;
+    opts.onSessionId?.(currentSessionId);
     
     unsubOnSession?.();
     tracker = trackLastAssistantMessage(currentSession);

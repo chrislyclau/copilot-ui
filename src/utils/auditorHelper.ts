@@ -276,7 +276,12 @@ export async function executeAuditSession<T>(
       maxRetries,
       getResult: () => result,
       tools: sessionSettings.tools,
-      responseRequirements
+      responseRequirements,
+      freshSessionConfig: sessionSettings as SessionConfig & { autoApproveAll?: boolean },
+      onSessionId: (id) => {
+        sessionId = id;
+        onSessionId?.(id);
+      },
     });
     
     result = turnResult.result;
