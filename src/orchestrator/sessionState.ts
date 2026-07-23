@@ -165,7 +165,7 @@ export async function getOrCreateSession(
 
   if (existing) {
     if (existing.currentModel !== currentModel || existing.cwd !== cwd || !existing.copilotSession) {
-      writeLog(`[Session] Context mismatch or missing copilotSession detected for ${sessionId}. Recreating session context.`);
+      writeLog(`[Session] Context mismatch or missing copilotSession detected for ${sessionId}. Resuming session context.`);
       try {
         existing.unsubscribe?.();
         if (existing.copilotSession) {
@@ -174,7 +174,22 @@ export async function getOrCreateSession(
       } catch (err) {
         writeLog(`[Session] Error disconnecting outdated session ${sessionId}: ${err}`);
       }
-      const newSession = await client.createSession(createSessionOptions);
+      // `existing` means sessionId maps to a previously known session (either
+      // still in memory or rehydrated from the DB), so reconnect to it via
+      // resumeSession rather than starting a brand-new one -- this is what
+      // was actually causing loss of conversation/prompt continuity on
+      // stalls (see #154), which were misdiagnosed as provider-side hangs
+      // rather than the ~10-minute server-side idle timeout they really are.
+      // Only fall back to createSession if resuming genuinely fails (e.g.
+      // the underlying SDK session is truly unrecoverable) -- fail loud via
+      // logging rather than silently masking a real dead-session case.
+      let newSession: CopilotSession;
+      try {
+        newSession = await client.resumeSession(sessionId, createSessionOptions);
+      } catch (err) {
+        writeLog(`[Session] resumeSession(${sessionId}) failed, falling back to createSession: ${err}`, LogLevel.WARN);
+        newSession = await client.createSession(createSessionOptions);
+      }
       const updated: SessionRecord = {
         sessionId,
         copilotSession: newSession,
