@@ -64,6 +64,12 @@ export interface SessionRecord {
   readonly sessionId: string;
   readonly taskId?: string;
   readonly copilotSession: CopilotSession | null;
+  // The SDK's real server-side session UUID (CopilotSession.sessionId).
+  // Unlike `copilotSession` (the live object, lost on disconnect/rehydrate),
+  // this is a plain string that gets persisted to the DB, so it survives a
+  // process restart or eviction from the in-memory activeSessions map and
+  // can still be used to resumeSession() afterwards.
+  readonly copilotSessionId?: string;
   readonly currentModel: ModelTier;
   readonly cwd: string;
   readonly lastUsedAt: number;

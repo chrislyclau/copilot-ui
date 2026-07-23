@@ -168,11 +168,15 @@ export async function getOrCreateSession(
     if (modelOrCwdChanged || !existing.copilotSession) {
       writeLog(`[Session] Context mismatch or missing copilotSession detected for ${sessionId}. ${modelOrCwdChanged ? 'Recreating' : 'Resuming'} session context.`);
       // The real server-side Copilot session ID (a random UUID the SDK
-      // assigns) is only reachable via a *live* CopilotSession object's
-      // .sessionId -- it is never persisted to the DB and is NOT the same
-      // as `sessionId`, which is only the client-side activeSessions Map
-      // key. Capture it before disconnecting below.
-      const realSessionId = existing.copilotSession?.sessionId;
+      // assigns) is NOT the same as `sessionId`, which is only the
+      // client-side activeSessions Map key. It's captured from the live
+      // CopilotSession object whenever we have one, but it's also
+      // persisted to the DB (SessionRecord.copilotSessionId) precisely so
+      // it survives a disconnect or a rehydrate-from-DB (where
+      // copilotSession is null, see line ~148) -- otherwise the resume
+      // path below would be unreachable for exactly the cases it exists
+      // to handle.
+      const realSessionId = existing.copilotSession?.sessionId || existing.copilotSessionId;
       try {
         existing.unsubscribe?.();
         if (existing.copilotSession) {
@@ -220,6 +224,7 @@ export async function getOrCreateSession(
       const updated: SessionRecord = {
         sessionId,
         copilotSession: newSession,
+        copilotSessionId: newSession.sessionId,
         currentModel: safeModelTier,
         cwd,
         lastUsedAt: now,
@@ -252,6 +257,7 @@ export async function getOrCreateSession(
   const record: SessionRecord = {
     sessionId,
     copilotSession: newSession,
+    copilotSessionId: newSession.sessionId,
     currentModel: safeModelTier,
     cwd,
     lastUsedAt: now,

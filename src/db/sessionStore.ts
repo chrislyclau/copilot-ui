@@ -7,6 +7,7 @@ interface SessionRow {
   readonly taskId?: string;
   readonly currentModel: string;
   readonly cwd: string;
+  readonly copilotSessionId?: string;
   readonly lastUsedAt: number;
   readonly currentTierIndex: number;
   readonly planVersions?: string;
@@ -27,6 +28,7 @@ export function getSession(sessionId: string): Partial<SessionRecord> | undefine
     taskId: row.taskId,
     currentModel: row.currentModel as ModelTier, // TODO: refine Model type
     cwd: row.cwd,
+    copilotSessionId: row.copilotSessionId || undefined,
     lastUsedAt: row.lastUsedAt,
     currentTierIndex: row.currentTierIndex,
     planVersions: row.planVersions ? JSON.parse(row.planVersions) : undefined,
@@ -43,12 +45,12 @@ export function getSession(sessionId: string): Partial<SessionRecord> | undefine
 export function saveSession(session: SessionRecord) {
   const stmt = db.prepare(`
     INSERT INTO sessions (
-      sessionId, taskId, currentModel, cwd, lastUsedAt, currentTierIndex,
+      sessionId, taskId, currentModel, cwd, copilotSessionId, lastUsedAt, currentTierIndex,
       planVersions, totalInputTokens, totalOutputTokens,
       eventSequenceCounter, stateSnapshot, conversationHistory,
       turns, diagnosticTrail
     ) VALUES (
-      @sessionId, @taskId, @currentModel, @cwd, @lastUsedAt, @currentTierIndex,
+      @sessionId, @taskId, @currentModel, @cwd, @copilotSessionId, @lastUsedAt, @currentTierIndex,
       @planVersions, @totalInputTokens, @totalOutputTokens,
       @eventSequenceCounter, @stateSnapshot, @conversationHistory,
       @turns, @diagnosticTrail
@@ -57,6 +59,7 @@ export function saveSession(session: SessionRecord) {
       taskId = excluded.taskId,
       currentModel = excluded.currentModel,
       cwd = excluded.cwd,
+      copilotSessionId = excluded.copilotSessionId,
       lastUsedAt = excluded.lastUsedAt,
       currentTierIndex = excluded.currentTierIndex,
       planVersions = excluded.planVersions,
@@ -74,6 +77,7 @@ export function saveSession(session: SessionRecord) {
     taskId: session.taskId || null,
     currentModel: session.currentModel,
     cwd: session.cwd,
+    copilotSessionId: session.copilotSessionId || null,
     lastUsedAt: session.lastUsedAt,
     currentTierIndex: session.currentTierIndex,
     planVersions: session.planVersions ? JSON.stringify(session.planVersions) : null,
@@ -94,6 +98,7 @@ export function getAllSessions(): ReadonlyArray<Partial<SessionRecord>> {
     taskId: row.taskId,
     currentModel: row.currentModel as ModelTier,
     cwd: row.cwd,
+    copilotSessionId: row.copilotSessionId || undefined,
     lastUsedAt: row.lastUsedAt,
     currentTierIndex: row.currentTierIndex,
     planVersions: row.planVersions ? JSON.parse(row.planVersions) : undefined,
