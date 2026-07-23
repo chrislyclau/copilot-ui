@@ -87,4 +87,8 @@ export interface SessionRecord {
   readonly unsubscribe?: () => void;
   readonly pendingPatchedSpec?: string;
   readonly lastPassedSpecAuditSha?: string;
+  // Temporary diagnostic counter (issue #158): tracks how many
+  // assistant.usage / session.usage_info events have been logged for this
+  // session, so [UsageTelemetry] logging can be capped to the first few.
+  readonly usageLogCount?: number;
 }
