@@ -862,6 +862,13 @@ export const handleGateLoop = async (
       });
 
       let assistantMessage = "";
+      // Temporary diagnostic counter (issue #158): in-memory only, scoped to
+      // this request's event handler closure. Deliberately not persisted on
+      // SessionRecord/activeSessions -- this is throwaway diagnostic state,
+      // and persisting it would trigger a synchronous SQLite write via
+      // SessionMap.set() on every occurrence.
+      let usageTelemetryLogCount = 0;
+      const USAGE_TELEMETRY_LOG_LIMIT = 3;
       heartbeatId = setInterval(async () => {
         if (!res.writableEnded && !res.destroyed && !isRequestClosed) {
           try {
@@ -2097,29 +2104,17 @@ export const handleGateLoop = async (
                       // to the first few occurrences per session so we don't
                       // spam logs for the life of a long-running session.
                       if (
-                        extEvent.type === "assistant.usage" ||
-                        extEvent.type === "session.usage_info"
+                        (extEvent.type === "assistant.usage" ||
+                          extEvent.type === "session.usage_info") &&
+                        usageTelemetryLogCount < USAGE_TELEMETRY_LOG_LIMIT
                       ) {
-                        const USAGE_TELEMETRY_LOG_LIMIT = 3;
-                        const sRec =
-                          sessionId && activeSessions.has(sessionId)
-                            ? activeSessions.get(sessionId)!
-                            : undefined;
-                        const usageLogCount = sRec?.usageLogCount || 0;
-                        if (usageLogCount < USAGE_TELEMETRY_LOG_LIMIT) {
-                          const usageProviderType =
-                            registryInstance.getExecutionConfig(currentModel)
-                              .providerType;
-                          writeLog(
-                            `[UsageTelemetry] provider=${usageProviderType} model=${currentModel} ${JSON.stringify((extEvent as { data?: unknown }).data)}`,
-                          );
-                          if (sRec && sessionId) {
-                            activeSessions.set(sessionId, {
-                              ...sRec,
-                              usageLogCount: usageLogCount + 1,
-                            });
-                          }
-                        }
+                        usageTelemetryLogCount++;
+                        const usageProviderType =
+                          registryInstance.getExecutionConfig(currentModel)
+                            .providerType;
+                        writeLog(
+                          `[UsageTelemetry] provider=${usageProviderType} model=${currentModel} ${JSON.stringify((extEvent as { data?: unknown }).data)}`,
+                        );
                       }
 
                       // Step 2: Emit all SDK events to client
