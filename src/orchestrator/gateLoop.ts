@@ -2101,8 +2101,10 @@ export const handleGateLoop = async (
                       // whether assistant.usage / session.usage_info events
                       // are populated the same way for OpenRouter-routed
                       // sessions as they are for Copilot-native ones. Capped
-                      // to the first few occurrences per session so we don't
-                      // spam logs for the life of a long-running session.
+                      // to the first few occurrences per request (this
+                      // counter is re-initialized per invocation of this
+                      // closure, not persisted across requests on the same
+                      // session) so a single request doesn't spam logs.
                       if (
                         (extEvent.type === "assistant.usage" ||
                           extEvent.type === "session.usage_info") &&
