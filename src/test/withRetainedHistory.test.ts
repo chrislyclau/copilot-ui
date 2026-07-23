@@ -56,6 +56,21 @@ describe('withRetainedHistory', () => {
     expect(result.systemMessage?.content).toContain('[Retained Conversation History]');
   });
 
+  it('applies the 40k-char working-memory truncation before folding history in', () => {
+    // A single oversized entry comfortably exceeds the 40,000-char budget
+    // enforced by enforceWorkingMemoryTruncation, so the raw content must not
+    // survive verbatim into the system message.
+    const hugeEntry = { role: 'assistant' as const, content: 'x'.repeat(100_000) };
+    const options: CopilotCreateSessionOptions = { model: 'gemini-3.1-flash-lite' };
+
+    const result = withRetainedHistory(options, [hugeEntry]);
+
+    const content = result.systemMessage?.content;
+    expect(content).toBeDefined();
+    expect(content!.length).toBeLessThan(hugeEntry.content.length);
+    expect(content!.length).toBeLessThan(45_000);
+  });
+
   it('appends history onto replace-mode content rather than dropping it', () => {
     const options: CopilotCreateSessionOptions = {
       systemMessage: { mode: 'replace', content: 'Full custom system message.' },
