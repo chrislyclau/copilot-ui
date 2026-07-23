@@ -10,6 +10,7 @@ import { checkPathInside } from '../security/pathGuard';
 import { saveSession, deleteSession, getSession } from '../db/sessionStore';
 import { getAuditorExecutionConfig, executeAuditSession } from '../utils/auditorHelper';
 import { submitAuditFindingsTool } from '../config/tools';
+import { enforceWorkingMemoryTruncation } from '../utils/contextManager';
 
 export interface CopilotCreateSessionOptions extends Omit<SessionConfig, 'provider'> {
   provider?: SdkProviderConfig;
@@ -152,7 +153,19 @@ export function withRetainedHistory(
     return options;
   }
 
-  const historyBlock = `\n\n[Retained Conversation History]\n${history
+  // conversationHistory grows unboundedly during an active session (bounded
+  // only loosely by a length>50 slice(-20) elsewhere), so apply the same
+  // 40k-char working-memory truncation every other history-to-model path
+  // uses (pruneConversationHistory in gateLoop.ts/serverRuntime.ts) before
+  // folding it into the system message. Otherwise a long-running session's
+  // full unpruned history could land here on recreate and risk context
+  // overflow / createSession failure.
+  const truncatedHistory = enforceWorkingMemoryTruncation(history);
+  if (truncatedHistory.length === 0) {
+    return options;
+  }
+
+  const historyBlock = `\n\n[Retained Conversation History]\n${truncatedHistory
     .map(h => `${h.role}: ${h.content}`)
     .join('\n')}`;
 
