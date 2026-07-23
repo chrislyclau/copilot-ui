@@ -2090,6 +2090,38 @@ export const handleGateLoop = async (
                         assistantMessage += extEvent.data.deltaContent || "";
                       }
 
+                      // Temporary diagnostic logging (issue #158): observe
+                      // whether assistant.usage / session.usage_info events
+                      // are populated the same way for OpenRouter-routed
+                      // sessions as they are for Copilot-native ones. Capped
+                      // to the first few occurrences per session so we don't
+                      // spam logs for the life of a long-running session.
+                      if (
+                        extEvent.type === "assistant.usage" ||
+                        extEvent.type === "session.usage_info"
+                      ) {
+                        const USAGE_TELEMETRY_LOG_LIMIT = 3;
+                        const sRec =
+                          sessionId && activeSessions.has(sessionId)
+                            ? activeSessions.get(sessionId)!
+                            : undefined;
+                        const usageLogCount = sRec?.usageLogCount || 0;
+                        if (usageLogCount < USAGE_TELEMETRY_LOG_LIMIT) {
+                          const usageProviderType =
+                            registryInstance.getExecutionConfig(currentModel)
+                              .providerType;
+                          writeLog(
+                            `[UsageTelemetry] provider=${usageProviderType} model=${currentModel} ${JSON.stringify((extEvent as { data?: unknown }).data)}`,
+                          );
+                          if (sRec && sessionId) {
+                            activeSessions.set(sessionId, {
+                              ...sRec,
+                              usageLogCount: usageLogCount + 1,
+                            });
+                          }
+                        }
+                      }
+
                       // Step 2: Emit all SDK events to client
                       await secureWrite(
                         res,
