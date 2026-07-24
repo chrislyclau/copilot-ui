@@ -27,7 +27,7 @@ db.exec(`
     specId TEXT REFERENCES specs(specId),
     title TEXT NOT NULL,
     description TEXT,
-    status TEXT CHECK(status IN ('pending','in_progress','blocked','done')) DEFAULT 'pending',
+    status TEXT CHECK(status IN ('pending','in_progress','blocked','pr_ready','done')) DEFAULT 'pending',
     dependsOn TEXT,              -- JSON array of pbiIds
     createdAt INTEGER,
     updatedAt INTEGER,

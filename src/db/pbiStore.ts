@@ -5,7 +5,7 @@ export interface PbiRecord {
   readonly specId: string;
   readonly title: string;
   readonly description: string | null;
-  readonly status: 'pending' | 'in_progress' | 'blocked' | 'done';
+  readonly status: 'pending' | 'in_progress' | 'blocked' | 'pr_ready' | 'done';
   readonly dependsOn: string | null; // JSON string of pbiIds
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -26,7 +26,7 @@ interface PbiRow {
   readonly specId: string;
   readonly title: string;
   readonly description: string | null;
-  readonly status: 'pending' | 'in_progress' | 'blocked' | 'done';
+  readonly status: 'pending' | 'in_progress' | 'blocked' | 'pr_ready' | 'done';
   readonly dependsOn: string | null;
   readonly createdAt: number;
   readonly updatedAt: number;
