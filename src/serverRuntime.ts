@@ -462,51 +462,6 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
     res.json({ status: 'ok' });
   });
 
-  // Simple session registry for the dev terminal
-  const terminalSessions: Record<string, string> = {};
-
-  app.post("/api/exec", async (req, res) => {
-    const { command, sessionId = "default" } = req.body;
-
-    if (!command) {
-      res.status(400).json({ error: "No command provided" });
-      return;
-    }
-
-    const currentCwd = terminalSessions[sessionId] || getWorkspaceRoot();
-
-    if (process.env.NODE_ENV === 'test') {
-      res.json({
-        stdout: 'Mocked terminal output',
-        stderr: '',
-        currentCwd
-      });
-      return;
-    }
-
-    try {
-      const execCommand = getExecCommand();
-      const { stdout, stderr } = await execCommand(
-        `cd '${currentCwd}' && ${command} && echo "__CWD__$(pwd)"`
-      );
-
-      // Parse trailing __CWD__ marker to track directory changes (e.g. `cd`)
-      const cwdMatch = stdout.match(/__CWD__(.+)$/m);
-      const cleanStdout = stdout.replace(/__CWD__.+$/m, '').trimEnd();
-      if (cwdMatch?.[1]) {
-        terminalSessions[sessionId] = cwdMatch[1].trim();
-      }
-
-      res.json({
-        stdout: cleanStdout,
-        stderr,
-        currentCwd: terminalSessions[sessionId] || currentCwd,
-      });
-    } catch (err: unknown) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
   // API logs route
   app.get('/api/logs', (req, res) => {
     try {

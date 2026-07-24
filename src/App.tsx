@@ -16,7 +16,6 @@ import { useScenarios } from './hooks/useScenarios';
 import { useClipboard } from './hooks/useClipboard';
 import { useGateLoop } from './hooks/useGateLoop';
 import LogsModal from './components/LogsModal';
-import TerminalUI from '../dev-terminal/TerminalUI';
 
 export default function App() {
   // Scenario datasets manager
@@ -99,16 +98,11 @@ export default function App() {
   const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
   const [isLogsModalOpen, setIsLogsModalOpen] = useState(false);
   const [logs, setLogs] = useState('');
-  const [showTerminal, setShowTerminal] = useState(false);
 
   // Currently focused event for inspection pane
   const activeFocusEvent = useMemo(() => {
     return bundledEvents.find(e => e.sessionEvent.id === focusedEventId) || undefined;
   }, [bundledEvents, focusedEventId]);
-
-  if (showTerminal) {
-    return <TerminalUI onClose={() => setShowTerminal(false)} />;
-  }
 
   // Fetch active server debugging logs
   const fetchLogs = async () => {
@@ -149,7 +143,6 @@ export default function App() {
         setActiveScenarioId={setActiveScenarioId}
         fetchLogs={fetchLogs}
         activeReplayTraceId={activeReplayTraceId}
-        onOpenTerminal={() => setShowTerminal(true)}
       />
 
       {/* Main interactive cockpit */}

@@ -8,7 +8,6 @@ interface HeaderProps {
   readonly setActiveScenarioId: (id: string) => void;
   readonly fetchLogs: () => void;
   readonly activeReplayTraceId?: string | undefined;
-  readonly onOpenTerminal?: () => void;
 }
 
 export function Header({
@@ -17,7 +16,6 @@ export function Header({
   setActiveScenarioId,
   fetchLogs,
   activeReplayTraceId,
-  onOpenTerminal,
 }: HeaderProps) {
   return (
     <header className="bg-white dark:bg-zinc-900/50 border-b border-zinc-200 dark:border-zinc-800 shrink-0 sticky top-0 z-40 backdrop-blur-sm">
@@ -47,15 +45,6 @@ export function Header({
 
         {/* Scenario / Session dataset selector dropdown */}
         <div className="flex items-center gap-2">
-          {onOpenTerminal && (
-            <button
-              id="btn-open-terminal"
-              onClick={onOpenTerminal}
-              className="px-3 py-1.5 bg-zinc-900 dark:bg-zinc-800 text-white border border-zinc-700/60 rounded-xl text-xs font-semibold hover:bg-zinc-800 dark:hover:bg-zinc-700 cursor-pointer flex items-center gap-2 shadow-2xs transition-colors"
-            >
-              <Terminal size={14} className="text-[#00FF41]" /> Dev Terminal
-            </button>
-          )}
           <button
             id="btn-view-logs"
             onClick={fetchLogs}
