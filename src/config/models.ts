@@ -38,8 +38,13 @@ export const KNOWN_MODELS_CONFIG: readonly ModelProviderConfig[] = [
   { provider: "openai", model: "gpt-4o-mini", tokenRatio: 1.5 },
   { provider: "local", model: "llama3:8b", tokenRatio: 1.0 },
   { provider: "openrouter", model: "z-ai/glm-5.2", tokenRatio: 1.3 },
-  { provider: "openrouter", model: "google/gemma-4-26b-a4b-it", tokenRatio: 1.0 },
   { provider: "openrouter", model: "deepseek/deepseek-v4-pro", tokenRatio: 1.0 },
+  { provider: "openrouter", model: "deepseek/deepseek-v4-flash", tokenRatio: 1.3 },
+  { provider: "openrouter", model: "google/gemma-4-26b-a4b-it", tokenRatio: 1.0 },
+  { provider: "openrouter", model: "minimax/minimax-m3", tokenRatio: 1.0 },
+  { provider: "openrouter", model: "xiaomi/mimo-v2.5", tokenRatio: 1.2 },
+  { provider: "openrouter", model: "xiaomi/mimo-v2.5-pro", tokenRatio: 1.0 },
+  { provider: "openrouter", model: "qwen/qwen3.6-35b-a3b", tokenRatio: 1.2 },
   { provider: "copilot-native", model: "copilot-default", tokenRatio: 1.0 },
   
 ];
