@@ -66,10 +66,13 @@ Sections 2–4a are implemented.
 - **RM-REQ-002a (U):** The `tasks` table shall gain a foreign key to a new `pbis` table
   (`pbiId`), replacing tasks' current direct association to `specId`. A task's spec
   association is derived transitively through its PBI.
-- **RM-REQ-003a (U):** The `pbis` table shall store, per PBI: `specId`, a title/
-  description, status (`pending | in_progress | blocked | done`), and a
-  `dependsOn: pbiId[]` field representing edges in the PBI dependency graph (see
-  RM-REQ-071).
+- **RM-REQ-003a (U) [Revised — resolves Issue 121]:** The `pbis` table shall store,
+  per PBI: `specId`, a title/description, status (`pending | in_progress | blocked |
+  pr_ready | done`), and a `dependsOn: pbiId[]` field representing edges in the PBI
+  dependency graph (see RM-REQ-071). `pr_ready` is a distinct enum value, not a
+  derived state: it is entered only via RM-REQ-017 (zero-finding compliance audit)
+  and exited back to `in_progress` via RM-REQ-013 (a subsequent audit with findings),
+  or to `done` once a human merges `pbi/<pbiId>` into trunk.
 
 **Note on ORCH-REQ-006/009:** ORCH-REQ-006's "pull the next unblocked task" and
 ORCH-REQ-009's Spec-Gate Auditor scope both currently operate on the old flat
@@ -174,10 +177,13 @@ below.
   shall create new tasks (within the same PBI) via a structured tool call (the same
   forced-tool-call discipline used for the Auditor and PR Reviewer), not by writing
   prose into `architecture-spec.md` for the existing regex-based decomposer to
-  reparse, and shall mark the PBI's completion state as not-yet-satisfied.
+  reparse, and shall set the PBI's `status` (RM-REQ-003a) to `in_progress` — or back
+  to `in_progress` from `pr_ready`, per RM-REQ-003a, if the audit that produced these
+  findings was a re-audit of a previously PR-ready PBI.
 - **RM-REQ-017 (E) [New — resolves Issue 83]:** When a compliance audit for `pbiId`
-  reports zero findings, the system shall mark the PBI as PR-ready and surface it in
-  the async queue (RM-REQ-003) for human review, but shall **not** automatically merge
+  reports zero findings, the system shall set the PBI's `status` (RM-REQ-003a) to
+  `pr_ready` and surface it in the async queue (RM-REQ-003) for human review, but
+  shall **not** automatically merge
   `pbi/<pbiId>` into trunk. Per `SYS-REQ-021`, trunk remains untouched until human
   review and final merge/approval; `pbi/<pbiId>` is the agent-owned integration branch
   that a human subsequently opens as a PR against trunk. `pbi/<pbiId>` functions as the
