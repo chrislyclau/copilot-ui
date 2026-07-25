@@ -240,6 +240,88 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       expect(initialSession.disconnect).toHaveBeenCalledTimes(1);
     });
 
+    it('discards the pre-stall turn\'s investigative tool calls when recovering via freshSessionConfig (issue #185)', async () => {
+      let sessionCount = 0;
+      const sentPromptOpts: any[] = [];
+
+      const makeSession = (stalls: boolean) => {
+        sessionCount++;
+        const id = `session-${sessionCount}`;
+        const eventHandlers: Array<(event: unknown) => void> = [];
+        const emit = (event: unknown) => eventHandlers.forEach((h) => h(event));
+        return {
+          sessionId: id,
+          on: vi.fn().mockImplementation((handler: (e: unknown) => void) => {
+            eventHandlers.push(handler);
+            return vi.fn();
+          }),
+          sendAndWait: vi.fn().mockImplementation((opts: any) => {
+            sentPromptOpts.push(opts);
+            if (stalls) {
+              // Before the stall, the model already ran a couple of
+              // non-target investigative tool calls (e.g. `view`) --
+              // exactly the scenario from PR #136 where a stall late in
+              // a long investigation throws away everything done so far.
+              emit({ type: 'tool.execution_start', data: { toolName: 'view' } });
+              emit({ type: 'tool.execution_complete', data: { toolName: 'view' } });
+              emit({ type: 'tool.execution_start', data: { toolName: 'view' } });
+              emit({ type: 'tool.execution_complete', data: { toolName: 'view' } });
+              return new Promise(() => {}); // then the stream goes quiet forever
+            }
+            // Post-recovery session: the target tool fires immediately.
+            emit({ type: 'tool.execution_start', data: { toolName: 'my_tool' } });
+            emit({ type: 'tool.execution_complete', data: { toolName: 'my_tool' } });
+            return Promise.resolve();
+          }),
+          disconnect: vi.fn().mockResolvedValue(undefined),
+        };
+      };
+
+      const initialSession = makeSession(true);
+      const freshSessionConfig = { workingDirectory: '/tmp', systemPrompt: 'x', tools: [] } as any;
+      const mockClient = {
+        createSession: vi.fn().mockImplementation(async () => makeSession(false)),
+        resumeSession: vi.fn(),
+      } as any;
+
+      const initialPrompt = 'Investigate this change and report your findings.';
+      const runPromise = runForcedToolTurn(initialSession as any, {}, 'my_tool', initialPrompt, {
+        client: mockClient,
+        maxRetries: 0,
+        maxStallRetries: 1,
+        getResult: () => ({ ok: true }),
+        tools: [],
+        freshSessionConfig,
+      });
+
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+      const result = await runPromise;
+
+      // The retried session did pick up the target tool -- recovery
+      // "worked" in the sense that a result was eventually produced.
+      expect(result.toolCalled).toBe(true);
+      expect(mockClient.createSession).toHaveBeenCalledTimes(1);
+
+      // Documents CURRENT (intentional-but-costly) behavior: the fresh
+      // session's send only ever carries `initialPrompt`, with nothing
+      // referencing the `view` calls the model had already made pre-stall
+      // -- that entire investigative history is discarded, not just the
+      // single in-flight request.
+      expect(sentPromptOpts).toHaveLength(2);
+      expect(sentPromptOpts[0]).toMatchObject({ prompt: initialPrompt });
+      expect(sentPromptOpts[1]).toEqual({ prompt: initialPrompt });
+
+      // TODO(bug): once stall recovery preserves prior turn context (e.g.
+      // by trying resumeSession first per issue #190/#192, only falling
+      // back to a history-losing createSession if the resume itself
+      // stalls), the retried send should instead reflect that the model
+      // already investigated via `view` -- swap in an assertion here that
+      // the resumed prompt/history references the earlier tool activity,
+      // once that direction lands.
+      //
+      // expect(sentPromptOpts[1]).not.toEqual(sentPromptOpts[0]);
+    });
+
     it('falls back to resumeSession when no freshSessionConfig is supplied', async () => {
       let sessionCount = 0;
       const makeSession = (resolves: boolean) => {
