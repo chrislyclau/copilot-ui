@@ -314,6 +314,16 @@ export async function runForcedToolTurn<T>(
   ): Promise<void> => {
     let stallAttempt = 0;
     let currentPromptOpts = promptOpts;
+    // Tracks whether we've already tried resuming the stalled session once
+    // within the freshSessionConfig path. Per the design tradeoff in the
+    // freshSessionConfig doc comment, a resume risks re-sending into a
+    // wedged conversation -- but that risk is only real once we already
+    // know the session is wedged. On the *first* stall we don't yet know
+    // that, so we try a cheap resume (preserving history) before paying the
+    // cost of a fresh, history-losing session. Only if the resume attempt
+    // itself stalls do we treat the session as genuinely wedged and
+    // escalate to createSession.
+    let resumeAttempted = false;
     while (true) {
       try {
         await sendAndWaitWithAbort(currentSession, currentPromptOpts as MessageOptions, timeoutMs, opts.abortSignal);
@@ -352,14 +362,29 @@ export async function runForcedToolTurn<T>(
           console.warn(`[runForcedToolTurn] disconnect failed. ${e}`);
         }
         if (opts.freshSessionConfig) {
-          console.warn(
-            `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
-            `starting a new session and retrying the original prompt...`,
-          );
-          currentSession = await opts.client.createSession(opts.freshSessionConfig);
-          currentSessionId = currentSession.sessionId;
-          opts.onSessionId?.(currentSessionId);
-          currentPromptOpts = { prompt: initialPrompt };
+          if (!resumeAttempted) {
+            console.warn(
+              `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
+              `attempting to resume the stalled session before falling back to a fresh one...`,
+            );
+            currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig as SessionConfig);
+            currentSessionId = currentSession.sessionId;
+            opts.onSessionId?.(currentSessionId);
+            resumeAttempted = true;
+            // currentPromptOpts intentionally left as-is: resuming preserves
+            // history, so we retry the exact in-flight prompt rather than
+            // restarting from initialPrompt.
+          } else {
+            console.warn(
+              `[runForcedToolTurn] resume attempt itself stalled (attempt ${stallAttempt}/${maxStallRetries}); ` +
+              `starting a new session and retrying the original prompt...`,
+            );
+            currentSession = await opts.client.createSession(opts.freshSessionConfig);
+            currentSessionId = currentSession.sessionId;
+            opts.onSessionId?.(currentSessionId);
+            currentPromptOpts = { prompt: initialPrompt };
+            resumeAttempted = false;
+          }
         } else {
           console.warn(
             `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
