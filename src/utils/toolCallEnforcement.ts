@@ -99,6 +99,15 @@ export async function sendAndWaitWithAbort(
   let lastEventAt = Date.now();
   let lastEventType: string | undefined;
   let usageTelemetryLogCount = 0;
+  // Tracks whether a tool is currently executing. `tool.execution_start` and
+  // `tool.execution_complete` are the only events bookending a tool call --
+  // nothing is emitted by the SDK *during* execution itself, so a
+  // slow-but-healthy tool (e.g. `npx tsc`, `vitest`, a large `grep`) that
+  // runs longer than STALL_TIMEOUT_MS would otherwise be misdiagnosed as a
+  // stalled upstream stream and have its turn killed and restarted mid-run
+  // (see issue #188/#191, reproduced on PR #136). While this is true, the
+  // watchdog below suspends its silence check entirely.
+  let toolExecutionActive = false;
   const unsubscribeStallTracker = session.on((event: unknown) => {
     lastEventAt = Date.now();
     if (!event || typeof event !== 'object' || !('type' in event)) return;
@@ -114,6 +123,11 @@ export async function sendAndWaitWithAbort(
     if (ev.type === 'tool.execution_start') {
       const toolName = (ev.data as Record<string, unknown> | undefined)?.toolName;
       console.log(`[sendAndWaitWithAbort] tool used: ${toolName}`);
+      toolExecutionActive = true;
+    }
+
+    if (ev.type === 'tool.execution_complete') {
+      toolExecutionActive = false;
     }
 
     // Important event: usage telemetry. This mirrors gateLoop.ts's own
@@ -133,6 +147,12 @@ export async function sendAndWaitWithAbort(
   let stallTimer: ReturnType<typeof setInterval> | null = null;
   const stallPromise = new Promise<never>((_, reject) => {
     stallTimer = setInterval(() => {
+      // A tool is actively running -- its own execution time is not
+      // "upstream silence" and must not count against the stall budget.
+      // The clock effectively resumes counting from whenever the tool
+      // finishes, since `tool.execution_complete` resets `lastEventAt`
+      // above.
+      if (toolExecutionActive) return;
       const elapsed = Date.now() - lastEventAt;
       if (elapsed > STALL_TIMEOUT_MS) {
         if (stallTimer) clearInterval(stallTimer);
