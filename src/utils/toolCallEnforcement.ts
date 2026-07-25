@@ -88,6 +88,8 @@ function isStallError(err: unknown): err is StallError {
  * sendAndWait deadline -- see SDK_HARD_TIMEOUT_CEILING_MS. It's still used
  * as-is for callers who explicitly want longer than that ceiling.
  */
+const USAGE_TELEMETRY_LOG_LIMIT = 3;
+
 export async function sendAndWaitWithAbort(
   session: CopilotSession,
   prompt: MessageOptions,
@@ -95,15 +97,53 @@ export async function sendAndWaitWithAbort(
   abortSignal?: AbortSignal,
 ): Promise<void> {
   let lastEventAt = Date.now();
-  const unsubscribeStallTracker = session.on(() => {
+  let lastEventType: string | undefined;
+  let usageTelemetryLogCount = 0;
+  const unsubscribeStallTracker = session.on((event: unknown) => {
     lastEventAt = Date.now();
+    if (!event || typeof event !== 'object' || !('type' in event)) return;
+    const ev = event as Record<string, unknown>;
+    lastEventType = String(ev.type);
+
+    // Important event: any tool the model actually invokes during the
+    // turn (view, glob, bash, etc.), not just the forced target tool that
+    // executeAuditSession's callback captures when the turn concludes.
+    // Without this, only the final structured-output tool call showed up
+    // in logs even though the model may have run several investigative
+    // tool calls beforehand.
+    if (ev.type === 'tool.execution_start') {
+      const toolName = (ev.data as Record<string, unknown> | undefined)?.toolName;
+      console.log(`[sendAndWaitWithAbort] tool used: ${toolName}`);
+    }
+
+    // Important event: usage telemetry. This mirrors gateLoop.ts's own
+    // usage-telemetry logging (issue #158), which never fires for auditor
+    // sessions (PR review, spec audit, etc.) since they run through this
+    // function instead of gateLoop's SSE event loop -- issue #180 noted
+    // telemetry was "not active during PR review" for exactly this reason.
+    if (
+      (ev.type === 'assistant.usage' || ev.type === 'session.usage_info') &&
+      usageTelemetryLogCount < USAGE_TELEMETRY_LOG_LIMIT
+    ) {
+      usageTelemetryLogCount++;
+      console.log(`[UsageTelemetry] auditor session ${JSON.stringify(ev.data)}`);
+    }
   });
 
   let stallTimer: ReturnType<typeof setInterval> | null = null;
   const stallPromise = new Promise<never>((_, reject) => {
     stallTimer = setInterval(() => {
-      if (Date.now() - lastEventAt > STALL_TIMEOUT_MS) {
+      const elapsed = Date.now() - lastEventAt;
+      if (elapsed > STALL_TIMEOUT_MS) {
         if (stallTimer) clearInterval(stallTimer);
+        // Unexpected path: log enough to tell a genuine stall apart from a
+        // false positive (e.g. the watchdog racing an event that was about
+        // to land) after the fact, without logging anything on the (vastly
+        // more common) happy path.
+        console.warn(
+          `[sendAndWaitWithAbort] stall detected: no SDK event for ${elapsed}ms (threshold ${STALL_TIMEOUT_MS}ms); ` +
+          `lastEventType=${lastEventType ?? 'none'}`,
+        );
         const err = new Error(
           `Upstream stream stalled: no SDK event received for over ${STALL_TIMEOUT_MS / 1000}s.`,
         ) as StallError;

@@ -260,25 +260,32 @@ export async function executeAuditSession<T>(
   let result: T | null = null;
   let lastAssistantText = '';
   let sessionId: string | undefined;
-  
+
   try {
-    console.log('[executeAuditSession] starting client...');
-    await client.start();
-    
+    try {
+      await client.start();
+    } catch (e) {
+      console.warn(`[executeAuditSession] client.start() failed: ${e}`);
+      throw e;
+    }
+
     const sessionSettings = buildAuditorSessionSettings(
       executionConfig,
       systemPrompt,
       tool,
       (args) => { result = args as T; }
     );
-    
-    console.log('[executeAuditSession] creating session...');
-    let session = await client.createSession(sessionSettings as SessionConfig & { autoApproveAll?: boolean });
+
+    let session: CopilotSession;
+    try {
+      session = await client.createSession(sessionSettings as SessionConfig & { autoApproveAll?: boolean });
+    } catch (e) {
+      console.warn(`[executeAuditSession] createSession() failed: ${e}`);
+      throw e;
+    }
     sessionId = session.sessionId;
-    console.log(`[executeAuditSession] session created: ${session.sessionId}`);
     onSessionId?.(session.sessionId);
-    
-    console.log('[executeAuditSession] sending and waiting for response...');
+
     const turnResult = await runForcedToolTurn(session, executionConfig, toolName, userPrompt, {
       client,
       abortSignal,
@@ -296,14 +303,13 @@ export async function executeAuditSession<T>(
     
     result = turnResult.result;
     
-    console.log('[executeAuditSession] disconnecting session...');
     try {
       await turnResult.session.disconnect();
     } catch (e) {
-      // Best-effort: don't let disconnect failures mask an already-captured result
+      // Best-effort: don't let disconnect failures mask an already-captured result.
+      // Not logged as it's expected-benign and would just add noise.
     }
     
-    console.log('[executeAuditSession] complete!');
     return result;
   } finally {
     try {
