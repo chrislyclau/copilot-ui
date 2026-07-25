@@ -249,6 +249,46 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       expect(resumedSession.disconnect).toHaveBeenCalledTimes(1);
     });
 
+    it('goes straight to createSession (skips resume-first) when maxStallRetries is 1, so the freshSessionConfig fallback stays reachable', async () => {
+      let sessionCount = 0;
+      const makeSession = (resolves: boolean) => {
+        sessionCount++;
+        return {
+          sessionId: `session-${sessionCount}`,
+          on: vi.fn().mockReturnValue(vi.fn()),
+          sendAndWait: vi.fn().mockImplementation(() => (resolves ? Promise.resolve() : new Promise(() => {}))),
+          disconnect: vi.fn().mockResolvedValue(undefined),
+        };
+      };
+
+      const initialSession = makeSession(false); // stalls
+      const freshSessionConfig = { workingDirectory: '/tmp', systemPrompt: 'x', tools: [] } as any;
+      const mockClient = {
+        createSession: vi.fn().mockImplementation(async () => makeSession(true)), // succeeds
+        resumeSession: vi.fn(),
+      } as any;
+
+      const runPromise = runForcedToolTurn(initialSession as any, {}, 'my_tool', 'test prompt', {
+        client: mockClient,
+        maxRetries: 0,
+        maxStallRetries: 1,
+        getResult: () => ({ ok: true }),
+        tools: [],
+        freshSessionConfig,
+      });
+
+      const assertion = expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+      await assertion;
+
+      // With only one retry slot, resuming first would consume it and
+      // leave the createSession fallback unreachable -- so the sole
+      // attempt must go straight to createSession instead.
+      expect(mockClient.resumeSession).not.toHaveBeenCalled();
+      expect(mockClient.createSession).toHaveBeenCalledTimes(1);
+      expect(mockClient.createSession).toHaveBeenCalledWith(freshSessionConfig);
+    });
+
     it('preserves the session via resumeSession on the first stall, avoiding history loss (issue #185/#192)', async () => {
       let sessionCount = 0;
       const sentPromptOpts: any[] = [];
@@ -297,7 +337,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       const runPromise = runForcedToolTurn(initialSession as any, {}, 'my_tool', initialPrompt, {
         client: mockClient,
         maxRetries: 0,
-        maxStallRetries: 1,
+        maxStallRetries: 2,
         getResult: () => ({ ok: true }),
         tools: [],
         freshSessionConfig,
