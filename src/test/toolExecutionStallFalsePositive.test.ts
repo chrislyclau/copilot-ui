@@ -26,7 +26,7 @@ describe('tool-execution silence misdiagnosed as stall', () => {
     vi.useRealTimers();
   });
 
-  it('reproduces the false-positive stall when a non-target tool runs longer than STALL_TIMEOUT_MS', async () => {
+  it('does not false-positive stall when a non-target tool runs longer than STALL_TIMEOUT_MS', async () => {
     let eventHandler: ((event: unknown) => void) | undefined;
     const TOOL_EXECUTION_DURATION_MS = STALL_TIMEOUT_MS + 30000; // healthy, just slow
 
@@ -40,9 +40,8 @@ describe('tool-execution silence misdiagnosed as stall', () => {
         // `tool.execution_start` fires immediately, mirroring the real SDK.
         eventHandler?.({ type: 'tool.execution_start', data: { toolName: 'bash' } });
         // Nothing else is emitted while the tool is running -- that silent
-        // gap is the whole bug. `tool.execution_complete` (and the
-        // resolution of sendAndWait itself) only arrives once the tool
-        // actually finishes, well past STALL_TIMEOUT_MS.
+        // gap is fine now: the watchdog suspends its check for the duration
+        // of `tool.execution_start` -> `tool.execution_complete`.
         setTimeout(() => {
           eventHandler?.({ type: 'tool.execution_complete', data: { toolName: 'bash' } });
           resolve(undefined);
@@ -52,24 +51,12 @@ describe('tool-execution silence misdiagnosed as stall', () => {
 
     const promise = sendAndWaitWithAbort(session, { prompt: 'hi' } as any, TOOL_EXECUTION_DURATION_MS + 60000);
 
-    // Documents CURRENT (buggy) behavior: the watchdog has no notion of
-    // "a tool is actively running" distinct from "the model has gone
-    // silent", so it fires a false-positive stall partway through the
-    // tool's legitimate execution.
-    const assertion = expect(promise).rejects.toMatchObject({ isStall: true });
-    await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+    // Fixed behavior (issue #188/#191): the watchdog now knows a tool is
+    // actively running and suspends the silence check for that span, so no
+    // stall is ever raised even though STALL_TIMEOUT_MS elapses mid-execution.
+    const assertion = expect(promise).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(TOOL_EXECUTION_DURATION_MS + 60000);
     await assertion;
-
-    // TODO(bug): once sendAndWaitWithAbort's watchdog is made aware of
-    // in-flight tool execution (issue #188/#191 -- suspend/extend the
-    // stall clock between tool.execution_start and tool.execution_complete,
-    // or apply a separate/larger timeout for that state), this should
-    // instead resolve normally once the tool finishes, with no stall ever
-    // raised. Swap the assertions above for the ones below once that fix
-    // lands:
-    //
-    // await expect(promise).resolves.toBeUndefined();
-    // await vi.advanceTimersByTimeAsync(TOOL_EXECUTION_DURATION_MS + 60000);
   });
 
   it('does NOT false-positive when the tool finishes (and sendAndWait resolves) before STALL_TIMEOUT_MS', async () => {
