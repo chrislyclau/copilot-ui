@@ -322,6 +322,14 @@ export async function runForcedToolTurn<T>(
         unsubOnSession?.();
         tracker.unsubscribe();
         unsubTool();
+        // Disconnect the stalled session before discarding it -- otherwise
+        // each retry (via createSession or resumeSession) leaks a live
+        // session/connection that nothing ever cleans up.
+        try {
+          await currentSession.disconnect?.();
+        } catch {
+          // Best-effort: don't let disconnect failures mask the retry.
+        }
         if (opts.freshSessionConfig) {
           console.warn(
             `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
