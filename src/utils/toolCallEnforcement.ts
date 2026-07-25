@@ -329,6 +329,7 @@ export async function runForcedToolTurn<T>(
           await currentSession.disconnect?.();
         } catch {
           // Best-effort: don't let disconnect failures mask the retry.
+            console.warn(`[runForcedToolTurn] disconnect failed.`);
         }
         if (opts.freshSessionConfig) {
           console.warn(
