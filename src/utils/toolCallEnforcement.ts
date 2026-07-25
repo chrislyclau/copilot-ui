@@ -362,7 +362,12 @@ export async function runForcedToolTurn<T>(
           console.warn(`[runForcedToolTurn] disconnect failed. ${e}`);
         }
         if (opts.freshSessionConfig) {
-          if (!resumeAttempted) {
+          // Only try the resume-first path if there's still budget left
+          // afterward for the createSession fallback -- otherwise (e.g.
+          // maxStallRetries: 1) the resume would consume the sole retry
+          // slot and the fallback this caller opted into would never fire.
+          // In that case, go straight to createSession on the only attempt.
+          if (!resumeAttempted && stallAttempt < maxStallRetries) {
             console.warn(
               `[runForcedToolTurn] upstream stall detected (attempt ${stallAttempt}/${maxStallRetries}); ` +
               `attempting to resume the stalled session before falling back to a fresh one...`,
