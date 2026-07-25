@@ -197,6 +197,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
           sessionId: `session-${sessionCount}`,
           on: vi.fn().mockReturnValue(vi.fn()),
           sendAndWait: vi.fn().mockImplementation(() => (resolves ? Promise.resolve() : new Promise(() => {}))),
+          disconnect: vi.fn().mockResolvedValue(undefined),
         };
       };
 
@@ -233,6 +234,10 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       // that correlate outbound requests via a global (e.g.
       // scripts/review-pr.ts's setActiveOpenRouterSessionId) stay in sync.
       expect(onSessionId).toHaveBeenCalledWith('session-2');
+
+      // The abandoned (stalled) session must be disconnected -- otherwise
+      // each stall retry leaks a live session/connection (issue #186).
+      expect(initialSession.disconnect).toHaveBeenCalledTimes(1);
     });
 
     it('falls back to resumeSession when no freshSessionConfig is supplied', async () => {
@@ -243,6 +248,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
           sessionId: `session-${sessionCount}`,
           on: vi.fn().mockReturnValue(vi.fn()),
           sendAndWait: vi.fn().mockImplementation(() => (resolves ? Promise.resolve() : new Promise(() => {}))),
+          disconnect: vi.fn().mockResolvedValue(undefined),
         };
       };
 
@@ -267,6 +273,10 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
 
       expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
       expect(mockClient.createSession).not.toHaveBeenCalled();
+
+      // The abandoned (stalled) session must be disconnected -- otherwise
+      // each stall retry leaks a live session/connection (issue #186).
+      expect(initialSession.disconnect).toHaveBeenCalledTimes(1);
     });
 
     it('restarts from the original prompt (not the in-flight nudge) when a stall happens mid-nudge-retry', async () => {
