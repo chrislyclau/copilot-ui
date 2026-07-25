@@ -327,9 +327,9 @@ export async function runForcedToolTurn<T>(
         // session/connection that nothing ever cleans up.
         try {
           await currentSession.disconnect?.();
-        } catch {
+        } catch(e) {
           // Best-effort: don't let disconnect failures mask the retry.
-            console.warn(`[runForcedToolTurn] disconnect failed.`);
+          console.warn(`[runForcedToolTurn] disconnect failed. ${e}`);
         }
         if (opts.freshSessionConfig) {
           console.warn(
