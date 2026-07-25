@@ -189,7 +189,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
     });
 
-    it('creates a brand-new session (not resumeSession) on stall when freshSessionConfig is provided', async () => {
+    it('tries resumeSession before falling back to createSession on stall when freshSessionConfig is provided', async () => {
       let sessionCount = 0;
       const makeSession = (resolves: boolean) => {
         sessionCount++;
@@ -202,17 +202,18 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       };
 
       const initialSession = makeSession(false); // stalls
+      const resumedSession = makeSession(false); // resume attempt itself stalls too
       const freshSessionConfig = { workingDirectory: '/tmp', systemPrompt: 'x', tools: [] } as any;
       const mockClient = {
         createSession: vi.fn().mockImplementation(async () => makeSession(true)), // succeeds
-        resumeSession: vi.fn(),
+        resumeSession: vi.fn().mockImplementation(async () => resumedSession),
       } as any;
       const onSessionId = vi.fn();
 
       const runPromise = runForcedToolTurn(initialSession as any, {}, 'my_tool', 'test prompt', {
         client: mockClient,
         maxRetries: 0,
-        maxStallRetries: 1,
+        maxStallRetries: 2,
         getResult: () => ({ ok: true }),
         tools: [],
         freshSessionConfig,
@@ -223,24 +224,32 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       // in this mock), but what we care about here is *how* the stall was
       // recovered from, not the final outcome.
       const assertion = expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
-      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+      await vi.advanceTimersByTimeAsync((STALL_TIMEOUT_MS + 5000) * 2);
       await assertion;
 
+      // First stall: try a cheap resume (preserves history) rather than
+      // immediately paying for a fresh session.
+      expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
+      expect(mockClient.resumeSession).toHaveBeenCalledWith('session-1', expect.anything());
+
+      // The resume attempt itself stalled -- only now do we treat the
+      // session as genuinely wedged and escalate to createSession.
       expect(mockClient.createSession).toHaveBeenCalledTimes(1);
       expect(mockClient.createSession).toHaveBeenCalledWith(freshSessionConfig);
-      expect(mockClient.resumeSession).not.toHaveBeenCalled();
 
-      // onSessionId must fire again with the new session's id, so callers
+      // onSessionId must fire again with each new session's id, so callers
       // that correlate outbound requests via a global (e.g.
       // scripts/review-pr.ts's setActiveOpenRouterSessionId) stay in sync.
-      expect(onSessionId).toHaveBeenCalledWith('session-2');
+      expect(onSessionId).toHaveBeenCalledWith('session-2'); // resumed session
+      expect(onSessionId).toHaveBeenCalledWith('session-3'); // fresh session
 
-      // The abandoned (stalled) session must be disconnected -- otherwise
-      // each stall retry leaks a live session/connection (issue #186).
+      // Every abandoned session must be disconnected -- otherwise each
+      // stall retry leaks a live session/connection (issue #186).
       expect(initialSession.disconnect).toHaveBeenCalledTimes(1);
+      expect(resumedSession.disconnect).toHaveBeenCalledTimes(1);
     });
 
-    it('discards the pre-stall turn\'s investigative tool calls when recovering via freshSessionConfig (issue #185)', async () => {
+    it('preserves the session via resumeSession on the first stall, avoiding history loss (issue #185/#192)', async () => {
       let sessionCount = 0;
       const sentPromptOpts: any[] = [];
 
@@ -281,7 +290,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       const freshSessionConfig = { workingDirectory: '/tmp', systemPrompt: 'x', tools: [] } as any;
       const mockClient = {
         createSession: vi.fn().mockImplementation(async () => makeSession(false)),
-        resumeSession: vi.fn(),
+        resumeSession: vi.fn().mockImplementation(async () => makeSession(false)),
       } as any;
 
       const initialPrompt = 'Investigate this change and report your findings.';
@@ -300,26 +309,20 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       // The retried session did pick up the target tool -- recovery
       // "worked" in the sense that a result was eventually produced.
       expect(result.toolCalled).toBe(true);
-      expect(mockClient.createSession).toHaveBeenCalledTimes(1);
 
-      // Documents CURRENT (intentional-but-costly) behavior: the fresh
-      // session's send only ever carries `initialPrompt`, with nothing
-      // referencing the `view` calls the model had already made pre-stall
-      // -- that entire investigative history is discarded, not just the
-      // single in-flight request.
+      // On the *first* stall, recovery now tries resumeSession (preserving
+      // the model's prior investigative history via session continuity)
+      // instead of immediately paying for a history-losing createSession.
+      expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
+      expect(mockClient.resumeSession).toHaveBeenCalledWith(initialSession.sessionId, expect.anything());
+      expect(mockClient.createSession).not.toHaveBeenCalled();
+
+      // The in-flight prompt is retried as-is on the resumed session --
+      // resuming preserves conversation history, so there's no need to
+      // restart from scratch the way a fresh session would.
       expect(sentPromptOpts).toHaveLength(2);
       expect(sentPromptOpts[0]).toMatchObject({ prompt: initialPrompt });
-      expect(sentPromptOpts[1]).toEqual({ prompt: initialPrompt });
-
-      // TODO(bug): once stall recovery preserves prior turn context (e.g.
-      // by trying resumeSession first per issue #190/#192, only falling
-      // back to a history-losing createSession if the resume itself
-      // stalls), the retried send should instead reflect that the model
-      // already investigated via `view` -- swap in an assertion here that
-      // the resumed prompt/history references the earlier tool activity,
-      // once that direction lands.
-      //
-      // expect(sentPromptOpts[1]).not.toEqual(sentPromptOpts[0]);
+      expect(sentPromptOpts[1]).toEqual(sentPromptOpts[0]);
     });
 
     it('falls back to resumeSession when no freshSessionConfig is supplied', async () => {
@@ -361,7 +364,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       expect(initialSession.disconnect).toHaveBeenCalledTimes(1);
     });
 
-    it('restarts from the original prompt (not the in-flight nudge) when a stall happens mid-nudge-retry', async () => {
+    it('restarts from the original prompt (not the in-flight nudge) only once the resume-first attempt also stalls, mid-nudge-retry', async () => {
       let sessionCount = 0;
       const sentPrompts: string[] = [];
       const makeSession = (behavior: 'stall' | 'resolve') => {
@@ -374,6 +377,7 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
             sentPrompts.push(opts.prompt);
             return behavior === 'stall' ? new Promise(() => {}) : Promise.resolve();
           }),
+          disconnect: vi.fn().mockResolvedValue(undefined),
         };
       };
 
@@ -387,8 +391,10 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
         createSession: vi.fn().mockImplementation(async () => makeSession('resolve')),
         resumeSession: vi.fn().mockImplementation(async () => {
           resumeCallCount++;
-          // The nudge-retry's own resumeSession() call returns a session
-          // whose *next* send (the nudge itself) stalls.
+          // The nudge-retry's own resumeSession() call, and the stall
+          // recovery's own resume-first attempt, both return a session
+          // whose next send stalls -- so the resume-first attempt fails
+          // too, and only then does recovery escalate to createSession.
           return makeSession('stall');
         }),
       } as any;
@@ -396,24 +402,27 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       const runPromise = runForcedToolTurn(initialSession as any, {}, 'my_tool', 'test prompt', {
         client: mockClient,
         maxRetries: 1,
-        maxStallRetries: 1,
+        maxStallRetries: 2,
         getResult: () => ({ ok: true }),
         tools: [],
         freshSessionConfig,
       });
 
       const assertion = expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
-      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+      await vi.advanceTimersByTimeAsync((STALL_TIMEOUT_MS + 5000) * 2);
       await assertion;
 
       expect(sentPrompts[0]).toBe('test prompt'); // initial turn
-      // The nudge-retry's resumeSession call happened once (the ordinary,
-      // non-stall nudge resume), and its send (the nudge itself) is what stalls...
-      expect(resumeCallCount).toBe(1);
+      // resumeCallCount 1: the nudge-retry's ordinary (non-stall) resume.
+      // Its send (the nudge itself) is what stalls...
       expect(sentPrompts[1]).toContain('ended your turn without calling');
-      // ...so recovery used createSession (not yet another resumeSession)
-      // and resent the *original* prompt, not another nudge.
-      expect(sentPrompts[2]).toBe('test prompt');
+      // ...so stall recovery tries resumeSession once more first (resumeCallCount 2),
+      // resending the same in-flight nudge rather than resetting to the original prompt...
+      expect(sentPrompts[2]).toBe(sentPrompts[1]);
+      expect(resumeCallCount).toBe(2);
+      // ...and only because *that* resume attempt also stalled does recovery
+      // fall back to createSession and resend the *original* prompt.
+      expect(sentPrompts[3]).toBe('test prompt');
       expect(mockClient.createSession).toHaveBeenCalledTimes(1);
     });
 
