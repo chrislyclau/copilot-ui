@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { STALL_TIMEOUT_MS } from '../utils/toolCallEnforcement';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 interface SessionDouble {
   sessionId: string;
@@ -9,16 +8,11 @@ interface SessionDouble {
 }
 
 // Session doubles created by the mocked CopilotClient below, in creation
-// order, so assertions can address "the first (stalled) session" vs "the
-// final session" without guessing ids.
+// order.
 let sessionsCreated: SessionDouble[] = [];
 
-function makeSessionDouble(behavior: 'stall' | 'succeed'): SessionDouble {
+function makeSessionDouble(): SessionDouble {
   const id = `session-${sessionsCreated.length + 1}`;
-  // Real CopilotSession.on() supports many concurrent listeners (stall
-  // tracker, assistant-text tracker, tool-call tracker all subscribe
-  // independently) -- a single-slot mock would let later subscribers
-  // silently clobber earlier ones.
   const listeners: Array<(event: unknown) => void> = [];
   const emit = (event: unknown) => listeners.forEach((cb) => cb(event));
   const session = {
@@ -31,13 +25,13 @@ function makeSessionDouble(behavior: 'stall' | 'succeed'): SessionDouble {
       });
     }),
     sendAndWait: vi.fn().mockImplementation(() => {
-      if (behavior === 'stall') {
-        // Never resolves and never emits an event -- the exact "upstream
-        // stream stalled" shape sendAndWaitWithAbort's watchdog exists for.
-        return new Promise(() => {});
-      }
       // A healthy turn: the model calls the target tool, then the send
-      // resolves.
+      // resolves. executeAuditSession no longer routes through
+      // runForcedToolTurn's stall watchdog/resume ladder (issue #207 --
+      // it now uses runForcedToolTurnUntilTimeout, which has neither), so
+      // there is no "stall" leg to model here anymore. The stall-specific
+      // disconnect regression (issue #186/#187) is still covered directly
+      // against the dormant `runForcedToolTurn` in toolCallEnforcement.test.ts.
       emit({ type: 'tool.execution_start', data: { toolName: 'submit_finding' } });
       return Promise.resolve();
     }),
@@ -56,12 +50,10 @@ vi.mock('../copilotSdk/boundary', () => {
     async start() {}
     async stop() {}
     async createSession(_config: unknown) {
-      // First session this run ever creates is the one that stalls; any
-      // session created after that (i.e. the stall-recovery session) succeeds.
-      return makeSessionDouble(sessionsCreated.length === 0 ? 'stall' : 'succeed');
+      return makeSessionDouble();
     }
     async resumeSession(_id: string, _config: unknown) {
-      return makeSessionDouble('succeed');
+      return makeSessionDouble();
     }
   }
   return { CopilotClient: MockCopilotClient };
@@ -69,17 +61,12 @@ vi.mock('../copilotSdk/boundary', () => {
 
 import { executeAuditSession, ToolDefinition } from '../utils/auditorHelper';
 
-describe('executeAuditSession: stalled sessions are always disconnected (issue #187)', () => {
+describe('executeAuditSession: session is always disconnected once the turn completes', () => {
   beforeEach(() => {
     sessionsCreated = [];
-    vi.useFakeTimers();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('disconnects the stalled session as well as the final session by the time executeAuditSession returns', async () => {
+  it('disconnects the session used for a successful turn (issue #187, updated for issue #207)', async () => {
     const tool: ToolDefinition = {
       function: {
         name: 'submit_finding',
@@ -92,7 +79,7 @@ describe('executeAuditSession: stalled sessions are always disconnected (issue #
       },
     };
 
-    const runPromise = executeAuditSession(
+    const result = await executeAuditSession(
       '/tmp/does-not-matter',
       {} as any,
       'You are an auditor.',
@@ -105,30 +92,8 @@ describe('executeAuditSession: stalled sessions are always disconnected (issue #
       2,
     );
 
-    // Let the stall watchdog on the first (createSession) session's
-    // sendAndWait fire, then let the resumed session's send resolve.
-    await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
-
-    const result = await runPromise;
     expect(result).toBeTruthy();
-
-    // Two sessions should have been produced: the one that stalled and the
-    // one that recovered via resumeSession and actually called the tool.
-    expect(sessionsCreated.length).toBe(2);
-    const stalledSession = sessionsCreated[0]!;
-    const finalSession = sessionsCreated[1]!;
-
-    // The final session's disconnect is already implicitly required for
-    // executeAuditSession to clean up after a successful run.
-    expect(finalSession.disconnect).toHaveBeenCalledTimes(1);
-
-    // The actual regression this test guards against: before the fix in
-    // runForcedToolTurn's sendWithStallRetry (toolCallEnforcement.ts:359),
-    // the stalled session was dropped without ever calling disconnect(),
-    // leaking a live connection every time a stall triggered recovery.
-    // This is the same leak issue #186 covers at the runForcedToolTurn unit
-    // level; this asserts it holds through the full executeAuditSession
-    // integration as well.
-    expect(stalledSession.disconnect).toHaveBeenCalledTimes(1);
+    expect(sessionsCreated.length).toBe(1);
+    expect(sessionsCreated[0]!.disconnect).toHaveBeenCalledTimes(1);
   });
 });

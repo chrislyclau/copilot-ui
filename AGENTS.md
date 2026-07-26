@@ -70,3 +70,30 @@ kill pass keyed on an `EXEC_RUN_ID` marker to catch processes the group-kill can
 inside the container's PID namespace. If debugging a "still running after abort"
 report, check `processGroup.ts` and the container-side kill command in
 `dockerRunner.ts` first — this was a known gap, but is now handled.
+
+## Stall-watchdog recovery retired in favor of a single hard timeout
+
+`runForcedToolTurn`'s stall watchdog (`sendAndWaitWithAbort`'s 90s-silence
+threshold, `sendWithStallRetry`'s resume-then-fresh-session ladder) was built to
+recover from dead upstream connections. Every investigated case (PR #136, and a
+later PR-review session) turned out to be a slow-but-healthy turn -- long model
+reasoning, or one chaining many tool calls -- misdiagnosed as a stall, not an
+actual dead connection. Issues #188/#191 patched the watchdog to tolerate silence
+during active tool *execution*, but silence during model reasoning/generation (the
+observed pattern, `lastEventType=session.usage_info`) has no reliable SDK signal to
+distinguish from a real stall. Recovering from a false positive also has its own
+cost: `resumeSession()` re-injects the SDK's default system message and busts the
+prompt cache (issue #208), making the "recovered" turn slower -- which can itself
+look like a second stall.
+
+`runForcedToolTurnUntilTimeout` (`toolCallEnforcement.ts`) is now the path all
+callers use: same tool-not-called nudge/retry loop as `runForcedToolTurn`, but a
+single hard timeout racing `sendAndWait` directly, with no watchdog and no
+mid-turn resume. `executeAuditSession` (`auditorHelper.ts`) and all three
+`gateLoop.ts` forced-tool-turn call sites use it.
+
+`runForcedToolTurn`, `sendAndWaitWithAbort`, `STALL_TIMEOUT_MS`, `isStallError`,
+and their three existing test files are intentionally left in place, dormant, not
+deleted -- **do not delete them as part of unrelated cleanup.** If a genuine stall
+is ever observed independently of turn duration, that's the code to reach for
+again.

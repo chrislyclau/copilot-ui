@@ -478,3 +478,184 @@ export async function runForcedToolTurn<T>(
   
   return { result: finalResult as T, session: currentSession, lastAssistantText, toolCalled };
 }
+
+/**
+ * Default hard timeout for `runForcedToolTurn`'s "no watchdog" successor,
+ * `runForcedToolTurnUntilTimeout` -- see that function's doc comment. 60
+ * minutes is generous headroom for a legitimately long, healthy,
+ * reasoning-heavy turn (many chained tool calls) -- the exact case that
+ * made the old stall watchdog's 90s-silence heuristic unreliable (see
+ * `STALL_TIMEOUT_MS`'s doc comment and issues #188/#191).
+ */
+export const FORCED_TOOL_TURN_HARD_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
+
+/**
+ * Same options shape as `ForcedToolTurnOptions`, minus the stall-specific
+ * knobs (`maxStallRetries`, `freshSessionConfig`) that don't apply here --
+ * there is no stall detection or stall recovery in this function, so
+ * nothing consumes them.
+ */
+export type ForcedToolTurnUntilTimeoutOptions<T> = Omit<
+  ForcedToolTurnOptions<T>,
+  'maxStallRetries' | 'freshSessionConfig'
+>;
+
+/**
+ * Successor to `runForcedToolTurn` for callers that don't need stall
+ * recovery. Retired per issue #207: every investigated "stall" (PR #136,
+ * and a subsequent PR-review session) turned out to be a slow-but-healthy
+ * turn -- a long reasoning pass, or one chaining many tool calls --
+ * misdiagnosed as a dead upstream connection, not an actual dead
+ * connection. Issues #188/#191 patched the watchdog to tolerate silence
+ * during active tool *execution*, but silence during model
+ * reasoning/generation (the actual observed pattern, `lastEventType`
+ * landing on `session.usage_info`) has no reliable SDK signal to
+ * distinguish from a real stall, so the watchdog kept false-positiving on
+ * it. Recovering from a false positive via `resumeSession()` also carries
+ * its own cost independent of correctness: it re-injects the SDK's default
+ * system message and busts the prompt cache (issue #208), making the
+ * "recovered" turn slower and more expensive -- which can itself look like
+ * a second stall.
+ *
+ * This function keeps the tool-not-called nudge/retry loop from
+ * `runForcedToolTurn` unchanged, but replaces the idle-silence watchdog
+ * and mid-turn stall-recovery ladder (resume-then-fresh-session) with a
+ * single hard timeout racing `session.sendAndWait` directly -- if the SDK
+ * hasn't resolved by `timeoutMs` (default `FORCED_TOOL_TURN_HARD_TIMEOUT_MS`),
+ * the turn fails outright rather than being torn down and retried
+ * mid-flight. No resume, no fresh session, no stall-specific retry budget.
+ *
+ * `runForcedToolTurn`, `sendAndWaitWithAbort`, `STALL_TIMEOUT_MS`,
+ * `isStallError`, and their existing tests are left in place, dormant, not
+ * deleted -- see AGENTS.md. If a genuine (not turn-duration-driven) stall
+ * is ever observed independently of this, that's the code to reach for
+ * again.
+ */
+export async function runForcedToolTurnUntilTimeout<T>(
+  session: CopilotSession,
+  executionConfig: { provider?: unknown },
+  toolName: string | string[],
+  initialPrompt: string,
+  opts: ForcedToolTurnUntilTimeoutOptions<T>
+): Promise<{ result: T; session: CopilotSession; lastAssistantText: string; toolCalled: boolean }> {
+  let currentSession = session;
+  let currentSessionId = session.sessionId;
+  const timeoutMs = opts.timeoutMs ?? FORCED_TOOL_TURN_HARD_TIMEOUT_MS;
+  const maxRetries = opts.maxRetries ?? 2;
+  const responseRequirements = opts.responseRequirements ?? {};
+
+  let toolCalled = false;
+  const targetTools = Array.isArray(toolName) ? toolName : [toolName];
+  let tracker = trackLastAssistantMessage(currentSession);
+
+  const setupToolListener = (s: CopilotSession) => {
+    const unsub = s.on((event: unknown) => {
+      const ev = event as Record<string, unknown>;
+      if (
+        (ev.type === 'tool.user_requested' && targetTools.includes((ev.data as any)?.toolName)) ||
+        (ev.type === 'tool.execution_start' && targetTools.includes((ev.data as any)?.toolName)) ||
+        (ev.type === 'external_tool.requested' && targetTools.includes((ev.data as any)?.toolName)) ||
+        (ev.type === 'tool.execution_complete' && (ev.data as any)?.toolCallId && targetTools.some(t => (ev.data as any).toolCallId === `call-${t}`)) ||
+        (ev.type === 'tool.execution_complete' && targetTools.includes((ev.data as any)?.toolName))
+      ) {
+        toolCalled = true;
+      }
+    });
+    return unsub;
+  };
+
+  let unsubTool = setupToolListener(currentSession);
+  let unsubOnSession = opts.onSession?.(currentSession) ?? undefined;
+
+  /**
+   * Races the SDK's own `sendAndWait` against the caller's abort signal
+   * only -- no idle-silence watchdog, no stall-tagged rejection, no
+   * mid-turn resume. A hang here surfaces as the plain timeout/abort
+   * rejection `sendAndWait` (or the abort listener) throws.
+   */
+  const sendUntilTimeout = async (promptOpts: MessageOptions): Promise<void> => {
+    const racers: Promise<void>[] = [
+      currentSession.sendAndWait(promptOpts, timeoutMs).then(() => undefined),
+    ];
+    if (opts.abortSignal) {
+      racers.push(
+        new Promise<never>((_, reject) => {
+          const onAbort = () => reject(new Error('Auditor session aborted by client or timeout'));
+          if (opts.abortSignal!.aborted) onAbort();
+          else opts.abortSignal!.addEventListener('abort', onAbort, { once: true });
+        }),
+      );
+    }
+    await Promise.race(racers);
+  };
+
+  await sendUntilTimeout({ prompt: initialPrompt } as MessageOptions);
+
+  let lastAssistantText = tracker.getText();
+  tracker.unsubscribe();
+  unsubTool();
+
+  let attempt = 0;
+
+  while (!toolCalled && attempt < maxRetries) {
+    attempt++;
+    const toolNamesStr = targetTools.map(t => `'${t}'`).join(' or ');
+    console.warn(
+      `[runForcedToolTurnUntilTimeout] turn ended without ${toolNamesStr} being called ` +
+      `(attempt ${attempt}/${maxRetries}); resuming session with restricted toolset...`
+    );
+
+    const exampleBlock = responseRequirements.toolCallExample
+      ? `\n\nUse your tool-calling capability (a real function/tool call) -- not text in your message. Example of correctly-shaped arguments:\n\n${responseRequirements.toolCallExample}`
+      : '';
+    const nudge = lastAssistantText.trim()
+      ? `You did not call any of: ${toolNamesStr}. Your last message was:\n"""\n${truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH)}\n"""\nYou must now call one of ${toolNamesStr} with your findings. Do not respond conversationally, do not ask clarifying questions, and do not call any other tool -- call one of ${toolNamesStr} now.${exampleBlock}`
+      : `You ended your turn without calling any of: ${toolNamesStr}. You must now call one of ${toolNamesStr} with your findings. Do not respond conversationally and do not call any other tool -- call one of ${toolNamesStr} now.${exampleBlock}`;
+
+    const resumeConfig = {
+      availableTools: targetTools,
+      tools: opts.tools,
+      systemMessage: undefined as SessionConfig['systemMessage'],
+      ...(executionConfig.provider ? { provider: executionConfig.provider as ProviderConfig } : {}),
+    };
+
+    currentSession = await opts.client.resumeSession(currentSessionId, resumeConfig);
+    currentSessionId = currentSession.sessionId;
+    opts.onSessionId?.(currentSessionId);
+
+    unsubOnSession?.();
+    tracker = trackLastAssistantMessage(currentSession);
+    toolCalled = false;
+    unsubTool = setupToolListener(currentSession);
+    unsubOnSession = opts.onSession?.(currentSession) ?? undefined;
+
+    const promptOpts: { prompt: string; tool_choice?: unknown } = { prompt: nudge, tool_choice: undefined as any };
+    if (executionConfig.provider === 'openrouter') {
+      promptOpts.tool_choice = { type: 'function', function: { name: targetTools[0] } };
+    }
+
+    await sendUntilTimeout(promptOpts as MessageOptions);
+
+    lastAssistantText = tracker.getText() || lastAssistantText;
+    tracker.unsubscribe();
+    unsubTool();
+  }
+
+  unsubOnSession?.();
+
+  if (!toolCalled) {
+    const toolNamesStr = targetTools.map(t => `'${t}'`).join(' or ');
+    const truncated = truncate(lastAssistantText.trim(), LAST_MESSAGE_TRUNCATE_LENGTH);
+    throw new Error(
+      `Session ended without calling ${toolNamesStr} after ${maxRetries} retr${maxRetries === 1 ? 'y' : 'ies'}. ` +
+      `Model's last message: ${truncated || '(no assistant text captured)'}`
+    );
+  }
+
+  let finalResult = opts.getResult();
+  if (toolCalled && (finalResult === null || finalResult === undefined)) {
+    finalResult = (true as unknown) as T;
+  }
+
+  return { result: finalResult as T, session: currentSession, lastAssistantText, toolCalled };
+}

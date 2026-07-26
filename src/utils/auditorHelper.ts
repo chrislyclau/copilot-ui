@@ -1,4 +1,4 @@
-import { runForcedToolTurn } from './toolCallEnforcement';
+import { runForcedToolTurnUntilTimeout } from './toolCallEnforcement';
 import { CopilotClient, SdkProviderConfig, SessionConfig, CopilotSession, PermissionRequest, PermissionRequestResult } from '../copilotSdk/boundary';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig } from '../config/models';
@@ -295,7 +295,7 @@ export async function executeAuditSession<T>(
     sessionId = session.sessionId;
     onSessionId?.(session.sessionId);
 
-    const turnResult = await runForcedToolTurn(session, executionConfig, toolName, userPrompt, {
+    const turnResult = await runForcedToolTurnUntilTimeout(session, executionConfig, toolName, userPrompt, {
       client,
       abortSignal,
       timeoutMs,
@@ -303,7 +303,6 @@ export async function executeAuditSession<T>(
       getResult: () => result,
       tools: sessionSettings.tools,
       responseRequirements,
-      freshSessionConfig: sessionSettings as SessionConfig & { autoApproveAll?: boolean },
       onSessionId: (id) => {
         sessionId = id;
         onSessionId?.(id);

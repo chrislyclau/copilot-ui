@@ -43,7 +43,7 @@ import {
   COMPOSER_ROUTER_TOOL,
   AMBIGUITY_CHECK_TOOL,
 } from "../config/tools";
-import { runForcedToolTurn } from "../utils/toolCallEnforcement";
+import { runForcedToolTurnUntilTimeout } from "../utils/toolCallEnforcement";
 import {
   normalizeGates,
   TASK_TYPE_GATE_MAP,
@@ -1116,7 +1116,7 @@ export const handleGateLoop = async (
 
           let clarityData: ClarityCheckData | null = null;
           // NOTE: attached via onSession below (not just on `claritySession`), because
-          // runForcedToolTurn's nudge retry calls client.resumeSession() internally,
+          // runForcedToolTurnUntilTimeout's nudge retry calls client.resumeSession() internally,
           // which returns a brand-new CopilotSession object. A listener bound only to
           // the original `claritySession` would silently miss the tool call if the
           // model only complies on the retry.
@@ -1154,10 +1154,10 @@ export const handleGateLoop = async (
           };
           abortController.signal.addEventListener("abort", clarityAbortHandler);
           let clarityRunResult:
-            | Awaited<ReturnType<typeof runForcedToolTurn>>
+            | Awaited<ReturnType<typeof runForcedToolTurnUntilTimeout>>
             | undefined;
           try {
-            const runPromise = runForcedToolTurn(
+            const runPromise = runForcedToolTurnUntilTimeout(
               claritySession,
               clarityConfig,
               "submit_clarity_check",
@@ -1186,7 +1186,7 @@ export const handleGateLoop = async (
             clarityRunResult = (await Promise.race([
               runPromise,
               abortPromise,
-            ])) as Awaited<ReturnType<typeof runForcedToolTurn>> | undefined;
+            ])) as Awaited<ReturnType<typeof runForcedToolTurnUntilTimeout>> | undefined;
           } finally {
             abortController.signal.removeEventListener(
               "abort",
@@ -1274,7 +1274,7 @@ export const handleGateLoop = async (
             });
           let toolArguments: ComposerRouteArguments | null = null;
           // NOTE: attached via onSession below (not just on `classificationSession`),
-          // because runForcedToolTurn's nudge retry calls client.resumeSession()
+          // because runForcedToolTurnUntilTimeout's nudge retry calls client.resumeSession()
           // internally, which returns a brand-new CopilotSession object. A listener
           // bound only to the original `classificationSession` would silently miss
           // the tool call if the model only complies on the retry.
@@ -1313,7 +1313,7 @@ export const handleGateLoop = async (
           );
           try {
             // Force the tool choice to guarantee a structured plan
-            const runPromise = runForcedToolTurn(
+            const runPromise = runForcedToolTurnUntilTimeout(
               classificationSession,
               classificationConfig,
               "initialize_blueprint",
@@ -2395,7 +2395,7 @@ export const handleGateLoop = async (
                 );
                 try {
                   const retryResult = (await Promise.race([
-                    runForcedToolTurn(
+                    runForcedToolTurnUntilTimeout(
                       session,
                       loopExecutionConfig,
                       (loopSessionOptions.tools
@@ -2429,7 +2429,7 @@ export const handleGateLoop = async (
                   if (retryResult) {
                     if (retryResult.session) {
                       session = retryResult.session;
-                      // `runForcedToolTurn` may have resumed into a brand-new
+                      // `runForcedToolTurnUntilTimeout` may have resumed into a brand-new
                       // CopilotSession object (client.resumeSession() returns a
                       // different handle than the one passed in). The next loop
                       // iteration's getOrCreateSession() reads the cached
