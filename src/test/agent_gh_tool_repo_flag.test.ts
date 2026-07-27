@@ -50,4 +50,16 @@ describe('agentGhTool: --repo/-R cross-repo detector', () => {
     expect(result.error).toMatch(/cross-repo access is forbidden/);
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
+
+  it('still rejects the attached short-flag form -R=owner/repo', async () => {
+    const result = await handler(['issue', 'view', '42', '-R=other/repo']);
+    expect(result.error).toMatch(/cross-repo access is forbidden/);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('still rejects the attached short-flag form -Rowner/repo', async () => {
+    const result = await handler(['issue', 'view', '42', '-Rother/repo']);
+    expect(result.error).toMatch(/cross-repo access is forbidden/);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
 });
