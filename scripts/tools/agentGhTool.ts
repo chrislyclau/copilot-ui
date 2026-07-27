@@ -102,7 +102,7 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         if (prev === '--body' || prev === '--body-file' || prev === '-b' || prev === '-F') {
           return false;
         }
-        return arg === '--repo' || arg === '-R' || arg.startsWith('--repo=');
+        return arg === '--repo' || arg.startsWith('--repo=') || arg.startsWith('-R');
       });
       if (hasRepoArg) {
         const message = 'Rejected: cross-repo access is forbidden. Remove --repo/-R flags.';
