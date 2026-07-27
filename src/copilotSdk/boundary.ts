@@ -69,6 +69,13 @@ export class CopilotClient extends BaseCopilotClient {
    * which does not apply any default onPermissionRequest -- callers that
    * relied on createSession's auto-approve default would silently stop
    * getting it the moment they resume a session (e.g. auditor retry loops).
+   *
+   * Separately: this override does NOT protect callers against the SDK's
+   * systemMessage-drop-on-resume hazard -- resumeSession does not inherit
+   * systemMessage from the session being resumed, so any caller building a
+   * resumeConfig must explicitly re-pass systemMessage or silently lose it.
+   * See AGENTS.md ("resumeSession() drops the system prompt unless you
+   * re-pass it") for the general rule and issue #208 for the original bug.
    */
   override async resumeSession(
     sessionId: string,

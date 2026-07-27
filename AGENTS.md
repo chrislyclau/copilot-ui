@@ -99,6 +99,28 @@ is ever observed independently of turn duration, that's the code to reach for
 again. Its silence-detection logic is a standalone reusable utility -- see
 "Execution-aware silence tracking" below.
 
+## resumeSession() drops the system prompt unless you re-pass it
+
+`client.resumeSession()` (base SDK, wrapped by `CopilotClient.resumeSession` in
+`src/copilotSdk/boundary.ts`) does not inherit `systemMessage` from the session
+being resumed. Any caller building a `resumeConfig` from scratch and omitting
+`systemMessage` will silently fall back to the SDK's full default `copilot-cli`
+system prompt (task/sub-agent, sql, report_intent, submit_code_review docs,
+etc.) for the rest of the turn -- not an error, just a quietly different agent
+for the remainder of the session.
+
+This surfaced as issue #208: `executeAuditSession`'s nudge-retry resume path
+(`runForcedToolTurn`'s `resumeConfig` in `toolCallEnforcement.ts`) wasn't
+carrying `systemMessage` across the resume, even though the field itself
+(`{ mode: "replace", content: ... }`, see `auditorHelper.ts` ~line 251) was
+correct. The fix was to also pass it on resume, not to change the field.
+
+This is a general SDK usage rule, not specific to PR review or to
+`executeAuditSession` -- it applies to **any** future caller that resumes a
+session directly, including retry/resume logic that might later be added to
+`run-issue-task.ts` (which does not resume sessions today, but would need this
+the moment it does).
+
 ## Execution-aware silence tracking
 
 `createExecutionAwareSilenceTracker` (`toolCallEnforcement.ts`) is a standalone

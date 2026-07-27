@@ -247,7 +247,10 @@ export function buildAuditorSessionSettings(
     // deliberately excludes. See issue #208: the original bug was that
     // resumeSession()'s `resumeConfig` (toolCallEnforcement.ts) didn't
     // carry this field, not that the field itself was wrong -- so the fix
-    // is to also pass it on resume, not drop it.
+    // is to also pass it on resume, not drop it. This is a general SDK
+    // hazard, not specific to this session -- see AGENTS.md ("resumeSession()
+    // drops the system prompt unless you re-pass it") for the rule any
+    // future resumeSession() caller (e.g. run-issue-task.ts) must follow.
     systemMessage: {
         mode: "replace",
         content: `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}`,
