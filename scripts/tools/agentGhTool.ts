@@ -94,9 +94,16 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         return { error: message };
       }
 
-      const hasRepoArg = args.some((arg) =>
-        arg === '--repo' || arg.startsWith('--repo=') || arg.startsWith('-R')
-      );
+      const hasRepoArg = args.some((arg, i) => {
+        // Skip values that belong to a preceding --body/--body-file flag --
+        // free-text comment content shouldn't be scanned for flag-like
+        // prefixes (e.g. a body starting with "-Ready:" or "--reporting").
+        const prev = args[i - 1];
+        if (prev === '--body' || prev === '--body-file' || prev === '-b' || prev === '-F') {
+          return false;
+        }
+        return arg === '--repo' || arg === '-R' || arg.startsWith('--repo=');
+      });
       if (hasRepoArg) {
         const message = 'Rejected: cross-repo access is forbidden. Remove --repo/-R flags.';
         console.warn(`[agentGhTool] ${message}`);
