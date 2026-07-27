@@ -182,6 +182,8 @@ describe('selectRotatingAuditorConfig (Issue 79 / RM-REQ-030/031/032)', () => {
 
       expect(selection.executionConfig.model).toBe('gemini-3.1-flash-lite');
       expect(selection.executionConfig.providerType).toBe('gemini');
+      expect(selection.executionConfig.provider?.apiKey).toBe('implementor-gemini-key');
+      expect(selection.executionConfig.provider?.apiKey).not.toBe('test-gemini-key');
     });
   });
 });
