@@ -1,0 +1,47 @@
+name: Run Issue Task Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number for the agent to read and act on'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  run-issue-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard against running on the upstream repo
+        env:
+          IS_FORK_REPO: ${{ vars.IS_FORK_REPO }}
+        run: |
+          if [ "$IS_FORK_REPO" != "true" ]; then
+            echo "::error::IS_FORK_REPO is not set to 'true' (got: '${IS_FORK_REPO:-<unset>}'). Refusing to run -- this looks like it could be the upstream repo. If this really is your own fork, set the IS_FORK_REPO repository variable (Settings > Secrets and variables > Actions > Variables) to 'true' to enable this workflow." 
+            exit 1
+          fi
+          echo "IS_FORK_REPO confirmed 'true' -- proceeding."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Run issue task agent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REVIEWER_PROVIDER: ${{ vars.REVIEWER_PROVIDER }}
+          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: npm run agent:issue
