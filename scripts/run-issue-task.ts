@@ -10,6 +10,7 @@ import { execFileSync } from 'node:child_process';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig } from '../src/utils/auditorHelper';
+import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
 import { CopilotClient, type SessionConfig, type SdkProviderConfig, ToolSet } from '../src/copilotSdk/boundary';
 import {
   createRunGhCommandTool,
@@ -145,7 +146,18 @@ async function main() {
     setActiveOpenRouterSessionId(sessionId);
 
     console.log('[run-issue-task] sending task and waiting for completion...');
-    await session.sendAndWait({ prompt: userPrompt }, 900000);
+    await runForcedToolTurnUntilTimeout(session, executionConfig, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
+      client,
+      timeoutMs: 900000,
+      maxRetries: 2,
+      getResult: () => undefined,
+      tools: sessionConfig.tools,
+      systemMessage: sessionConfig.systemMessage as SessionConfig['systemMessage'],
+      onSessionId: (id) => {
+        sessionId = id;
+        setActiveOpenRouterSessionId(id);
+      },
+    });
 
     console.log('[run-issue-task] disconnecting session...');
     await session.disconnect();
