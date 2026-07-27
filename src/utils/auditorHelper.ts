@@ -174,7 +174,18 @@ export function selectRotatingAuditorConfig(rotationIndex: number, apiKey?: stri
   }
   const normalizedIndex = ((rotationIndex % pool.length) + pool.length) % pool.length;
   const auditorConfig = selectFromAuditorPool(normalizedIndex);
-  const executionConfig = resolveExecutionConfig(auditorConfig, 'auditor pool', apiKey);
+
+  // The `apiKey` passed in here originates upstream as the Implementor's key,
+  // which is always a Gemini key (gateLoop's `keyToUse = apiKey ||
+  // process.env.GEMINI_API_KEY`). For a multi-provider pool
+  // (e.g. AUDITOR_POOL=gemini:...,openai:gpt-4o-mini), forwarding that key
+  // verbatim into resolveExecutionConfig for a non-Gemini selection would
+  // send the wrong provider's API key and break auth. Only forward it when
+  // the selected pool entry is actually a Gemini entry; otherwise let
+  // resolveExecutionConfig fall back to that provider's own env var
+  // (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.).
+  const keyForSelectedProvider = auditorConfig.provider === 'gemini' ? apiKey : undefined;
+  const executionConfig = resolveExecutionConfig(auditorConfig, 'auditor pool', keyForSelectedProvider);
 
   return {
     executionConfig,
