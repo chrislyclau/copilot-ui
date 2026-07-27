@@ -77,6 +77,60 @@ function isStallError(err: unknown): err is StallError {
 }
 
 /**
+ * Execution-aware silence tracking (see AGENTS.md: "Execution-aware silence
+ * tracking" and the "Stall-watchdog recovery retired..." entry it's
+ * cross-referenced from).
+ *
+ * Tracks time since the last SDK event of any kind, but treats time spent
+ * inside a tool call -- between `tool.execution_start` and
+ * `tool.execution_complete`, the only events bookending it -- as *not*
+ * silence: a slow-but-healthy tool (`npx tsc`, a large `grep`, a slow `gh`
+ * call) must not be mistaken for a dead upstream connection (issues
+ * #188/#191, reproduced on PR #136).
+ *
+ * Currently only consumed by the dormant `sendAndWaitWithAbort` stall
+ * watchdog below. Pulled out as a standalone, documented utility -- not
+ * because it's used anywhere else today, but so the pattern is easy to find
+ * and reuse if a genuine stall is ever observed independently of turn
+ * duration, per issue #207's guidance not to leave that logic to be
+ * rediscovered from scratch.
+ *
+ * Deliberately event-driven rather than self-subscribing to `session.on`:
+ * the SDK (and this codebase's mocks of it) treat `session.on` as a single
+ * active listener, so a caller that also needs its own listener for other
+ * event types (tool-name logging, usage telemetry, etc.) must funnel every
+ * event through one subscription. Callers feed events in via `recordEvent`.
+ */
+export function createExecutionAwareSilenceTracker() {
+  let lastEventAt = Date.now();
+  let lastEventType: string | undefined;
+  let toolExecutionActive = false;
+
+  return {
+    /** Feed the next raw SDK event to the tracker; call this from your own `session.on` listener for every event. */
+    recordEvent(event: unknown): void {
+      lastEventAt = Date.now();
+      if (!event || typeof event !== 'object' || !('type' in event)) return;
+      const ev = event as Record<string, unknown>;
+      lastEventType = String(ev.type);
+      if (ev.type === 'tool.execution_start') toolExecutionActive = true;
+      if (ev.type === 'tool.execution_complete') toolExecutionActive = false;
+    },
+    /**
+     * Milliseconds since the last recorded event, or `null` while a tool is
+     * actively executing -- execution time never counts as silence, and
+     * the clock effectively resumes counting once `tool.execution_complete`
+     * fires and resets `lastEventAt`.
+     */
+    silentForMs(): number | null {
+      if (toolExecutionActive) return null;
+      return Date.now() - lastEventAt;
+    },
+    lastEventType: () => lastEventType,
+  };
+}
+
+/**
  * Races `session.sendAndWait` against an abort signal (as before) *and* a
  * stall watchdog: if no SDK event of any kind arrives for STALL_TIMEOUT_MS,
  * this rejects with a distinguishable `isStall`-tagged error instead of
@@ -96,23 +150,16 @@ export async function sendAndWaitWithAbort(
   timeoutMs: number,
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  let lastEventAt = Date.now();
-  let lastEventType: string | undefined;
   let usageTelemetryLogCount = 0;
-  // Tracks whether a tool is currently executing. `tool.execution_start` and
-  // `tool.execution_complete` are the only events bookending a tool call --
-  // nothing is emitted by the SDK *during* execution itself, so a
-  // slow-but-healthy tool (e.g. `npx tsc`, `vitest`, a large `grep`) that
-  // runs longer than STALL_TIMEOUT_MS would otherwise be misdiagnosed as a
-  // stalled upstream stream and have its turn killed and restarted mid-run
-  // (see issue #188/#191, reproduced on PR #136). While this is true, the
-  // watchdog below suspends its silence check entirely.
-  let toolExecutionActive = false;
+  // Delegates the "is this silence or a slow-but-healthy tool call"
+  // determination to the shared execution-aware silence tracker (see its
+  // doc comment above, and AGENTS.md's "Execution-aware silence tracking"
+  // entry) instead of duplicating that bookkeeping here.
+  const silenceTracker = createExecutionAwareSilenceTracker();
   const unsubscribeStallTracker = session.on((event: unknown) => {
-    lastEventAt = Date.now();
+    silenceTracker.recordEvent(event);
     if (!event || typeof event !== 'object' || !('type' in event)) return;
     const ev = event as Record<string, unknown>;
-    lastEventType = String(ev.type);
 
     // Important event: any tool the model actually invokes during the
     // turn (view, glob, bash, etc.), not just the forced target tool that
@@ -138,11 +185,6 @@ export async function sendAndWaitWithAbort(
           `the SDK's event contract -- investigate before trusting this event's downstream handling.`,
         );
       }
-      toolExecutionActive = true;
-    }
-
-    if (ev.type === 'tool.execution_complete') {
-      toolExecutionActive = false;
     }
 
     // Important event: usage telemetry. This mirrors gateLoop.ts's own
@@ -170,14 +212,12 @@ export async function sendAndWaitWithAbort(
   let stallTimer: ReturnType<typeof setInterval> | null = null;
   const stallPromise = new Promise<never>((_, reject) => {
     stallTimer = setInterval(() => {
-      // A tool is actively running -- its own execution time is not
-      // "upstream silence" and must not count against the stall budget.
-      // The clock effectively resumes counting from whenever the tool
-      // finishes, since `tool.execution_complete` resets `lastEventAt`
-      // above.
-      if (toolExecutionActive) return;
-      const elapsed = Date.now() - lastEventAt;
-      if (elapsed > STALL_TIMEOUT_MS) {
+      // A tool is actively running -- `silentForMs()` returns null in that
+      // case, since execution time is not "upstream silence" and must not
+      // count against the stall budget. The clock effectively resumes
+      // counting from whenever the tool finishes.
+      const elapsed = silenceTracker.silentForMs();
+      if (elapsed !== null && elapsed > STALL_TIMEOUT_MS) {
         if (stallTimer) clearInterval(stallTimer);
         // Unexpected path: log enough to tell a genuine stall apart from a
         // false positive (e.g. the watchdog racing an event that was about
@@ -185,7 +225,7 @@ export async function sendAndWaitWithAbort(
         // more common) happy path.
         console.warn(
           `[sendAndWaitWithAbort] stall detected: no SDK event for ${elapsed}ms (threshold ${STALL_TIMEOUT_MS}ms); ` +
-          `lastEventType=${lastEventType ?? 'none'}`,
+          `lastEventType=${silenceTracker.lastEventType() ?? 'none'}`,
         );
         const err = new Error(
           `Upstream stream stalled: no SDK event received for over ${STALL_TIMEOUT_MS / 1000}s.`,

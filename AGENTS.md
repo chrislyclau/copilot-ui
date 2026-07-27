@@ -96,4 +96,23 @@ mid-turn resume. `executeAuditSession` (`auditorHelper.ts`) and all three
 and their three existing test files are intentionally left in place, dormant, not
 deleted -- **do not delete them as part of unrelated cleanup.** If a genuine stall
 is ever observed independently of turn duration, that's the code to reach for
-again.
+again. Its silence-detection logic is a standalone reusable utility -- see
+"Execution-aware silence tracking" below.
+
+## Execution-aware silence tracking
+
+`createExecutionAwareSilenceTracker` (`toolCallEnforcement.ts`) is a standalone
+utility for the "how long has the SDK gone quiet" check the (dormant) stall
+watchdog above uses: it measures time since the last SDK event, but treats time
+spent inside a tool call -- between `tool.execution_start` and
+`tool.execution_complete`, the only events bookending it -- as *not* silence, so a
+slow-but-healthy tool (`npx tsc`, a large `grep`, a slow `gh` call) isn't
+misdiagnosed as a dead connection (issues #188/#191, reproduced on PR #136).
+
+It's event-driven rather than self-subscribing to `session.on` (feed it events via
+`recordEvent`), since the SDK only supports one active listener per session and
+callers typically need their own listener for other event types too. It's
+currently only wired up inside `sendAndWaitWithAbort`'s dormant watchdog, but was
+pulled out on its own so the pattern doesn't have to be rediscovered if it's ever
+needed by a new call site -- reach for it directly rather than re-deriving the
+`tool.execution_start`/`tool.execution_complete` bookkeeping from scratch.
