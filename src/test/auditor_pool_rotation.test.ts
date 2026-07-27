@@ -155,4 +155,33 @@ describe('selectRotatingAuditorConfig (Issue 79 / RM-REQ-030/031/032)', () => {
       expect(selection.nextRotationIndex).toBe(i + 1);
     }
   });
+
+  describe('cross-provider pool key resolution (regression: does not forward the Implementor/Gemini key to non-Gemini entries)', () => {
+    beforeEach(() => {
+      process.env.AUDITOR_POOL = 'gemini:gemini-3.1-flash-lite,openai:gpt-4o-mini';
+      process.env.OPENAI_API_KEY = 'test-openai-key';
+      process.env.GEMINI_API_KEY = 'test-gemini-key';
+      vi.resetModules();
+    });
+
+    it('does not forward the caller-supplied (Implementor/Gemini) apiKey to a rotated-in non-Gemini pool entry', async () => {
+      const { selectRotatingAuditorConfig } = await import('../utils/auditorHelper');
+      // rotationIndex 1 selects the openai:gpt-4o-mini pool entry.
+      const selection = selectRotatingAuditorConfig(1, 'implementor-gemini-key');
+
+      expect(selection.executionConfig.providerType).toBe('openai');
+      // Must resolve via OPENAI_API_KEY, never the Gemini key passed in by the caller.
+      expect(selection.executionConfig.provider?.apiKey).toBe('test-openai-key');
+      expect(selection.executionConfig.provider?.apiKey).not.toBe('implementor-gemini-key');
+    });
+
+    it('still forwards the caller-supplied apiKey when the rotated-in entry is actually Gemini', async () => {
+      const { selectRotatingAuditorConfig } = await import('../utils/auditorHelper');
+      // rotationIndex 0 selects the gemini:gemini-3.1-flash-lite pool entry.
+      const selection = selectRotatingAuditorConfig(0, 'implementor-gemini-key');
+
+      expect(selection.executionConfig.model).toBe('gemini-3.1-flash-lite');
+      expect(selection.executionConfig.providerType).toBe('gemini');
+    });
+  });
 });
