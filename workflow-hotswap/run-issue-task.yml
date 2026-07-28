@@ -36,6 +36,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Start sandbox container
+        env:
+          CONTAINER_NAME: applet-${{ github.run_id }}
+          WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
+        run: docker compose up -d
+
       - name: Run issue task agent
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,4 +50,13 @@ jobs:
           REVIEWER_PROVIDER: ${{ vars.REVIEWER_PROVIDER }}
           REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
+          CONTAINER_NAME: applet-${{ github.run_id }}
+          AI_STUDIO: "false"
         run: npm run agent:issue
+
+      - name: Stop sandbox container
+        if: always()
+        env:
+          CONTAINER_NAME: applet-${{ github.run_id }}
+          WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
+        run: docker compose down
