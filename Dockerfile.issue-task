@@ -1,0 +1,36 @@
+# Sandboxes `npm run agent:issue` (see workflow-hotswap/run-issue-task.yml).
+#
+# No volumes: the repo is COPYed in at build time and the container is
+# disposable -- nothing produced inside it needs to survive the step.
+# All repo mutation goes through the `gh` CLI (see ALLOWED_GH_COMMANDS in
+# scripts/tools/agentGhTool.ts); no git credentials are passed in beyond
+# GH_TOKEN, and no git push/commit happens inside the container.
+
+FROM node:24-bookworm-slim
+
+# Install the gh CLI from GitHub's official apt repo.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && apt-get purge -y curl gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy just the manifests first so `npm ci` is cached independently of
+# source changes, then copy the rest of the repo in (no bind mount).
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+
+# Run as non-root for defense in depth -- nothing here needs root, and the
+# container's only meaningful egress is the GitHub/model-provider APIs.
+RUN groupadd --gid 1001 agent && useradd --uid 1001 --gid agent --shell /bin/bash --create-home agent
+USER agent
+
+ENTRYPOINT ["npm", "run", "agent:issue"]
