@@ -18,6 +18,15 @@ import {
   RUN_GH_COMMAND_TOOL_NAME,
 } from './tools/agentGhTool';
 
+// SDK-nuance tracking (issue #221): unlike `executeAuditSession` (auditorHelper.ts),
+// this script calls `runForcedToolTurnUntilTimeout` directly rather than through that
+// wrapper. It does already forward `systemMessage` into the retry/resume config below
+// (the #208 fix -- see AGENTS.md's "Execution-aware silence tracking" section for the
+// history), so a mid-run resume here should not silently drop the session's system
+// prompt the way it once did for `executeAuditSession`. If this script grows other
+// audit-session behavior (e.g. adopting `executeAuditSession` itself, or adding
+// watchdog/mid-turn-resume logic), re-check it against the protections tracked in
+// issues #188/#191/#207/#208 before assuming parity.
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 /**

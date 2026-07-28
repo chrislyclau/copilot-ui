@@ -117,9 +117,15 @@ correct. The fix was to also pass it on resume, not to change the field.
 
 This is a general SDK usage rule, not specific to PR review or to
 `executeAuditSession` -- it applies to **any** future caller that resumes a
-session directly, including retry/resume logic that might later be added to
-`run-issue-task.ts` (which does not resume sessions today, but would need this
-the moment it does).
+session directly. `run-issue-task.ts` (see the issue #221 tracking comment near
+its `PORT` constant) is one such caller: it goes through
+`runForcedToolTurnUntilTimeout` directly rather than through
+`executeAuditSession`, and already forwards `systemMessage` in its retry
+config, so it isn't currently exposed to the #208 failure mode. It also still
+lacks the rest of `executeAuditSession`'s accumulated protections (the
+nudge/retry loop's other edge cases from #188/#191/#207, and any future
+watchdog/mid-turn-resume work) -- re-verify it against those issues before
+assuming full parity if this script's session handling changes.
 
 ## Execution-aware silence tracking
 
