@@ -1,0 +1,18 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: Run the big output tool.
+      - role: assistant
+        tool_calls:
+          - id: toolcall_0
+            type: function
+            function:
+              name: big_output_tool
+              arguments: '{}'
+  - messages:
+      - role: assistant
+        content: Done.
