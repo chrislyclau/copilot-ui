@@ -88,10 +88,19 @@ describe('LargeToolOutputConfig with a custom (non-built-in) tool', () => {
     console.log(`[RESULT] tool message content length sent to model: ${sentContent.length} bytes (raw handler output was ${HUGE_PAYLOAD_SIZE} bytes)`);
     console.log(`[RESULT] first 300 chars: ${sentContent.slice(0, 300)}`);
 
-    if (sentContent.length < HUGE_PAYLOAD_SIZE) {
-      console.log('[CONCLUSION] Large-output handling DID intervene for a custom tool -- content was shortened/replaced before reaching the model.');
-    } else {
-      console.log('[CONCLUSION] Large-output handling did NOT intervene -- the full raw payload was sent to the model for this custom tool.');
-    }
+    // This is the behavior the PR actually intends to guard: a custom tool's
+    // oversized result must be intercepted the same way a built-in tool's
+    // would be -- shortened, and pointing at a temp file -- before it ever
+    // reaches the model. If this regresses (e.g. a future SDK version scopes
+    // largeOutput to built-in tools only), this test must fail, not just log.
+    assert.ok(
+      sentContent.length < HUGE_PAYLOAD_SIZE,
+      `expected custom-tool output (${HUGE_PAYLOAD_SIZE} bytes) to be truncated/replaced before reaching the model, but the full payload was sent (${sentContent.length} bytes)`
+    );
+    assert.match(
+      sentContent,
+      /Saved to:.*\.txt/,
+      'expected truncated tool output to reference a temp file the model can page through'
+    );
   });
 });
