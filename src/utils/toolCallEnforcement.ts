@@ -622,6 +622,14 @@ export async function runForcedToolTurnUntilTimeout<T>(
   let toolCalled = false;
   const targetTools = Array.isArray(toolName) ? toolName : [toolName];
   let tracker = trackLastAssistantMessage(currentSession);
+  // Same usage-telemetry logging sendAndWaitWithAbort does (issue #158,
+  // #180). runForcedToolTurnUntilTimeout replaced runForcedToolTurn (and its
+  // sendAndWaitWithAbort-based sends) as executeAuditSession's send path per
+  // issue #207/#218, which carried over the tool-name logging below but
+  // dropped this block -- silently regressing #180 for every auditor
+  // session (PR review, spec audit, etc.) again (issue #228).
+  let usageTelemetryLogCount = 0;
+  const USAGE_TELEMETRY_LOG_LIMIT = 3;
 
   const setupToolListener = (s: CopilotSession) => {
     const unsub = s.on((event: unknown) => {
@@ -643,6 +651,22 @@ export async function runForcedToolTurnUntilTimeout<T>(
             `[runForcedToolTurnUntilTimeout] UNEXPECTED EVENT SHAPE: 'tool.execution_start' event is missing a valid ` +
             `string 'toolName' in its data (got: ${JSON.stringify(data)}). This violates an assumption about ` +
             `the SDK's event contract -- investigate before trusting this event's downstream handling.`,
+          );
+        }
+      }
+
+      if (
+        (ev.type === 'assistant.usage' || ev.type === 'session.usage_info') &&
+        usageTelemetryLogCount < USAGE_TELEMETRY_LOG_LIMIT
+      ) {
+        usageTelemetryLogCount++;
+        if (ev.data && typeof ev.data === 'object') {
+          console.log(`[UsageTelemetry] auditor session ${JSON.stringify(ev.data)}`);
+        } else {
+          console.error(
+            `[runForcedToolTurnUntilTimeout] UNEXPECTED EVENT SHAPE: '${ev.type}' event has no usable 'data' object ` +
+            `(got: ${JSON.stringify(ev.data)}). This violates an assumption about the SDK's event contract -- ` +
+            `investigate before trusting this event's downstream handling.`,
           );
         }
       }
