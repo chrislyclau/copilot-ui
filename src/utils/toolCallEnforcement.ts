@@ -629,7 +629,6 @@ export async function runForcedToolTurnUntilTimeout<T>(
   // dropped this block -- silently regressing #180 for every auditor
   // session (PR review, spec audit, etc.) again (issue #228).
   let usageTelemetryLogCount = 0;
-  const USAGE_TELEMETRY_LOG_LIMIT = 3;
 
   const setupToolListener = (s: CopilotSession) => {
     const unsub = s.on((event: unknown) => {
