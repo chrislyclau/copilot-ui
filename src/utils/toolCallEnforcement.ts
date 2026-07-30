@@ -1,5 +1,5 @@
 import { CopilotClient, CopilotSession, SdkProviderConfig as ProviderConfig, SessionConfig, MessageOptions, Tool } from '../copilotSdk/boundary';
-import { registerSessionPolicy, resumeHardenedSession, SessionPolicy } from '../copilotSdk/hardenedSession';
+import { registerSessionPolicy, resumeHardenedSession, deleteHardenedSessionPolicy, SessionPolicy } from '../copilotSdk/hardenedSession';
 
 /**
  * How much of the model's last assistant message to include when we give up
@@ -387,6 +387,7 @@ export async function runForcedToolTurn<T>(
     currentSessionId,
     buildResumePolicy(currentAvailableTools, opts.tools, resumeSystemMessage)
   );
+  try {
   let tracker = trackLastAssistantMessage(currentSession);
   
   const setupToolListener = (s: CopilotSession) => {
@@ -602,6 +603,13 @@ export async function runForcedToolTurn<T>(
   }
   
   return { result: finalResult as T, session: currentSession, lastAssistantText, toolCalled };
+  } finally {
+    // Evict whatever session id we ended on -- resumeHardenedSession already
+    // drops each stale intermediate id as it re-keys, so this is the only
+    // entry left to clean up. Without this, policyBySessionId only grows:
+    // every turn through this hot path would leak one entry forever.
+    deleteHardenedSessionPolicy(currentSessionId);
+  }
 }
 
 /**
@@ -687,6 +695,7 @@ export async function runForcedToolTurnUntilTimeout<T>(
     currentSessionId,
     buildResumePolicy(opts.availableTools ?? targetTools, opts.tools, opts.systemMessage)
   );
+  try {
   let tracker = trackLastAssistantMessage(currentSession);
   // Same usage-telemetry logging sendAndWaitWithAbort does (issue #158,
   // #180). runForcedToolTurnUntilTimeout replaced runForcedToolTurn (and its
@@ -844,4 +853,7 @@ export async function runForcedToolTurnUntilTimeout<T>(
   }
 
   return { result: finalResult as T, session: currentSession, lastAssistantText, toolCalled };
+  } finally {
+    deleteHardenedSessionPolicy(currentSessionId);
+  }
 }

@@ -115,4 +115,17 @@ describe('resumeHardenedSession', () => {
 
     await expect(resumeHardenedSession(client, 'session-5')).rejects.toThrow(/no policy registered/);
   });
+
+  it('a caller that evicts on turn-end (as toolCallEnforcement now does) leaves no stale entry behind', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-6', policy);
+    await resumeHardenedSession(client, 'session-6');
+    // Simulates the `finally { deleteHardenedSessionPolicy(currentSessionId) }`
+    // toolCallEnforcement.ts's runForcedToolTurn/runForcedToolTurnUntilTimeout
+    // now run at the end of every turn, so policyBySessionId doesn't grow
+    // unboundedly across turns in a long-running process.
+    deleteHardenedSessionPolicy('session-6');
+
+    await expect(resumeHardenedSession(client, 'session-6')).rejects.toThrow(/no policy registered/);
+  });
 });
