@@ -41,19 +41,41 @@ type PolicyOwnedConfigKeys = 'availableTools' | 'tools' | 'systemMessage' | 'aut
 /** Whatever the caller still needs to provide (workingDirectory, model, provider, etc). */
 export type HardenedSessionBaseConfig = Omit<SessionConfig, PolicyOwnedConfigKeys>;
 
-function extractRequestedToolName(req: PermissionRequest): string | undefined {
-  const record = req as unknown as Record<string, unknown>;
-  if (typeof record.toolName === 'string') return record.toolName;
-  if (typeof record.name === 'string') return record.name;
-  const toolCalls = record.toolCalls;
-  if (Array.isArray(toolCalls) && toolCalls[0] && typeof toolCalls[0] === 'object') {
-    const fn = (toolCalls[0] as Record<string, unknown>).function;
-    if (fn && typeof fn === 'object') {
-      const name = (fn as Record<string, unknown>).name;
-      if (typeof name === 'string') return name;
+/**
+ * Resolves the tool name to check against `autoApprovedTools` from a
+ * `PermissionRequest`. The SDK's `PermissionRequest` union is discriminated
+ * by `kind`, and only three of its nine variants (`mcp`, `custom-tool`,
+ * `hook`) carry a `toolName` field -- the built-in variants (`shell`,
+ * `write`, `read`, `url`, `memory`, `extension-management`,
+ * `extension-permission-access`) have no such field, since for those the
+ * `kind` itself already identifies which built-in tool is being gated.
+ * Switching on `kind` (rather than probing for a `toolName`/`name`
+ * property) is required to resolve a name for those built-ins; probing
+ * alone always returns `undefined` for them, which would make
+ * `derivePermissionHandler` unconditionally reject them regardless of
+ * `autoApprovedTools`.
+ */
+function extractRequestedToolName(req: PermissionRequest): string {
+  switch (req.kind) {
+    case 'mcp':
+    case 'custom-tool':
+    case 'hook':
+      return req.toolName;
+    case 'shell':
+    case 'write':
+    case 'read':
+    case 'url':
+    case 'memory':
+    case 'extension-management':
+    case 'extension-permission-access':
+      return req.kind;
+    default: {
+      // Exhaustiveness guard: if the SDK adds a new PermissionRequest
+      // variant, fall back to its `kind` rather than silently mishandling it.
+      const unknownReq = req as { kind: string };
+      return unknownReq.kind;
     }
   }
-  return undefined;
 }
 
 /**
@@ -66,22 +88,20 @@ function extractRequestedToolName(req: PermissionRequest): string | undefined {
  */
 function derivePermissionHandler(
   policy: SessionPolicy
-): (req: PermissionRequest) => Promise<PermissionRequestResult> {
+): (req: PermissionRequest, invocation: { sessionId: string }) => Promise<PermissionRequestResult> {
   const allowed = new Set(policy.autoApprovedTools);
-  return async (req: PermissionRequest): Promise<PermissionRequestResult> => {
+  return async (req: PermissionRequest, invocation: { sessionId: string }): Promise<PermissionRequestResult> => {
     const requestedTool = extractRequestedToolName(req);
-    if (requestedTool && allowed.has(requestedTool)) {
+    if (allowed.has(requestedTool)) {
       return { kind: 'approve-once' };
     }
     console.warn(
-      `[hardenedSession] rejected permission request for disallowed tool ` +
-      `'${requestedTool ?? '(unrecognized)'}' (allowed: ${[...allowed].join(', ') || '(none)'})`
+      `[hardenedSession] session ${invocation.sessionId}: rejected permission request for disallowed ` +
+      `tool '${requestedTool}' (allowed: ${[...allowed].join(', ') || '(none)'})`
     );
     return {
       kind: 'reject',
-      feedback: requestedTool
-        ? `Tool '${requestedTool}' is not permitted under this session's policy.`
-        : `This tool request is not permitted under this session's policy.`,
+      feedback: `Tool '${requestedTool}' is not permitted under this session's policy.`,
     };
   };
 }
@@ -97,7 +117,7 @@ export function deriveSessionConfig(
   policy: SessionPolicy
 ): Pick<SessionConfig, 'availableTools' | 'tools' | 'systemMessage'> & {
   autoApproveAll: false;
-  onPermissionRequest: (req: PermissionRequest) => Promise<PermissionRequestResult>;
+  onPermissionRequest: (req: PermissionRequest, invocation: { sessionId: string }) => Promise<PermissionRequestResult>;
 } {
   return {
     availableTools: [...policy.availableTools] as SessionConfig['availableTools'],
@@ -114,6 +134,18 @@ const policyBySessionId = new Map<string, SessionPolicy>();
 /** @internal exposed for hardenedSession's own resume implementation (item 2) and its tests. */
 export function getStoredPolicy(sessionId: string): SessionPolicy | undefined {
   return policyBySessionId.get(sessionId);
+}
+
+/**
+ * Evicts a session's stored policy once the caller knows the session is
+ * done for good (e.g. on disconnect/cleanup in a long-running process).
+ * Without this, `policyBySessionId` only grows -- every `createHardenedSession`
+ * call adds an entry that nothing else removes. Not wired into any session
+ * lifecycle yet (that's part of item 7, migrating real callers); exposed now
+ * so that migration has a cleanup hook to call instead of reinventing one.
+ */
+export function deleteHardenedSessionPolicy(sessionId: string): void {
+  policyBySessionId.delete(sessionId);
 }
 
 /**
