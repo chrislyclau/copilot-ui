@@ -166,3 +166,76 @@ export async function createHardenedSession(
   policyBySessionId.set(session.sessionId, policy);
   return session;
 }
+
+/**
+ * Binds `policy` to `sessionId` without going through `createHardenedSession`.
+ *
+ * Exists for sessions that predate the hardened wrapper -- e.g. the sessions
+ * `runForcedToolTurn`/`runForcedToolTurnUntilTimeout` in
+ * `toolCallEnforcement.ts` receive as an argument, already created by their
+ * caller. Migrating those call sites to `createHardenedSession` outright is
+ * issue #246 item 7 (out of scope here); until then, this lets them register
+ * a policy for a session they didn't create so `resumeHardenedSession` still
+ * has something non-partial to derive a resume config from.
+ */
+export function registerSessionPolicy(sessionId: string, policy: SessionPolicy): void {
+  policyBySessionId.set(sessionId, policy);
+}
+
+/**
+ * Resumes a session under its stored policy. Per issue #246's requirement
+ * that a resume path never accept partial/caller-supplied config, this
+ * takes no config argument at all -- the full `SessionConfig` is always
+ * re-derived from whatever policy is on file for `sessionId` via
+ * `deriveSessionConfig`, the same derivation `createHardenedSession` uses.
+ *
+ * This is what fixes the two regressions issue #246 was opened over:
+ * `runForcedToolTurnUntilTimeout`'s nudge-retry resume no longer has a code
+ * path where it can drop `onPermissionRequest`/`autoApproveAll`, and
+ * `runForcedToolTurn`'s stall-retry resume no longer has one where it can
+ * drop `availableTools` -- both are always present because
+ * `deriveSessionConfig` always sets them, unconditionally.
+ *
+ * Throws if no policy is on file for `sessionId` (e.g. it was never created
+ * via `createHardenedSession`/`registerSessionPolicy`, or its policy was
+ * already evicted via `deleteHardenedSessionPolicy`) rather than silently
+ * falling back to the SDK's own resume defaults -- that fallback is exactly
+ * the failure mode this module exists to close off.
+ *
+ * `resumeSession` may hand back a session under a different `sessionId`
+ * than the one passed in; the policy is re-keyed under whatever id the SDK
+ * settles on so a *subsequent* resume of the same logical session still
+ * finds it, and the stale entry under the old id is dropped so it doesn't
+ * linger unused.
+ */
+export async function resumeHardenedSession(
+  client: CopilotClient,
+  sessionId: string,
+  /**
+   * Non-policy-owned fields (e.g. `provider`) the caller still needs to pass
+   * through on resume, same shape `createHardenedSession` takes for the
+   * initial create. Never used to supply `availableTools`, `tools`,
+   * `systemMessage`, `autoApproveAll`, or `onPermissionRequest` -- those
+   * remain exclusively policy-derived; `HardenedSessionBaseConfig` excludes
+   * them at the type level.
+   */
+  baseConfig: HardenedSessionBaseConfig = {}
+): Promise<CopilotSession> {
+  const policy = getStoredPolicy(sessionId);
+  if (!policy) {
+    throw new Error(
+      `[hardenedSession] resumeHardenedSession: no policy registered for session ${sessionId}. ` +
+      `Sessions must be created via createHardenedSession or registered via registerSessionPolicy ` +
+      `before they can be resumed through this module.`
+    );
+  }
+  const session = await client.resumeSession(sessionId, {
+    ...baseConfig,
+    ...deriveSessionConfig(policy),
+  } as SessionConfig);
+  if (session.sessionId !== sessionId) {
+    policyBySessionId.delete(sessionId);
+  }
+  policyBySessionId.set(session.sessionId, policy);
+  return session;
+}

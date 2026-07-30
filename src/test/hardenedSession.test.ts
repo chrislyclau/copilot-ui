@@ -1,0 +1,118 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  createHardenedSession,
+  registerSessionPolicy,
+  resumeHardenedSession,
+  deleteHardenedSessionPolicy,
+  SessionPolicy,
+} from '../copilotSdk/hardenedSession';
+import { CopilotClient } from '../copilotSdk/boundary';
+
+function makeMockClient(resumedSessionId?: string) {
+  const createSession = vi.fn(async (config: any) => ({
+    sessionId: 'session-created',
+    config,
+  }));
+  const resumeSession = vi.fn(async (sessionId: string, config: any) => ({
+    sessionId: resumedSessionId ?? sessionId,
+    config,
+  }));
+  return { createSession, resumeSession } as unknown as CopilotClient;
+}
+
+const policy: SessionPolicy = {
+  availableTools: ['read_file', 'write_file'],
+  autoApprovedTools: ['read_file'],
+};
+
+describe('resumeHardenedSession', () => {
+  it('re-derives the full config (availableTools, autoApproveAll: false, onPermissionRequest) on every resume', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-1', policy);
+
+    await resumeHardenedSession(client, 'session-1');
+
+    expect(client.resumeSession).toHaveBeenCalledTimes(1);
+    const [sessionId, config] = (client.resumeSession as any).mock.calls[0];
+    expect(sessionId).toBe('session-1');
+    expect(config.availableTools).toEqual(policy.availableTools);
+    expect(config.autoApproveAll).toBe(false);
+    expect(typeof config.onPermissionRequest).toBe('function');
+  });
+
+  it('throws rather than falling back to SDK defaults when no policy is registered', async () => {
+    const client = makeMockClient();
+    await expect(resumeHardenedSession(client, 'never-registered')).rejects.toThrow(/no policy registered/);
+    expect(client.resumeSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects a tool not present in autoApprovedTools', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-2', policy);
+    await resumeHardenedSession(client, 'session-2');
+    const config = (client.resumeSession as any).mock.calls[0][1];
+
+    const result = await config.onPermissionRequest(
+      { kind: 'shell' },
+      { sessionId: 'session-2' }
+    );
+    expect(result.kind).toBe('reject');
+  });
+
+  it('approves a tool present in autoApprovedTools', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-3', policy);
+    await resumeHardenedSession(client, 'session-3');
+    const config = (client.resumeSession as any).mock.calls[0][1];
+
+    const result = await config.onPermissionRequest(
+      { kind: 'custom-tool', toolName: 'read_file' },
+      { sessionId: 'session-3' }
+    );
+    expect(result.kind).toBe('approve-once');
+  });
+
+  it('re-keys the stored policy under the id resumeSession returns, and drops the stale id', async () => {
+    const client = makeMockClient('session-1-b');
+    registerSessionPolicy('session-1', policy);
+
+    const first = await resumeHardenedSession(client, 'session-1');
+    expect(first.sessionId).toBe('session-1-b');
+
+    // A follow-up resume must use the *new* id -- the old one is no longer valid.
+    await expect(resumeHardenedSession(client, 'session-1')).rejects.toThrow(/no policy registered/);
+
+    await resumeHardenedSession(client, 'session-1-b');
+    expect(client.resumeSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes through non-policy base config (e.g. provider) without letting it override policy fields', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-4', policy);
+
+    await resumeHardenedSession(client, 'session-4', { provider: 'openrouter' } as any);
+
+    const config = (client.resumeSession as any).mock.calls[0][1];
+    expect(config.provider).toBe('openrouter');
+    expect(config.availableTools).toEqual(policy.availableTools);
+    expect(config.autoApproveAll).toBe(false);
+  });
+
+  it('createHardenedSession binds a policy that a later resume can use without re-supplying config', async () => {
+    const client = makeMockClient();
+    await createHardenedSession(client, {}, policy);
+
+    await resumeHardenedSession(client, 'session-created');
+    const config = (client.resumeSession as any).mock.calls[0][1];
+    expect(config.availableTools).toEqual(policy.availableTools);
+    expect(config.autoApproveAll).toBe(false);
+  });
+
+  it('deleteHardenedSessionPolicy makes a subsequent resume fail loudly', async () => {
+    const client = makeMockClient();
+    registerSessionPolicy('session-5', policy);
+    deleteHardenedSessionPolicy('session-5');
+
+    await expect(resumeHardenedSession(client, 'session-5')).rejects.toThrow(/no policy registered/);
+  });
+});
