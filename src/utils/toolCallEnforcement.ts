@@ -500,9 +500,22 @@ export async function runForcedToolTurn<T>(
               `[runForcedToolTurn] resume attempt itself stalled (attempt ${stallAttempt}/${maxStallRetries}); ` +
               `starting a new session and retrying the original prompt...`,
             );
+            // This branch abandons currentSessionId in favor of a fresh
+            // session rather than resuming it, so it's never re-keyed the
+            // way resumeHardenedSession's resume path re-keys stale ids --
+            // evict it here or it orphans an entry in policyBySessionId.
+            deleteHardenedSessionPolicy(currentSessionId);
             currentSession = await opts.client.createSession(opts.freshSessionConfig);
             currentSessionId = currentSession.sessionId;
             opts.onSessionId?.(currentSessionId);
+            // The fresh session wasn't created via createHardenedSession, so
+            // nothing has registered a policy for it yet -- without this, a
+            // subsequent stall's resumeHardenedSession call on this id would
+            // throw "no policy registered" instead of resuming it.
+            registerSessionPolicy(
+              currentSessionId,
+              buildResumePolicy(currentAvailableTools, opts.tools, resumeSystemMessage)
+            );
             currentPromptOpts = { prompt: initialPrompt };
             resumeAttempted = false;
           }
