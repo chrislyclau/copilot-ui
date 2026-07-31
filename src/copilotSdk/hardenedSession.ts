@@ -258,9 +258,18 @@ export function getStoredPolicy(sessionId: string): SessionPolicy | undefined {
 }
 
 /**
- * Stores `session` under its id and wraps `session.disconnect` so that
+ * Stores `session` under `sessionId` and wraps `session.disconnect` so that
  * calling it also evicts this module's bookkeeping (policy, tracked session,
  * rejection history) for that id.
+ *
+ * `sessionId` is taken as an explicit argument rather than read off
+ * `session.sessionId` because `registerSessionPolicy(sessionId, policy,
+ * session)` allows the registered `sessionId` and `session.sessionId` to
+ * differ -- keying off `session.sessionId` instead would store the policy
+ * and the tracked session under different map keys, making
+ * `getReadonlySession(sessionId)` return `undefined` and leaving the policy
+ * never auto-evicted on `disconnect()`, exactly the leak this function
+ * exists to close.
  *
  * Without this, `sessionBySessionId` -- unlike the pre-existing, lightweight
  * `policyBySessionId` -- retains a strong reference to the *entire live
@@ -274,8 +283,7 @@ export function getStoredPolicy(sessionId: string): SessionPolicy | undefined {
  * their code and no separate lifecycle to wire up (unlike the `session GC`
  * hook the previous review round deferred to item 7).
  */
-function trackSession(session: CopilotSession): void {
-  const sessionId = session.sessionId;
+function trackSession(sessionId: string, session: CopilotSession): void {
   if (typeof session.disconnect === 'function') {
     const originalDisconnect = session.disconnect.bind(session);
     session.disconnect = async () => {
@@ -326,7 +334,7 @@ export async function createHardenedSession(
     ...deriveSessionConfig(policy),
   });
   policyBySessionId.set(session.sessionId, policy);
-  trackSession(session);
+  trackSession(session.sessionId, session);
   return session;
 }
 
@@ -344,7 +352,7 @@ export async function createHardenedSession(
 export function registerSessionPolicy(sessionId: string, policy: SessionPolicy, session?: CopilotSession): void {
   policyBySessionId.set(sessionId, policy);
   if (session) {
-    trackSession(session);
+    trackSession(sessionId, session);
   }
 }
 
@@ -413,6 +421,6 @@ export async function resumeHardenedSession(
     }
   }
   policyBySessionId.set(session.sessionId, policy);
-  trackSession(session);
+  trackSession(session.sessionId, session);
   return session;
 }

@@ -421,6 +421,33 @@ describe('getReadonlySession (issue #246 item 5)', () => {
     expect(getReadonlySession('ro-auto-evict-registered')).toBeUndefined();
   });
 
+  it('keys tracking off the registered sessionId, not session.sessionId, when they differ', async () => {
+    // registerSessionPolicy's signature explicitly allows the registered id
+    // and the session object's own id to diverge. Both the readonly view and
+    // the disconnect-triggered eviction must key off the *registered* id --
+    // not `session.sessionId` -- or the policy (stored under the registered
+    // id) and the tracked session (previously stored under session.sessionId)
+    // land under different map keys, and the policy is never auto-evicted.
+    const fakeSession = makeFakeSdkSession('internal-sdk-id-different-from-registered');
+    registerSessionPolicy(
+      'registered-id',
+      policy,
+      fakeSession as unknown as Parameters<typeof registerSessionPolicy>[2]
+    );
+
+    expect(getReadonlySession('registered-id')).toBeDefined();
+    expect(getReadonlySession('internal-sdk-id-different-from-registered')).toBeUndefined();
+
+    await fakeSession.disconnect();
+
+    expect(getReadonlySession('registered-id')).toBeUndefined();
+    const client = {
+      createSession: vi.fn(),
+      resumeSession: vi.fn(async (sessionId: string, config: any) => ({ sessionId, config })),
+    } as unknown as CopilotClient;
+    await expect(resumeHardenedSession(client, 'registered-id')).rejects.toThrow(/no policy registered/);
+  });
+
   it('propagates a rejection from the underlying disconnect() while still evicting', async () => {
     const fakeSession = makeFakeSdkSession('ro-auto-evict-throws');
     fakeSession.disconnect = vi.fn(async () => {
