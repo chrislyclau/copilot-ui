@@ -79,12 +79,50 @@ function extractRequestedToolName(req: PermissionRequest): string {
 }
 
 /**
+ * Records rejected permission attempts per session, keyed by session id, so
+ * callers/tests can verify *what* was attempted and rejected -- not just
+ * that a rejection happened. Console output alone (the previous behavior)
+ * isn't queryable and disappears once the process log rotates; this is
+ * issue #246 item 3's "the attempted tool name is recorded" requirement.
+ */
+const rejectedAttemptsBySessionId = new Map<string, string[]>();
+
+/**
+ * Returns the tool names rejected so far for `sessionId`, in the order they
+ * were attempted. Returns an empty array (not undefined) for a session with
+ * no rejections on file, so callers don't need an existence check.
+ */
+export function getRejectedToolAttempts(sessionId: string): readonly string[] {
+  return rejectedAttemptsBySessionId.get(sessionId) ?? [];
+}
+
+/** Clears recorded rejection history for a session, e.g. alongside `deleteHardenedSessionPolicy` during cleanup. */
+export function clearRejectedToolAttempts(sessionId: string): void {
+  rejectedAttemptsBySessionId.delete(sessionId);
+}
+
+function recordRejectedAttempt(sessionId: string, toolName: string): void {
+  const existing = rejectedAttemptsBySessionId.get(sessionId);
+  if (existing) {
+    existing.push(toolName);
+  } else {
+    rejectedAttemptsBySessionId.set(sessionId, [toolName]);
+  }
+}
+
+/**
  * Builds the `onPermissionRequest` handler enforcing `autoApprovedTools`.
  * Anything not in that set is rejected (issue #246's "disallowed-tool
  * rejection" requirement) rather than falling through to
  * `CopilotClient`'s own `autoApproveAll` default of `true`
  * (src/copilotSdk/boundary.ts) -- this handler is only ever installed
  * alongside `autoApproveAll: false`, so that default never applies here.
+ *
+ * Built-in tools like `bash`/`view`/`grep`/`task` (subagent) are rejected
+ * by this same path whenever they're absent from `autoApprovedTools` --
+ * there is no separate allowlist for them, so they stay unavailable by
+ * default unless a policy explicitly opts them in (issue #246's
+ * state-driven requirement).
  */
 function derivePermissionHandler(
   policy: SessionPolicy
@@ -95,6 +133,7 @@ function derivePermissionHandler(
     if (allowed.has(requestedTool)) {
       return { kind: 'approve-once' };
     }
+    recordRejectedAttempt(invocation.sessionId, requestedTool);
     console.warn(
       `[hardenedSession] session ${invocation.sessionId}: rejected permission request for disallowed ` +
       `tool '${requestedTool}' (allowed: ${[...allowed].join(', ') || '(none)'})`
@@ -146,6 +185,7 @@ export function getStoredPolicy(sessionId: string): SessionPolicy | undefined {
  */
 export function deleteHardenedSessionPolicy(sessionId: string): void {
   policyBySessionId.delete(sessionId);
+  clearRejectedToolAttempts(sessionId);
 }
 
 /**
