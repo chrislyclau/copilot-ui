@@ -505,6 +505,7 @@ export async function runForcedToolTurn<T>(
             // way resumeHardenedSession's resume path re-keys stale ids --
             // evict it here or it orphans an entry in policyBySessionId.
             deleteHardenedSessionPolicy(currentSessionId);
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
             currentSession = await opts.client.createSession(opts.freshSessionConfig);
             currentSessionId = currentSession.sessionId;
             opts.onSessionId?.(currentSessionId);

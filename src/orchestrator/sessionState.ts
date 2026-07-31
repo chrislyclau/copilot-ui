@@ -283,6 +283,7 @@ export async function getOrCreateSession(
       let newSession: CopilotSession;
       if (!modelOrCwdChanged && realSessionId) {
         try {
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing direct resumeSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
           newSession = await client.resumeSession(realSessionId, createSessionOptions);
         } catch (err) {
           writeLog(`[Session] resumeSession(${realSessionId}) failed, falling back to createSession: ${err}`, LogLevel.WARN);
@@ -290,6 +291,7 @@ export async function getOrCreateSession(
           // history forward; that continuity is lost the moment we fall
           // back to createSession, so the retained bookkeeping history must
           // be folded into the new session's config explicitly (see #155).
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
           newSession = await client.createSession(withRetainedHistory(createSessionOptions, existing.conversationHistory));
         }
       } else {
@@ -297,6 +299,7 @@ export async function getOrCreateSession(
         // always a brand-new SDK session with no server-side history of its
         // own -- fold the retained bookkeeping history into its config so it
         // isn't silently dropped (see #155).
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
         newSession = await client.createSession(withRetainedHistory(createSessionOptions, existing.conversationHistory));
       }
       const updated: SessionRecord = {
@@ -331,6 +334,7 @@ export async function getOrCreateSession(
     return { ...existing, lastUsedAt: now };
   }
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
   const newSession = await client.createSession(createSessionOptions);
   const record: SessionRecord = {
     sessionId,

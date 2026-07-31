@@ -334,6 +334,7 @@ export async function executeAuditSession<T>(
 
     let session: CopilotSession;
     try {
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
       session = await client.createSession(sessionSettings as SessionConfig & { autoApproveAll?: boolean });
     } catch (e) {
       console.warn(`[executeAuditSession] createSession() failed: ${e}`);
