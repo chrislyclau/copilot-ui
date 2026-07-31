@@ -275,6 +275,15 @@ export async function resumeHardenedSession(
   } as SessionConfig);
   if (session.sessionId !== sessionId) {
     policyBySessionId.delete(sessionId);
+    const rejections = rejectedAttemptsBySessionId.get(sessionId);
+    if (rejections) {
+      rejectedAttemptsBySessionId.delete(sessionId);
+      const existing = rejectedAttemptsBySessionId.get(session.sessionId);
+      rejectedAttemptsBySessionId.set(
+        session.sessionId,
+        existing ? [...existing, ...rejections] : rejections
+      );
+    }
   }
   policyBySessionId.set(session.sessionId, policy);
   return session;
