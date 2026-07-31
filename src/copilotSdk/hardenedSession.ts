@@ -3,7 +3,11 @@ import {
   CopilotSession,
   PermissionRequest,
   PermissionRequestResult,
+  SessionCapabilities,
   SessionConfig,
+  SessionEventHandler,
+  SessionEventType,
+  TypedSessionEventHandler,
   Tool,
 } from './boundary';
 
@@ -170,6 +174,84 @@ export function deriveSessionConfig(
 /** Tracks each hardened session's originating policy, keyed by session id, so a future resume (item 2) can re-derive the same config without the caller re-supplying it. */
 const policyBySessionId = new Map<string, SessionPolicy>();
 
+/**
+ * Tracks the live `CopilotSession` object backing each hardened session, keyed
+ * by session id, so `getReadonlySession` (item 5) has something to wrap. Kept
+ * as a separate map from `policyBySessionId` (rather than folding the session
+ * into the policy) since the two have different lifetimes -- a policy can be
+ * registered via `registerSessionPolicy` for a session this module never
+ * created and therefore never held a reference to.
+ */
+const sessionBySessionId = new Map<string, CopilotSession>();
+
+/**
+ * The subset of `CopilotSession` safe to hand to code outside the hardened
+ * wrapper: inspection and event-subscription members only. Deliberately
+ * excludes `send`/`sendAndWait` (drives the conversation), `abort` (cancels
+ * in-flight work), `setModel` (changes model outside the session's bound
+ * policy), `log` (writes to the session timeline), `disconnect` (tears the
+ * session down), and `ui`/`rpc` (further session control surfaces). None of
+ * these can change a session's tool policy directly -- `availableTools` and
+ * `onPermissionRequest` are fixed for the life of the connection -- but they
+ * let a holder drive or end a session this module wasn't asked to hand out
+ * for that purpose. A caller that legitimately needs those (e.g. the code
+ * that itself called `createHardenedSession`/`resumeHardenedSession`) already
+ * has the full `CopilotSession` from that call's return value; this view is
+ * for everyone else who only needs to observe.
+ */
+export interface ReadonlyCopilotSession {
+  readonly sessionId: string;
+  readonly workspacePath: string | undefined;
+  readonly capabilities: SessionCapabilities;
+  on<K extends SessionEventType>(eventType: K, handler: TypedSessionEventHandler<K>): () => void;
+  on(handler: SessionEventHandler): () => void;
+  getEvents: CopilotSession['getEvents'];
+}
+
+/**
+ * Wraps `session` in a `ReadonlyCopilotSession` -- the getters read live off
+ * `session` (rather than snapshotting once) so `workspacePath`/`capabilities`
+ * stay current, and `on`/`getEvents` are bound to `session` so they keep
+ * working when called detached from the returned object (e.g.
+ * `const { on } = getReadonlySession(id)!`).
+ */
+function toReadonlyView(session: CopilotSession): ReadonlyCopilotSession {
+  return {
+    get sessionId() {
+      return session.sessionId;
+    },
+    get workspacePath() {
+      return session.workspacePath;
+    },
+    get capabilities() {
+      return session.capabilities;
+    },
+    on: session.on.bind(session),
+    getEvents: session.getEvents.bind(session),
+  };
+}
+
+/**
+ * Returns a read-only view of the `CopilotSession` backing `sessionId`, for
+ * callers that only need visibility (e.g. subscribing to events) and have no
+ * business driving the session or touching its policy. Returns `undefined`
+ * if no live session is on file for `sessionId` -- e.g. it was never created
+ * or registered through this module, or it has since been evicted via
+ * `deleteHardenedSessionPolicy`.
+ *
+ * This is additive: `createHardenedSession`/`resumeHardenedSession` still
+ * return the full `CopilotSession` to their direct caller, since that caller
+ * is the one responsible for driving the session. This accessor is for
+ * *other* code that needs read access without inheriting that responsibility
+ * -- and, per this module's central premise, without any path back to
+ * `CopilotClient.createSession`/`resumeSession` that could re-loosen the
+ * policy bound to the session.
+ */
+export function getReadonlySession(sessionId: string): ReadonlyCopilotSession | undefined {
+  const session = sessionBySessionId.get(sessionId);
+  return session ? toReadonlyView(session) : undefined;
+}
+
 /** @internal exposed for hardenedSession's own resume implementation (item 2) and its tests. */
 export function getStoredPolicy(sessionId: string): SessionPolicy | undefined {
   return policyBySessionId.get(sessionId);
@@ -185,6 +267,7 @@ export function getStoredPolicy(sessionId: string): SessionPolicy | undefined {
  */
 export function deleteHardenedSessionPolicy(sessionId: string): void {
   policyBySessionId.delete(sessionId);
+  sessionBySessionId.delete(sessionId);
   clearRejectedToolAttempts(sessionId);
 }
 
@@ -204,6 +287,7 @@ export async function createHardenedSession(
     ...deriveSessionConfig(policy),
   });
   policyBySessionId.set(session.sessionId, policy);
+  sessionBySessionId.set(session.sessionId, session);
   return session;
 }
 
@@ -218,8 +302,11 @@ export async function createHardenedSession(
  * a policy for a session they didn't create so `resumeHardenedSession` still
  * has something non-partial to derive a resume config from.
  */
-export function registerSessionPolicy(sessionId: string, policy: SessionPolicy): void {
+export function registerSessionPolicy(sessionId: string, policy: SessionPolicy, session?: CopilotSession): void {
   policyBySessionId.set(sessionId, policy);
+  if (session) {
+    sessionBySessionId.set(sessionId, session);
+  }
 }
 
 /**
@@ -275,6 +362,7 @@ export async function resumeHardenedSession(
   } as SessionConfig);
   if (session.sessionId !== sessionId) {
     policyBySessionId.delete(sessionId);
+    sessionBySessionId.delete(sessionId);
     const rejections = rejectedAttemptsBySessionId.get(sessionId);
     if (rejections) {
       rejectedAttemptsBySessionId.delete(sessionId);
@@ -286,5 +374,6 @@ export async function resumeHardenedSession(
     }
   }
   policyBySessionId.set(session.sessionId, policy);
+  sessionBySessionId.set(session.sessionId, session);
   return session;
 }
