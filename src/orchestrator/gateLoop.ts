@@ -1144,6 +1144,7 @@ export const handleGateLoop = async (
           const clarityConfig = registryInstance.getExecutionConfig(
             DEFAULT_ROLES_CONFIG.planner.model,
           );
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
           const claritySession: CopilotSession = await client.createSession({
             model: clarityConfig.model,
             provider: clarityConfig.provider as SdkProviderConfig,
@@ -1303,6 +1304,7 @@ export const handleGateLoop = async (
             DEFAULT_ROLES_CONFIG.planner.model,
           );
           const classificationSession: CopilotSession =
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
             await client.createSession({
               model: classificationConfig.model,
               provider: classificationConfig.provider as SdkProviderConfig,
@@ -1872,6 +1874,7 @@ export const handleGateLoop = async (
             writeLog(
               `[GateLoop] Creating fresh session for model ${currentModel}`,
             );
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
             session = await client.createSession(
               loopSessionOptions as SessionConfig,
             );
