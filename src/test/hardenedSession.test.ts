@@ -88,6 +88,33 @@ describe('resumeHardenedSession', () => {
     expect(client.resumeSession).toHaveBeenCalledTimes(2);
   });
 
+  it('migrates recorded rejections to the new id when resumeSession re-keys the session', async () => {
+    const ids = ['session-migrate-a', 'session-migrate-b'];
+    const resumeSession = vi.fn(async (_sessionId: string, config: any) => ({
+      sessionId: ids.shift(),
+      config,
+    }));
+    const client = { createSession: vi.fn(), resumeSession } as unknown as CopilotClient;
+    registerSessionPolicy('session-migrate', policy);
+
+    // First resume re-keys 'session-migrate' -> 'session-migrate-a'.
+    const first = await resumeHardenedSession(client, 'session-migrate');
+    expect(first.sessionId).toBe('session-migrate-a');
+    let config = (client.resumeSession as any).mock.calls[0][1];
+    await config.onPermissionRequest({ kind: 'shell' }, { sessionId: 'session-migrate-a' });
+    expect(getRejectedToolAttempts('session-migrate-a')).toEqual(['shell']);
+
+    // Second resume, keyed off the intermediate id, re-keys again -> 'session-migrate-b'.
+    // The rejection recorded under the intermediate id must migrate along with the policy.
+    const second = await resumeHardenedSession(client, 'session-migrate-a');
+    expect(second.sessionId).toBe('session-migrate-b');
+    config = (client.resumeSession as any).mock.calls[1][1];
+    await config.onPermissionRequest({ kind: 'view' }, { sessionId: 'session-migrate-b' });
+
+    expect(getRejectedToolAttempts('session-migrate-a')).toEqual([]);
+    expect(getRejectedToolAttempts('session-migrate-b')).toEqual(['shell', 'view']);
+  });
+
   it('passes through non-policy base config (e.g. provider) without letting it override policy fields', async () => {
     const client = makeMockClient();
     registerSessionPolicy('session-4', policy);
