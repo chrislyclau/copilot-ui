@@ -258,12 +258,51 @@ export function getStoredPolicy(sessionId: string): SessionPolicy | undefined {
 }
 
 /**
+ * Stores `session` under its id and wraps `session.disconnect` so that
+ * calling it also evicts this module's bookkeeping (policy, tracked session,
+ * rejection history) for that id.
+ *
+ * Without this, `sessionBySessionId` -- unlike the pre-existing, lightweight
+ * `policyBySessionId` -- retains a strong reference to the *entire live
+ * `CopilotSession`* (its event emitter and any listeners handed out via
+ * `getReadonlySession`) until someone remembers to call
+ * `deleteHardenedSessionPolicy` explicitly. `disconnect()` is the one call
+ * every caller already has to make to release the session on the SDK side
+ * (see `CopilotSession.disconnect`'s own doc: "the session object can no
+ * longer be used" after calling it), so hooking eviction onto it means a
+ * caller that correctly disconnects also can't leak here, with no change to
+ * their code and no separate lifecycle to wire up (unlike the `session GC`
+ * hook the previous review round deferred to item 7).
+ */
+function trackSession(session: CopilotSession): void {
+  const sessionId = session.sessionId;
+  if (typeof session.disconnect === 'function') {
+    const originalDisconnect = session.disconnect.bind(session);
+    session.disconnect = async () => {
+      try {
+        await originalDisconnect();
+      } finally {
+        // Evict by the id this session was tracked under -- if a resume
+        // re-keyed it in the meantime, `deleteHardenedSessionPolicy` for the
+        // *current* id is handled by resumeHardenedSession's own re-keying
+        // logic, and calling it again here for the stale id is a harmless
+        // no-op.
+        deleteHardenedSessionPolicy(sessionId);
+      }
+    };
+  }
+  sessionBySessionId.set(sessionId, session);
+}
+
+/**
  * Evicts a session's stored policy once the caller knows the session is
  * done for good (e.g. on disconnect/cleanup in a long-running process).
  * Without this, `policyBySessionId` only grows -- every `createHardenedSession`
  * call adds an entry that nothing else removes. Not wired into any session
- * lifecycle yet (that's part of item 7, migrating real callers); exposed now
- * so that migration has a cleanup hook to call instead of reinventing one.
+ * lifecycle yet (that's part of item 7, migrating real callers), though
+ * `trackSession` above now calls this automatically on `disconnect()` for
+ * any session tracked via `createHardenedSession`/`resumeHardenedSession`/
+ * `registerSessionPolicy`'s session argument.
  */
 export function deleteHardenedSessionPolicy(sessionId: string): void {
   policyBySessionId.delete(sessionId);
@@ -287,7 +326,7 @@ export async function createHardenedSession(
     ...deriveSessionConfig(policy),
   });
   policyBySessionId.set(session.sessionId, policy);
-  sessionBySessionId.set(session.sessionId, session);
+  trackSession(session);
   return session;
 }
 
@@ -305,7 +344,7 @@ export async function createHardenedSession(
 export function registerSessionPolicy(sessionId: string, policy: SessionPolicy, session?: CopilotSession): void {
   policyBySessionId.set(sessionId, policy);
   if (session) {
-    sessionBySessionId.set(sessionId, session);
+    trackSession(session);
   }
 }
 
@@ -374,6 +413,6 @@ export async function resumeHardenedSession(
     }
   }
   policyBySessionId.set(session.sessionId, policy);
-  sessionBySessionId.set(session.sessionId, session);
+  trackSession(session);
   return session;
 }
