@@ -369,72 +369,84 @@ describe('getReadonlySession (issue #246 item 5)', () => {
     expect(getReadonlySession('ro-evicted')).toBeUndefined();
   });
 
-  it('calling disconnect() on a session from createHardenedSession auto-evicts it (no leaked reference)', async () => {
-    const fakeSession = makeFakeSdkSession('ro-auto-evict-create');
-    const originalDisconnect = fakeSession.disconnect;
+  it('calling disconnect() on the session does not itself evict it (no wrapping of caller-owned methods)', async () => {
+    // This module deliberately does NOT wrap/replace session.disconnect to
+    // auto-evict on call -- an earlier version of this fix did, and broke
+    // toolCallEnforcement.test.ts's stall-retry tests, which assert directly
+    // on `resumedSession.disconnect` (a vi.fn() spy) after it flows through
+    // resumeHardenedSession. Wrapping replaced that spy with a different
+    // function object, so `toHaveBeenCalledTimes` on it threw. Leak
+    // avoidance instead comes from the WeakRef in sessionBySessionId (see
+    // the tests below), which needs no cooperation from `session` at all.
+    const fakeSession = makeFakeSdkSession('ro-disconnect-noop');
     const client = {
       createSession: vi.fn(async () => fakeSession),
       resumeSession: vi.fn(),
-    } as unknown as CopilotClient;
-
-    const session = await createHardenedSession(client, {}, policy);
-    expect(getReadonlySession('ro-auto-evict-create')).toBeDefined();
-
-    await session.disconnect();
-
-    expect(originalDisconnect).toHaveBeenCalledTimes(1);
-    expect(getReadonlySession('ro-auto-evict-create')).toBeUndefined();
-    // The policy itself (not just the tracked session) is evicted too.
-    await expect(resumeHardenedSession(client, 'ro-auto-evict-create')).rejects.toThrow(/no policy registered/);
-  });
-
-  it('calling disconnect() on a session from resumeHardenedSession auto-evicts under the post-resume id', async () => {
-    const oldSession = makeFakeSdkSession('ro-auto-evict-resume-old');
-    const newSession = makeFakeSdkSession('ro-auto-evict-resume-new');
-    const originalDisconnect = newSession.disconnect;
-    const client = {
-      createSession: vi.fn(async () => oldSession),
-      resumeSession: vi.fn(async () => newSession),
     } as unknown as CopilotClient;
 
     await createHardenedSession(client, {}, policy);
-    const resumed = await resumeHardenedSession(client, 'ro-auto-evict-resume-old');
-    expect(getReadonlySession('ro-auto-evict-resume-new')).toBeDefined();
+    await fakeSession.disconnect();
 
-    await resumed.disconnect();
-
-    expect(originalDisconnect).toHaveBeenCalledTimes(1);
-    expect(getReadonlySession('ro-auto-evict-resume-new')).toBeUndefined();
+    expect(fakeSession.disconnect).toHaveBeenCalledTimes(1);
+    // Still resolvable: this module has no way to know disconnect() was
+    // called, by design, so eviction is left to deleteHardenedSessionPolicy
+    // or to the WeakRef clearing once nothing else holds the session.
+    expect(getReadonlySession('ro-disconnect-noop')).toBeDefined();
   });
 
-  it('registerSessionPolicy-tracked session also auto-evicts on disconnect', async () => {
-    const fakeSession = makeFakeSdkSession('ro-auto-evict-registered');
+  it('getReadonlySession prunes a map entry whose WeakRef has been cleared (e.g. by the GC once nothing else holds the session)', async () => {
+    // Simulating real garbage collection deterministically in a unit test
+    // isn't practical, so this stubs global.WeakRef for the duration of the
+    // test to return a ref whose deref() always reports "collected" --
+    // exercising getReadonlySession's pruning branch without depending on
+    // actual GC timing.
+    const originalWeakRef = global.WeakRef;
+    class AlwaysClearedWeakRef<T extends object> {
+      constructor(_target: T) {}
+      deref(): T | undefined {
+        return undefined;
+      }
+    }
+    // @ts-expect-error -- intentionally substituting a test double for WeakRef
+    global.WeakRef = AlwaysClearedWeakRef;
+    try {
+      const fakeSession = makeFakeSdkSession('ro-weakref-cleared');
+      const client = {
+        createSession: vi.fn(async () => fakeSession),
+        resumeSession: vi.fn(),
+      } as unknown as CopilotClient;
+
+      await createHardenedSession(client, {}, policy);
+
+      expect(getReadonlySession('ro-weakref-cleared')).toBeUndefined();
+    } finally {
+      global.WeakRef = originalWeakRef;
+    }
+  });
+
+  it('keys tracking off the registered sessionId, not session.sessionId, when they differ', async () => {
+    // registerSessionPolicy's signature explicitly allows the registered id
+    // and the session object's own id to diverge. The readonly view must key
+    // off the *registered* id -- not `session.sessionId` -- or the policy
+    // (stored under the registered id) and the tracked session (stored under
+    // session.sessionId) land under different map keys.
+    const fakeSession = makeFakeSdkSession('internal-sdk-id-different-from-registered');
     registerSessionPolicy(
-      'ro-auto-evict-registered',
+      'registered-id',
       policy,
       fakeSession as unknown as Parameters<typeof registerSessionPolicy>[2]
     );
-    expect(getReadonlySession('ro-auto-evict-registered')).toBeDefined();
 
-    await fakeSession.disconnect();
+    expect(getReadonlySession('registered-id')).toBeDefined();
+    expect(getReadonlySession('internal-sdk-id-different-from-registered')).toBeUndefined();
 
-    expect(getReadonlySession('ro-auto-evict-registered')).toBeUndefined();
-  });
+    deleteHardenedSessionPolicy('registered-id');
 
-  it('propagates a rejection from the underlying disconnect() while still evicting', async () => {
-    const fakeSession = makeFakeSdkSession('ro-auto-evict-throws');
-    fakeSession.disconnect = vi.fn(async () => {
-      throw new Error('transport closed');
-    });
+    expect(getReadonlySession('registered-id')).toBeUndefined();
     const client = {
-      createSession: vi.fn(async () => fakeSession),
-      resumeSession: vi.fn(),
+      createSession: vi.fn(),
+      resumeSession: vi.fn(async (sessionId: string, config: any) => ({ sessionId, config })),
     } as unknown as CopilotClient;
-
-    const session = await createHardenedSession(client, {}, policy);
-
-    await expect(session.disconnect()).rejects.toThrow('transport closed');
-    // Cleanup still ran even though the underlying disconnect() threw.
-    expect(getReadonlySession('ro-auto-evict-throws')).toBeUndefined();
+    await expect(resumeHardenedSession(client, 'registered-id')).rejects.toThrow(/no policy registered/);
   });
 });
