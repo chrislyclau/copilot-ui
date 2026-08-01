@@ -12,6 +12,7 @@ import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig } from '../src/utils/auditorHelper';
 import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
 import { CopilotClient, type SessionConfig, type SdkProviderConfig, ToolSet } from '../src/copilotSdk/boundary';
+import { createHardenedSession, type SessionPolicy } from '../src/copilotSdk/hardenedSession';
 import {
   createRunGhCommandTool,
   ALLOWED_GH_COMMANDS,
@@ -120,35 +121,28 @@ async function main() {
     await client.start();
 
     console.log('[run-issue-task] creating session...');
-    const sessionConfig: SessionConfig & { autoApproveAll?: boolean } = {
+    const systemMessage: SessionConfig['systemMessage'] = {
+      mode: 'replace',
+      content: systemPrompt,
+    };
+    const policy: SessionPolicy = {
+      availableTools: new ToolSet().addCustom(RUN_GH_COMMAND_TOOL_NAME) as unknown as readonly string[],
+      tools: [runGhCommandTool] as unknown as SessionPolicy['tools'],
+      systemMessage,
+      autoApprovedTools: [RUN_GH_COMMAND_TOOL_NAME],
+    };
+    // sessionConfig retains the non-policy fields (plus tools/systemMessage, which
+    // runForcedToolTurnUntilTimeout below also needs) that createHardenedSession
+    // doesn't own; the policy-owned fields (availableTools/autoApproveAll/
+    // onPermissionRequest) are derived from `policy` above instead of set here.
+    const sessionConfig = {
       model: executionConfig.model,
       ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
-      systemMessage: {
-        mode: 'replace',
-        content: systemPrompt,
-      },
+      systemMessage,
       tools: [runGhCommandTool],
-      availableTools: new ToolSet().addCustom(RUN_GH_COMMAND_TOOL_NAME),
-      autoApproveAll: false,
-      onPermissionRequest: async (req) => {
-        let requestedTool: string | undefined;
-        if ('toolName' in req) {
-          requestedTool = req.toolName as string;
-        } else if ('name' in req) {
-          requestedTool = req.name as string;
-        } else if ('toolCalls' in req && Array.isArray(req.toolCalls)) {
-          const firstCall = req.toolCalls[0] as { function?: { name?: string } } | undefined;
-          requestedTool = firstCall?.function?.name;
-        }
-
-        if (requestedTool === RUN_GH_COMMAND_TOOL_NAME) {
-          return { kind: 'approve-once' };
-        }
-        return { kind: 'reject', reason: `Tool ${requestedTool || 'unknown'} is not permitted.` };
-      },
       streaming: false,
     };
-    const session = await client.createSession(sessionConfig);
+    const session = await createHardenedSession(client, sessionConfig, policy);
 
     sessionId = session.sessionId;
     console.log(`[run-issue-task] session created: ${sessionId}`);
