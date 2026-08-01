@@ -30,7 +30,7 @@ export default [
     // calls are the base-class delegation the override wraps, not a bypass.
     // Test files are exempt where they intentionally exercise the raw SDK
     // client itself (e.g. proxy/integration tests), not the hardened wrapper.
-    files: ["src/**/*.ts", "src/**/*.tsx"],
+    files: ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"],
     ignores: [
       "src/copilotSdk/boundary.ts",
       "src/copilotSdk/hardenedSession.ts",
