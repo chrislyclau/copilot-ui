@@ -15,6 +15,7 @@ import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/au
 import { FORCED_TOOL_TURN_HARD_TIMEOUT_MS } from '../src/utils/toolCallEnforcement.ts';
 import { submitCodeReviewTool as baseSubmitCodeReviewTool } from '../src/config/tools.ts';
 import { getFilteredDiff } from './diffFilter';
+import { findLinkedIssueNumbers, fetchLinkedIssues, renderIssueMarkdown } from './linkedIssues';
 import {
   loadPreviousReviewState,
   isCommitReachable,
@@ -243,6 +244,19 @@ async function main() {
   }
   writeFileSync(join(contextDir, 'pr-meta.md'), prMetaMd);
 
+  // Linked issues are written to individual files (not inlined into the
+  // prompt) so the agent can choose whether/when to read them, and so
+  // prompt size doesn't scale with the number/size of referenced issues.
+  const linkedIssueNumbers = findLinkedIssueNumbers(prNumber);
+  const linkedIssues = linkedIssueNumbers.length ? fetchLinkedIssues(linkedIssueNumbers) : [];
+  if (linkedIssues.length) {
+    const issuesDir = join(contextDir, 'issues');
+    mkdirSync(issuesDir, { recursive: true });
+    for (const issue of linkedIssues) {
+      writeFileSync(join(issuesDir, `issue-${issue.number}.md`), renderIssueMarkdown(issue));
+    }
+  }
+
   const hasDiffStat = existsSync(join(contextDir, 'diff-stat.txt'));
 
   const hasFullDiff = existsSync(join(contextDir, 'full-diff.patch'));
@@ -253,6 +267,9 @@ async function main() {
     hasDiffStat ? '- \`diff-stat.txt\`: A summary of the changed files and lines.' : null,
     '- \`pr-meta.md\`: The PR title and description.',
     '- \`comments.md\`: The full comment history of the PR.',
+    linkedIssues.length
+      ? `- \`issues/\`: Full content of issue(s) referenced by this PR, one file per issue (${linkedIssues.map((i) => `issue-${i.number}.md`).join(', ')}).`
+      : null,
   ].filter(Boolean).join('\n');
   writeFileSync(join(contextDir, 'README.md'), manifest);
 
