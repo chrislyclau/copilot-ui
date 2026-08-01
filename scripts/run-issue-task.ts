@@ -126,7 +126,7 @@ async function main() {
       content: systemPrompt,
     };
     const policy: SessionPolicy = {
-      availableTools: new ToolSet().addCustom(RUN_GH_COMMAND_TOOL_NAME) as unknown as readonly string[],
+      availableTools: new ToolSet().addCustom(RUN_GH_COMMAND_TOOL_NAME).toArray(),
       tools: [runGhCommandTool] as unknown as SessionPolicy['tools'],
       systemMessage,
       autoApprovedTools: [RUN_GH_COMMAND_TOOL_NAME],
