@@ -9,7 +9,7 @@ import {
   deriveSessionConfig,
   SessionPolicy,
 } from './hardenedSession';
-import type { CopilotClient, CopilotSession, PermissionRequest } from './boundary';
+import type { CopilotClient, CopilotSession, PermissionRequest, SdkProviderConfig } from './boundary';
 
 /**
  * Unit tests for issue #246 item 6:
@@ -74,7 +74,8 @@ describe('resumeHardenedSession', () => {
 
     // Simulate a nudge-retry: caller resumes the same session id after a
     // no-tool-call retry, passing only non-policy fields (provider).
-    await resumeHardenedSession(client, created.sessionId, { provider: { name: 'openrouter' } } as any);
+    const provider: SdkProviderConfig = { type: 'openai', baseUrl: 'https://openrouter.ai/api/v1' };
+    await resumeHardenedSession(client, created.sessionId, { provider });
 
     expect(client.resumeSession).toHaveBeenCalledTimes(1);
     const [, config] = (client.resumeSession as ReturnType<typeof vi.fn>).mock.calls[0]!;
