@@ -187,20 +187,22 @@ async function main() {
       mode: 'replace',
       content: systemPrompt,
     };
-    // Read-only exploration (bash/view/grep/glob) plus the single scoped gh
-    // tool -- deliberately no `edit`, per the "reports, never fixes" scope.
+    // Read-only exploration (bash/view/grep/glob all gate under the SDK's
+    // 'read' permission category; the shell tool gates under 'shell' -- see
+    // hardenedSession.ts's extractRequestedToolName, which switches on
+    // PermissionRequest.kind for built-ins rather than a per-wire-tool name)
+    // plus the single scoped gh tool. Deliberately no 'write', per the
+    // "reports, never fixes" scope.
     const availableTools = new ToolSet()
-      .addBuiltIn('bash')
-      .addBuiltIn('view')
-      .addBuiltIn('grep')
-      .addBuiltIn('glob')
+      .addBuiltIn('read')
+      .addBuiltIn('shell')
       .addCustom(RUN_GH_COMMAND_TOOL_NAME)
       .toArray();
     const policy: SessionPolicy = {
       availableTools,
       tools: [auditGhCommandTool] as unknown as SessionPolicy['tools'],
       systemMessage,
-      autoApprovedTools: ['bash', 'view', 'grep', 'glob', RUN_GH_COMMAND_TOOL_NAME],
+      autoApprovedTools: ['read', 'shell', RUN_GH_COMMAND_TOOL_NAME],
     };
     // sessionConfig retains the non-policy fields (plus tools/systemMessage,
     // which runForcedToolTurnUntilTimeout below also needs) that

@@ -51,6 +51,19 @@ describe('agentGhTool: configurable allowlist (issue #273 audit script scoping)'
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
+  it('normalizes a JSON-encoded string args payload into an array (model formatting flakiness)', async () => {
+    const tool = createRunGhCommandTool(AUDIT_ALLOWED_GH_COMMANDS);
+    const result = await (tool.handler as unknown as (a: { args: unknown }) => Promise<{ output?: string; error?: string }>)({
+      args: JSON.stringify(['issue', 'create', '--title', 'x', '--body', 'y']),
+    });
+    expect(result.error).toBeUndefined();
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'create', '--title', 'x', '--body', 'y'],
+      expect.anything(),
+    );
+  });
+
   it('isAllowedGhCommand respects the passed-in allowlist', () => {
     expect(isAllowedGhCommand(['issue', 'create'], AUDIT_ALLOWED_GH_COMMANDS)).toBe(true);
     expect(isAllowedGhCommand(['issue', 'create'])).toBe(false);
