@@ -191,12 +191,16 @@ async function main() {
     // what actually gets included as a callable tool schema in the request
     // sent to the model) -- separate from autoApprovedTools below, which is
     // checked against the permission *kind* the SDK reports at call time
-    // (see hardenedSession.ts's extractRequestedToolName: built-ins report
-    // 'read'/'shell' as their kind regardless of which specific tool -- bash,
-    // view, grep, glob -- was actually invoked). Both are required: without
-    // the wire names here, the model is never offered bash/view/grep/glob as
-    // callable at all; without 'read'/'shell' below, calls to whichever tool
-    // IS offered get permission-rejected.
+    // (see hardenedSession.ts's extractRequestedToolName). This split isn't
+    // uniform across the four tools: bash/view report as the built-in kinds
+    // 'shell'/'read', while grep/glob report as { kind: 'custom-tool',
+    // toolName: 'grep' | 'glob' }, which extractRequestedToolName resolves
+    // to the toolName itself, not 'read'/'shell'. So autoApprovedTools needs
+    // all four identifiers -- 'read', 'shell', 'grep', 'glob' -- or calls to
+    // whichever tool isn't listed get permission-rejected. Both lists (this
+    // one and availableTools) are required regardless: without the wire
+    // names here, the model is never offered bash/view/grep/glob as
+    // callable at all.
     const availableTools = new ToolSet()
       .addBuiltIn('bash')
       .addBuiltIn('view')
@@ -208,7 +212,7 @@ async function main() {
       availableTools,
       tools: [auditGhCommandTool] as unknown as SessionPolicy['tools'],
       systemMessage,
-      autoApprovedTools: ['read', 'shell', RUN_GH_COMMAND_TOOL_NAME],
+      autoApprovedTools: ['read', 'shell', 'grep', 'glob', RUN_GH_COMMAND_TOOL_NAME],
     };
     // sessionConfig retains the non-policy fields (plus tools/systemMessage,
     // which runForcedToolTurnUntilTimeout below also needs) that
