@@ -45,9 +45,12 @@ function subcommandOf(args: string[]): string {
  * "<noun> <verb>" pair. Deliberately strict (no prefix/substring matching)
  * so e.g. "issue delete" can never sneak in under "issue".
  */
-export function isAllowedGhCommand(args: string[]): boolean {
+export function isAllowedGhCommand(
+  args: string[],
+  allowedCommands: readonly string[] = ALLOWED_GH_COMMANDS,
+): boolean {
   if (!Array.isArray(args) || args.length < 2) return false;
-  return ALLOWED_GH_COMMANDS.includes(subcommandOf(args));
+  return allowedCommands.includes(subcommandOf(args));
 }
 
 /**
@@ -56,13 +59,22 @@ export function isAllowedGhCommand(args: string[]): boolean {
  * the model can see why it failed and try an allowed alternative instead of
  * the whole session crashing. It only throws (propagates) for genuinely
  * unexpected failures, which the caller's session error handling covers.
+ *
+ * `allowedCommands` defaults to the shared `ALLOWED_GH_COMMANDS` (the
+ * issue-resolver agent's allowlist in run-issue-task.ts). Callers that need a
+ * different, narrower or wider allowlist for their own session -- e.g.
+ * scripts/audit-codebase.ts's `issue create`-only tool -- should pass their
+ * own list explicitly rather than widening the shared constant, so that
+ * expanding one script's gh access can never silently expand another's.
  */
-export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
+export function createRunGhCommandTool(
+  allowedCommands: readonly string[] = ALLOWED_GH_COMMANDS,
+): Tool<RunGhCommandArgs> {
   return defineTool<RunGhCommandArgs>(
     RUN_GH_COMMAND_TOOL_NAME,
     'Executes a single whitelisted "gh" (GitHub CLI) subcommand and returns its ' +
       'real stdout/stderr. Only the following subcommands are permitted: ' +
-      `${ALLOWED_GH_COMMANDS.join(', ')}. Any other subcommand is rejected and ` +
+      `${allowedCommands.join(', ')}. Any other subcommand is rejected and ` +
       'reported back as an error instead of being run -- if that happens, pick ' +
       'a different, allowed way to accomplish the goal rather than retrying the ' +
       'same call.',
@@ -86,10 +98,10 @@ export function createRunGhCommandTool(): Tool<RunGhCommandArgs> {
         return { error: message };
       }
 
-      if (!isAllowedGhCommand(args)) {
+      if (!isAllowedGhCommand(args, allowedCommands)) {
         const message =
           `Rejected: "gh ${subcommandOf(args)}" is not on the allowlist. ` +
-          `Allowed subcommands: ${ALLOWED_GH_COMMANDS.join(', ')}.`;
+          `Allowed subcommands: ${allowedCommands.join(', ')}.`;
         console.warn(`[agentGhTool] Rejected disallowed gh subcommand: "${subcommandOf(args)}" (full args: ${JSON.stringify(args)})`);
         return { error: message };
       }
