@@ -187,8 +187,16 @@ async function main() {
       mode: 'replace',
       content: systemPrompt,
     };
-    // Read-only exploration (bash/view/grep/glob) plus the single scoped gh
-    // tool -- deliberately no `edit`, per the "reports, never fixes" scope.
+    // availableTools is keyed by the built-in tool's *wire name* (this is
+    // what actually gets included as a callable tool schema in the request
+    // sent to the model) -- separate from autoApprovedTools below, which is
+    // checked against the permission *kind* the SDK reports at call time
+    // (see hardenedSession.ts's extractRequestedToolName: built-ins report
+    // 'read'/'shell' as their kind regardless of which specific tool -- bash,
+    // view, grep, glob -- was actually invoked). Both are required: without
+    // the wire names here, the model is never offered bash/view/grep/glob as
+    // callable at all; without 'read'/'shell' below, calls to whichever tool
+    // IS offered get permission-rejected.
     const availableTools = new ToolSet()
       .addBuiltIn('bash')
       .addBuiltIn('view')
@@ -200,7 +208,7 @@ async function main() {
       availableTools,
       tools: [auditGhCommandTool] as unknown as SessionPolicy['tools'],
       systemMessage,
-      autoApprovedTools: ['bash', 'view', 'grep', 'glob', RUN_GH_COMMAND_TOOL_NAME],
+      autoApprovedTools: ['read', 'shell', RUN_GH_COMMAND_TOOL_NAME],
     };
     // sessionConfig retains the non-policy fields (plus tools/systemMessage,
     // which runForcedToolTurnUntilTimeout below also needs) that

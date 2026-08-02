@@ -91,7 +91,23 @@ export function createRunGhCommandTool(
       },
       required: ['args'],
     },
-    async ({ args }): Promise<RunGhCommandResult> => {
+    async (rawArgs): Promise<RunGhCommandResult> => {
+      let { args } = rawArgs;
+      // Some models occasionally emit the array as a JSON-encoded string
+      // rather than a real array (observed with smaller/cheaper models).
+      // Recover from that instead of rejecting a call that was otherwise
+      // well-formed.
+      if (typeof args === 'string') {
+        try {
+          const parsed = JSON.parse(args);
+          if (Array.isArray(parsed)) {
+            args = parsed;
+          }
+        } catch {
+          // fall through -- the length/Array.isArray check below will reject it
+        }
+      }
+
       if (!Array.isArray(args) || args.length < 2) {
         const message = `Rejected: gh command must include at least a resource and an action (got ${JSON.stringify(args)}).`;
         console.warn(`[agentGhTool] ${message}`);
