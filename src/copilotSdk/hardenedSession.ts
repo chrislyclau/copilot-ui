@@ -59,6 +59,69 @@ export type HardenedSessionBaseConfig = Omit<SessionConfig, PolicyOwnedConfigKey
  * `derivePermissionHandler` unconditionally reject them regardless of
  * `autoApprovedTools`.
  */
+/**
+ * Maps a built-in tool's `availableTools` wire name to the permission
+ * `kind` the SDK reports for it in a `PermissionRequest` (see
+ * `extractRequestedToolName` above). This is the single source of truth
+ * issue #277 asks for: `availableTools` and `autoApprovedTools` are
+ * different namespaces for built-ins, and every caller needs the same
+ * mapping between them rather than re-deriving it (or getting it wrong).
+ *
+ * Only wire names actually adopted by this codebase are listed --
+ * `bash`/`view`/`grep`/`glob` (see toolCallEnforcement.ts). Extend this map
+ * before wiring up a new built-in tool rather than guessing its kind: an
+ * absent entry falls through `deriveAutoApprovedTools` unchanged, which is
+ * the "wire name in both lists" failure mode issue #277 was filed over.
+ */
+export const BUILTIN_TOOL_PERMISSION_KIND: Readonly<Record<string, string>> = {
+  bash: 'shell',
+  view: 'read',
+  grep: 'read',
+  glob: 'read',
+};
+
+/**
+ * Derives the correct `autoApprovedTools` list from an `availableTools`
+ * list, so callers ask for capabilities once instead of hand-assembling
+ * two namespaces that have to agree (issue #277). Each entry is mapped
+ * through `BUILTIN_TOOL_PERMISSION_KIND` if it names a known built-in;
+ * anything else (custom tool names, MCP tool names, hook names, or an
+ * already-correct kind like `"read"`) is passed through unchanged, since
+ * `extractRequestedToolName` resolves those cases by `toolName` directly
+ * rather than a fixed kind.
+ */
+export function deriveAutoApprovedTools(availableTools: readonly string[]): string[] {
+  const seen = new Set<string>();
+  for (const name of availableTools) {
+    seen.add(BUILTIN_TOOL_PERMISSION_KIND[name] ?? name);
+  }
+  return [...seen];
+}
+
+/**
+ * Warns (does not throw) when `autoApprovedTools` contains a raw built-in
+ * wire name (e.g. `"bash"`) instead of its permission kind (e.g.
+ * `"shell"`) -- the exact silent-misconfiguration case issue #277 was
+ * filed over: `derivePermissionHandler` checks `autoApprovedTools` against
+ * kinds, so a wire name there never matches and every call to that tool is
+ * rejected, with no error pointing at the actual cause. Callers that
+ * intentionally list a custom/MCP/hook tool whose name happens to collide
+ * with a built-in wire name are not expected -- built-in wire names are
+ * reserved -- so this is a plain warning, not a false-positive-prone check.
+ */
+function warnIfAutoApprovedToolsLooksLikeWireNames(policy: SessionPolicy): void {
+  const misconfigured = policy.autoApprovedTools.filter((name) => name in BUILTIN_TOOL_PERMISSION_KIND);
+  if (misconfigured.length > 0) {
+    console.warn(
+      `[hardenedSession] SessionPolicy.autoApprovedTools contains built-in tool wire name(s) ` +
+      `${misconfigured.map((n) => `'${n}'`).join(', ')} -- autoApprovedTools is checked against ` +
+      `permission *kinds*, not wire names (see BUILTIN_TOOL_PERMISSION_KIND / issue #277). ` +
+      `Did you mean ${misconfigured.map((n) => `'${BUILTIN_TOOL_PERMISSION_KIND[n]}'`).join(', ')}? ` +
+      `Consider building autoApprovedTools via deriveAutoApprovedTools(availableTools) instead.`
+    );
+  }
+}
+
 function extractRequestedToolName(req: PermissionRequest): string {
   switch (req.kind) {
     case 'mcp':
@@ -162,6 +225,7 @@ export function deriveSessionConfig(
   autoApproveAll: false;
   onPermissionRequest: (req: PermissionRequest, invocation: { sessionId: string }) => Promise<PermissionRequestResult>;
 } {
+  warnIfAutoApprovedToolsLooksLikeWireNames(policy);
   return {
     availableTools: [...policy.availableTools] as SessionConfig['availableTools'],
     tools: (policy.tools ? [...policy.tools] : []) as SessionConfig['tools'],

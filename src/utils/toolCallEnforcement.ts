@@ -1,5 +1,5 @@
 import { CopilotClient, CopilotSession, SdkProviderConfig as ProviderConfig, SessionConfig, MessageOptions, Tool } from '../copilotSdk/boundary';
-import { registerSessionPolicy, resumeHardenedSession, deleteHardenedSessionPolicy, SessionPolicy } from '../copilotSdk/hardenedSession';
+import { registerSessionPolicy, resumeHardenedSession, deleteHardenedSessionPolicy, deriveAutoApprovedTools, SessionPolicy } from '../copilotSdk/hardenedSession';
 
 /**
  * How much of the model's last assistant message to include when we give up
@@ -347,6 +347,14 @@ export interface ForcedToolTurnOptions<T> {
  * tool in `availableTools` -- matching these functions' pre-#246 behavior of
  * relying on `CopilotClient`'s auto-approve-all resume default -- but scoped
  * to the tools actually allowed for the turn, rather than truly all tools.
+ *
+ * `availableTools` here can include built-in wire names (`bash`/`view`/
+ * `grep`/`glob`), which are a different namespace than the permission
+ * `kind`s `autoApprovedTools` is checked against (issue #277) -- passing
+ * `availableTools` straight through as `autoApprovedTools`, as this used to
+ * do, silently rejected every built-in tool call. `deriveAutoApprovedTools`
+ * maps each wire name to its kind (custom/MCP/hook names pass through
+ * unchanged, since those are matched by name directly).
  */
 function buildResumePolicy(
   availableTools: readonly string[],
@@ -357,7 +365,7 @@ function buildResumePolicy(
     availableTools,
     tools: tools as readonly Tool[] | undefined,
     systemMessage,
-    autoApprovedTools: availableTools,
+    autoApprovedTools: deriveAutoApprovedTools(availableTools),
   };
 }
 
