@@ -74,6 +74,8 @@ Express + Vite/React app wrapping `@github/copilot-sdk`. Streams real SDK events
 
 ### 2.3 Additional Agent Roles & System Outputs
 
+- **File-First Context Delivery (extends §2.1):** Any external reference content pulled into an agent's context — including issues linked/referenced from a PR — is written to a file and passed by path, never concatenated directly into the prompt. This keeps prompt size bounded and lets the agent choose when to read it, rather than paying for unread context on every turn.
+
 - **Committer** — Lightweight, single-shot, conventional commit message generator. Automatically runs upon task completion or checkpointing to produce standardized, structured git commit descriptions. Added alongside Planner, Executor, and Auditor roles.
 - **Groomer** — Spec reconciliation agent. Classification-only role triggered immediately upon detection of a specification version change to identify structural discrepancies and align tasks.
 - **End-of-run Digest** — A generated system artifact (non-agent system output) produced at the end of each orchestration run to summarize execution results, gate statuses, and final outputs.
@@ -137,6 +139,16 @@ To maintain portability and resilience across varying container virtualization e
 
 - **Frontend Blindness:** The user interface displays purely high-level verification outcomes and is strictly forbidden from maintaining state hooks, checkboxes, or payload parameters related to Docker, host bypass, or sandbox mechanisms (e.g., `bypassDocker`).
 - **Transparent Server Routing:** The server-side execution pipeline must handle environment diagnostics out-of-band using `DIAGNOSTIC_MODE` and local capabilities detection. When container engines are unreachable, the backend must transparently fall back to native child-process run-paths without exposing virtual-execution parameters to the frontend interface.
+
+### 5.5 Hardened Session Wrapper (Sole SDK Session Entry Point)
+
+Session creation and resumption are a common source of silent regressions (dropped `systemMessage`, dropped tool-scoping, cache-busting config drift on resume). Rather than spec each pitfall individually, the system closes them structurally with a single choke-point module.
+
+- **SYS-REQ-026:** All `CopilotClient.createSession` and `CopilotClient.resumeSession` calls **shall** be issued exclusively through `src/copilotSdk/hardenedSession.ts`. No other module — including scripts under `scripts/` — may call these SDK methods directly.
+- **SYS-REQ-026a:** Each session's tool policy (`availableTools`, `tools`, `systemMessage`, `autoApprovedTools`) **shall** be stored as an immutable value bound to the session at creation time.
+- **SYS-REQ-026b:** On every resume, for any reason (retry, reconnect, or otherwise), the wrapper **shall** re-derive the full session configuration from the stored policy — never a partial or caller-supplied config — so a resumed session cannot silently diverge from its original tool-scoping or system prompt.
+- **SYS-REQ-026c (Unwanted Behavior):** **If** any module attempts to call `createSession`/`resumeSession` outside the wrapper, **then** this **shall** be caught by lint rule (covering both `src/**` and `scripts/**`), not left to code review alone.
+- _Rationale:_ This supersedes ad hoc handling of resume-time hazards (e.g. dropped `systemMessage`, dropped `onPermissionRequest`) by making them structurally unreachable rather than individually documented and re-discovered per call site.
 
 ---
 
@@ -220,6 +232,11 @@ To maintain portability and resilience across varying container virtualization e
 #### Dynamic Workflow Composition [DEFERRED / VOLATILE]
 
 - **SYS-REQ-018:** The system capability to dynamically compose custom workflow validation gates, timeout thresholds, and retry logic arrays using an LLM Composer agent is **deferred** to Phase 3b.
+
+#### One-Shot & Gate-Loop Session Timeout Policy
+
+- **SYS-REQ-019a:** All one-shot and gate-loop agent turns **shall** run through `runForcedToolTurnUntilTimeout` (not a hand-rolled `sendAndWait`), so a single hard timeout — not a stall-silence heuristic — governs turn duration. This applies uniformly to auditor sessions and standalone scripts (e.g. issue-resolution agents), not just `gateLoop.ts` call sites.
+- _Rationale:_ A flat silence-based stall watchdog can't distinguish a dead connection from a long-but-healthy turn (heavy reasoning, chained tool calls) and was a source of false-positive session resets. The watchdog path is retired, not deleted, in case a genuine stall is ever observed independently of turn duration.
 
 #### Executor History Preservation
 
