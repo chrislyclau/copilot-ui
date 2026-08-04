@@ -206,8 +206,8 @@ export const submitCodeReviewTool = {
               },
               category: {
                 type: "string",
-                enum: ["bug", "security", "performance", "style"],
-                description: "Optional category of the finding."
+                enum: ["bug", "security", "performance", "style", "other"],
+                description: "Category of the finding. Use 'other' when none of bug/security/performance/style applies."
               },
               file: { type: "string", description: "File path the finding applies to." },
               line: { type: "number", description: "Line number in the new version of the file, if applicable." },

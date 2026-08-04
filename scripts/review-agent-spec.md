@@ -104,8 +104,8 @@ modules should be brought into compliance with, not a record of current behavior
 ## 5. Finding Classification
 
 - **U-5.1** Each finding shall carry a `severity` of `blocking`, `suggestion`, or `nit`.
-- **O-5.2** Each finding may carry an optional `category` of `bug`, `security`, `performance`,
-  or `style`, independent of `severity`.
+- **U-5.2** Each finding shall carry a `category` of `bug`, `security`, `performance`, `style`,
+  or `other` (when none of the preceding apply), independent of `severity`.
 - **U-5.3** Each finding shall carry `file`, optional `line`, and `message`.
 - **U-5.4** The system shall instruct the model to keep each finding's `message` concise (target:
   under ~150 words) unless a code snippet is necessary for clarity.

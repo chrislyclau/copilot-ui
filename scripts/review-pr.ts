@@ -32,7 +32,7 @@ import {
 
 interface CodeReviewFinding {
   severity: 'blocking' | 'suggestion' | 'nit';
-  category?: 'bug' | 'security' | 'performance' | 'style';
+  category: 'bug' | 'security' | 'performance' | 'style' | 'other';
   file: string;
   line?: number;
   message: string;
@@ -84,12 +84,15 @@ function resolveDiffRange(
   baseSha: string,
   headSha: string,
   previousState: ReviewState | null,
-): { range: string; incremental: boolean } {
+): { range: string; incremental: boolean; nothingToReview?: true } {
   if (!previousState) {
     return { range: `${baseSha}...${headSha}`, incremental: false };
   }
   if (previousState.lastReviewedSha === headSha) {
-    return { range: `${baseSha}...${headSha}`, incremental: false };
+    // Already reviewed this exact head -- nothing new since last time, so
+    // don't fall back to a full base...head diff (that would repost the
+    // entire review on every unchanged re-run).
+    return { range: `${baseSha}...${headSha}`, incremental: false, nothingToReview: true };
   }
   if (!isCommitReachable(previousState.lastReviewedSha)) {
     console.warn(
@@ -152,7 +155,7 @@ Read \`.review-context/comments.md\` to determine if previously reported blockin
 - Treat a prior finding as still open unless the comment history and current diff together indicate it was addressed — i.e., silence in the incremental diff about a prior finding is not evidence of resolution.
 - Do not re-raise a prior finding as newly reported once you judge it addressed; instead, acknowledge it as 'resolved' in the finding output.
 - When a fix introduced in response to prior feedback is found to have introduced a new issue that did not previously exist, raise it as a new finding (regression check).
-- Only set the 'status' field to 'still-open' or 'resolved' on findings that correspond to a prior finding from the comment history.`
+- The 'status' field is always required: default it to 'new', and only use 'still-open' or 'resolved' when the finding corresponds to a prior finding from the comment history.`
     : `This is a full review of the entire PR diff in \`.review-context/diff.patch\`.`}
 
 You must not answer conversationally and must strictly invoke 'submit_code_review'.
@@ -182,7 +185,11 @@ async function main() {
   const comments = fetchComments(prNumber);
 
   const previousState = loadPreviousReviewState(prNumber, comments);
-  const { range, incremental } = resolveDiffRange(baseSha, headSha, previousState);
+  const { range, incremental, nothingToReview } = resolveDiffRange(baseSha, headSha, previousState);
+  if (nothingToReview) {
+    console.log(`Head ${headSha} already reviewed, nothing new to review, skipping.`);
+    process.exit(0);
+  }
   const diff = getFilteredDiff(range);
   if (!diff.trim()) {
     console.log(`No diff to review for range ${range}, skipping.`);
