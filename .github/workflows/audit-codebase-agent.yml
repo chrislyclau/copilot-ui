@@ -7,6 +7,10 @@ on:
         description: 'Optional comma-separated spec doc path(s) to audit against (e.g. roadmap-spec.md,scripts/review-agent-spec.md). Leave blank to auto-discover *-spec.md files.'
         required: false
         type: string
+      prompt:
+        description: 'Optional extra instructions for the auditor, e.g. which area to focus on or what to skip.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -49,6 +53,7 @@ jobs:
           REVIEWER_PROVIDER: ${{ vars.REVIEWER_PROVIDER }}
           REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
           AUDIT_SPEC_PATHS: ${{ inputs.spec_paths }}
+          AUDIT_PROMPT: ${{ inputs.prompt }}
           CONTAINER_NAME: applet-${{ github.run_id }}
           AI_STUDIO: "false"
         run: npm run agent:audit
