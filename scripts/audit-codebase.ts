@@ -10,7 +10,7 @@ import { writeFileSync, mkdirSync, existsSync, copyFileSync, readdirSync, rmSync
 import { join, basename } from 'node:path';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
-import { getReviewerExecutionConfig } from '../src/utils/auditorHelper';
+import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction } from '../src/utils/auditorHelper';
 import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
 import { CopilotClient, type SessionConfig, type SdkProviderConfig, ToolSet } from '../src/copilotSdk/boundary';
 import { createHardenedSession, type SessionPolicy } from '../src/copilotSdk/hardenedSession';
@@ -147,6 +147,8 @@ Start by reading \`${CONTEXT_DIR}/README.md\` for a manifest of what's available
 **Finding-Admission Gate (Strict Rules) -- reused from the PR reviewer's discipline:**
 - A finding may only be reported when you can answer ALL of the following: 1. Where does the issue occur (file/line)? 2. Why is it a problem? 3. How does the current code exhibit it? 4. What input, state, or execution path would trigger it (or, for spec drift, which spec requirement is violated)? If you cannot answer all four, DO NOT report it.
 - Prefer fewer, well-evidenced findings over many speculative ones; merge closely related findings into a single finding.
+
+${crossArtifactDisagreementInstruction()}
 
 **When you are done exploring:**
 Call "${RUN_GH_COMMAND_TOOL_NAME}" with a single "issue create" call. Structure the body with a one-paragraph summary followed by a findings list, each finding tagged with a severity (blocking/suggestion/nit) and a file/line reference where applicable. If you found nothing actionable in either dimension, still file the issue and say so plainly -- do not fabricate findings to have something to report, and do not skip filing the issue.

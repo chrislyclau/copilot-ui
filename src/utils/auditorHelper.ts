@@ -203,6 +203,18 @@ export function selectRotatingAuditorConfig(rotationIndex: number, apiKey?: stri
  * the in-loop spec auditor.
  * Throws a loud error if no API key is available for the required provider.
  */
+/**
+ * Shared instruction, reused by both the PR-reviewer and codebase-audit agent
+ * prompts: when checking a code change against spec requirements, an agent
+ * must not resolve disagreements between authoritative artifacts on its own
+ * -- it must escalate by reporting a blocking finding that plainly names
+ * which artifacts say what (see issue #292).
+ */
+export function crossArtifactDisagreementInstruction(): string {
+  return `**Cross-Artifact Disagreement:**
+- When checking a code change against spec requirements, if two or more of {spec doc, JSON schema, TS interface, system prompt text} disagree about the same requirement, do not resolve the disagreement yourself (e.g. by picking whichever you encountered first, or by recommending which artifact should change). Report it as a 'blocking' finding that plainly names which artifacts say what, and stop there.`;
+}
+
 export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
   return resolveExecutionConfig(DEFAULT_ROLES_CONFIG.reviewer, 'reviewer', apiKey);
 }

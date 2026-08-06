@@ -11,7 +11,7 @@ import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime.ts';
-import { getReviewerExecutionConfig, executeAuditSession } from '../src/utils/auditorHelper.ts';
+import { getReviewerExecutionConfig, executeAuditSession, crossArtifactDisagreementInstruction } from '../src/utils/auditorHelper.ts';
 import { FORCED_TOOL_TURN_HARD_TIMEOUT_MS } from '../src/utils/toolCallEnforcement.ts';
 import { submitCodeReviewTool as baseSubmitCodeReviewTool } from '../src/config/tools.ts';
 import { getFilteredDiff } from './diffFilter';
@@ -143,6 +143,8 @@ Compliance information is located in AGENTS.md and README.md.
 - If the PR consists primarily of code movement/refactoring, limit findings to newly introduced bugs, regressions, or meaningful performance problems.
 - DO NOT raise style/preference findings unless they create a real readability, consistency, or maintenance problem, or violate an established repo standard.
 
+
+${crossArtifactDisagreementInstruction()}
 
 **Classification and Output Rules:**
 - Keep each finding's message concise (target: under ~150 words) unless a code snippet is necessary for clarity.
