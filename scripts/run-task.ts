@@ -9,6 +9,7 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { join, resolve } from "node:path";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { app, setActiveOpenRouterSessionId } from "../src/serverRuntime.ts";
 import {
     executeAuditSession,
@@ -17,9 +18,9 @@ import {
 import { FORCED_TOOL_TURN_HARD_TIMEOUT_MS } from "../src/utils/toolCallEnforcement.ts";
 
 interface Task {
-    /** Zero-based line index in tasks.md where this task appears. */
-    readonly lineIndex: number;
-    /** The task description text (without the checkbox prefix). */
+    /** Zero-based index into the parsed tasks array. */
+    readonly taskIndex: number;
+    /** The task description text. */
     readonly description: string;
 }
 
@@ -90,35 +91,32 @@ function stopProviderProxy(server: Server): Promise<void> {
 }
 
 /**
- * Parse tasks.md and return all uncompleted tasks (`- [ ] ...` lines).
+ * Parse tasks.md (YAML) and return all pending tasks.
  */
 function parseUncompletedTasks(content: string): readonly Task[] {
+    const doc = parseYaml(content) as { tasks?: Array<{ status?: string; description?: string }> };
+    const raw = doc?.tasks ?? [];
     const tasks: Task[] = [];
-    const lines = content.split("\n");
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (line === undefined) continue;
-        const match = line.match(/^(\s*)-\s+\[ \]\s+(.+)$/);
-        const description = match?.[2];
-        if (match && description !== undefined) {
-            tasks.push({ lineIndex: i, description: description.trim() });
+    for (let i = 0; i < raw.length; i++) {
+        const entry = raw[i];
+        if (entry?.status === "pending" && typeof entry.description === "string") {
+            tasks.push({ taskIndex: i, description: entry.description.trim() });
         }
     }
     return tasks;
 }
 
 /**
- * Mark a task as completed in tasks.md by replacing `- [ ]` with `- [x]`
- * at the given line index.
+ * Mark a task as completed in tasks.md by updating its status field in the YAML.
  */
-function markTaskCompleted(tasksFilePath: string, lineIndex: number): void {
+function markTaskCompleted(tasksFilePath: string, taskIndex: number): void {
     const content = readFileSync(tasksFilePath, "utf8");
-    const lines = content.split("\n");
-    const line = lines[lineIndex];
-    if (line !== undefined) {
-        lines[lineIndex] = line.replace(/^(\s*-\s+)\[ \]/, "$1[x]");
+    const doc = parseYaml(content) as { tasks?: Array<{ status?: string; description?: string }> };
+    const entry = doc?.tasks?.[taskIndex];
+    if (entry !== undefined) {
+        entry.status = "completed";
     }
-    writeFileSync(tasksFilePath, lines.join("\n"), "utf8");
+    writeFileSync(tasksFilePath, stringifyYaml(doc), "utf8");
 }
 
 function buildSystemPrompt(task: Task, workspaceDir: string): string {
@@ -182,7 +180,7 @@ async function main() {
         process.exit(0);
     }
     console.log(
-        `[run-task] Picked task (line ${task.lineIndex + 1}): ${task.description}`,
+        `[run-task] Picked task (index ${task.taskIndex}): ${task.description.slice(0, 80)}...`,
     );
 
     const contextDir = join(process.cwd(), ".task-context");
@@ -250,7 +248,7 @@ async function main() {
     }
 
     if (result.status === "completed") {
-        markTaskCompleted(tasksFilePath, task.lineIndex);
+        markTaskCompleted(tasksFilePath, task.taskIndex);
         console.log(`[run-task] Marked task as completed in ${tasksFilePath}`);
     } else {
         console.warn(
