@@ -36,7 +36,7 @@ interface CodeReviewFinding {
   file: string;
   line?: number;
   message: string;
-  status?: 'new' | 'still-open' | 'resolved';
+  status: 'new' | 'still-open' | 'resolved';
 }
 
 interface CodeReviewResult {

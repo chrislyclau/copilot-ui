@@ -68,8 +68,11 @@ export function loadPreviousReviewState(prNumber: string, comments?: GhComment[]
   const botLogin = getBotLogin();
   for (let i = comments.length - 1; i >= 0; i--) {
     const comment = comments[i];
-    if(!comment) {
-      throw new Error("[review-pr] Unexpected: comment is falsy");
+    if (!comment) {
+      // Malformed entry in the comments array -- skip it rather than hard
+      // erroring, per this function's documented contract (see doc comment
+      // above): callers treat null as "do a full review", never a crash.
+      continue;
     }
     if (normalizeBotLogin(comment.author?.login) !== normalizeBotLogin(botLogin)) continue;
     const state = parseStateMarker(comment.body);
