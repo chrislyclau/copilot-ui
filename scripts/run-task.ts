@@ -94,12 +94,17 @@ function stopProviderProxy(server: Server): Promise<void> {
  * Parse tasks.md (YAML) and return all pending tasks.
  */
 function parseUncompletedTasks(content: string): readonly Task[] {
-    const doc = parseYaml(content) as { tasks?: Array<{ status?: string; description?: string }> };
+    const doc = parseYaml(content) as {
+        tasks?: Array<{ status?: string; description?: string }>;
+    };
     const raw = doc?.tasks ?? [];
     const tasks: Task[] = [];
     for (let i = 0; i < raw.length; i++) {
         const entry = raw[i];
-        if (entry?.status === "pending" && typeof entry.description === "string") {
+        if (
+            entry?.status === "pending" &&
+            typeof entry.description === "string"
+        ) {
             tasks.push({ taskIndex: i, description: entry.description.trim() });
         }
     }
@@ -111,7 +116,9 @@ function parseUncompletedTasks(content: string): readonly Task[] {
  */
 function markTaskCompleted(tasksFilePath: string, taskIndex: number): void {
     const content = readFileSync(tasksFilePath, "utf8");
-    const doc = parseYaml(content) as { tasks?: Array<{ status?: string; description?: string }> };
+    const doc = parseYaml(content) as {
+        tasks?: Array<{ status?: string; description?: string }>;
+    };
     const entry = doc?.tasks?.[taskIndex];
     if (entry !== undefined) {
         entry.status = "completed";
@@ -198,7 +205,8 @@ async function main() {
     const userPrompt = buildUserPrompt(task);
 
     const executionConfig = getReviewerExecutionConfig();
-    const proxyServer = await startProviderProxy();
+    const needsProxy = executionConfig.providerType !== "copilot-native";
+    const proxyServer = needsProxy ? await startProviderProxy() : null;
     let result: TaskResult | null = null;
     let sessionId: string | undefined;
 
@@ -218,10 +226,16 @@ async function main() {
                 sessionId = id;
                 setActiveOpenRouterSessionId(id);
             },
+            undefined,
+            (events) => {
+                console.log("\n[run-task] --- session history ---");
+                console.log(JSON.stringify(events, null, 2));
+                console.log("\n[run-task] --- end of history ---\n");
+            },
         );
     } finally {
         setActiveOpenRouterSessionId(undefined);
-        await stopProviderProxy(proxyServer);
+        if (proxyServer) await stopProviderProxy(proxyServer);
     }
 
     if (sessionId) {

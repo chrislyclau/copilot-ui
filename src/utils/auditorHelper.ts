@@ -1,7 +1,19 @@
-import { runForcedToolTurnUntilTimeout } from './toolCallEnforcement';
-import { CopilotClient, SdkProviderConfig, SessionConfig, CopilotSession, PermissionRequest, PermissionRequestResult } from '../copilotSdk/boundary';
-import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
-import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig, selectFromAuditorPool, ModelProviderConfig } from '../config/models';
+import {
+    DEFAULT_ROLES_CONFIG,
+    getAuditorTierConfig,
+    ModelProviderConfig,
+    selectFromAuditorPool,
+} from "../config/models";
+import {
+    CopilotClient,
+    CopilotSession,
+    PermissionRequest,
+    PermissionRequestResult,
+    SdkProviderConfig,
+    SessionConfig,
+} from "../copilotSdk/boundary";
+import { ExecutionConfig, ProviderRegistry } from "./providerRegistry";
+import { runForcedToolTurnUntilTimeout } from "./toolCallEnforcement";
 
 /**
  * Tool-usage guidance carried over from the base CLI system prompt.
@@ -63,11 +75,11 @@ Fast file pattern matching that works with any codebase size. Supports standard 
 </tools>`;
 
 export interface ToolDefinition {
-  readonly function: {
-    readonly name: string;
-    readonly description: string;
-    readonly parameters: Record<string, unknown>;
-  };
+    readonly function: {
+        readonly name: string;
+        readonly description: string;
+        readonly parameters: Record<string, unknown>;
+    };
 }
 
 /**
@@ -76,14 +88,14 @@ export interface ToolDefinition {
  * enforcement primitive at the session or message level.
  */
 export interface ResponseRequirement {
-  /**
-   * Optional worked example of valid tool-call arguments (as a JSON string).
-   * Weaker models sometimes end their turn by writing a text pseudo-call
-   * (e.g. `call:toolName{...}`) instead of a real function/tool call. Re-showing
-   * a concrete example on retry gives the model something to pattern-match
-   * against instead of just being told again to "call the tool".
-   */
-  readonly toolCallExample?: string;
+    /**
+     * Optional worked example of valid tool-call arguments (as a JSON string).
+     * Weaker models sometimes end their turn by writing a text pseudo-call
+     * (e.g. `call:toolName{...}`) instead of a real function/tool call. Re-showing
+     * a concrete example on retry gives the model something to pattern-match
+     * against instead of just being told again to "call the tool".
+     */
+    readonly toolCallExample?: string;
 }
 
 /**
@@ -94,33 +106,37 @@ export interface ResponseRequirement {
  * and any future role -- keeps the provider/API-key resolution rules in one
  * place instead of copy-pasted per role.
  */
-function resolveExecutionConfig(roleConfig: ModelProviderConfig, roleLabel: string, apiKey?: string): ExecutionConfig {
-  const provider = roleConfig.provider;
-  let keyToUse = apiKey;
-  let envVarName = 'GEMINI_API_KEY';
-  if (!keyToUse) {
-    if (provider === 'gemini') {
-      keyToUse = process.env.GEMINI_API_KEY;
-      envVarName = 'GEMINI_API_KEY';
-    } else if (provider === 'anthropic') {
-      keyToUse = process.env.ANTHROPIC_API_KEY;
-      envVarName = 'ANTHROPIC_API_KEY';
-    } else if (provider === 'openai') {
-      keyToUse = process.env.OPENAI_API_KEY;
-      envVarName = 'OPENAI_API_KEY';
-    } else if (provider === 'openrouter') {
-      keyToUse = process.env.OPENROUTER_API_KEY;
-      envVarName = 'OPENROUTER_API_KEY';
+function resolveExecutionConfig(
+    roleConfig: ModelProviderConfig,
+    roleLabel: string,
+    apiKey?: string,
+): ExecutionConfig {
+    const provider = roleConfig.provider;
+    let keyToUse = apiKey;
+    let envVarName = "GEMINI_API_KEY";
+    if (!keyToUse) {
+        if (provider === "gemini") {
+            keyToUse = process.env.GEMINI_API_KEY;
+            envVarName = "GEMINI_API_KEY";
+        } else if (provider === "anthropic") {
+            keyToUse = process.env.ANTHROPIC_API_KEY;
+            envVarName = "ANTHROPIC_API_KEY";
+        } else if (provider === "openai") {
+            keyToUse = process.env.OPENAI_API_KEY;
+            envVarName = "OPENAI_API_KEY";
+        } else if (provider === "openrouter") {
+            keyToUse = process.env.OPENROUTER_API_KEY;
+            envVarName = "OPENROUTER_API_KEY";
+        }
     }
-  }
 
-  if (!keyToUse && provider !== 'copilot-native' && provider !== 'local') {
-    throw new Error(
-      `Missing API key for ${roleLabel} provider "${provider}". Expected ${envVarName} to be set.`,
-    );
-  }
-  const registry = new ProviderRegistry(keyToUse);
-  return registry.getExecutionConfig(roleConfig);
+    if (!keyToUse && provider !== "copilot-native" && provider !== "local") {
+        throw new Error(
+            `Missing API key for ${roleLabel} provider "${provider}". Expected ${envVarName} to be set.`,
+        );
+    }
+    const registry = new ProviderRegistry(keyToUse);
+    return registry.getExecutionConfig(roleConfig);
 }
 
 /**
@@ -136,21 +152,24 @@ function resolveExecutionConfig(roleConfig: ModelProviderConfig, roleLabel: stri
  * (Issue 79 / RM-REQ-033): the compliance-audit operation's tiering must
  * not be conflated with the general auditor's rotation pool.
  */
-export function getAuditorExecutionConfig(apiKey?: string, tierIndex: number = 0): ExecutionConfig {
-  const auditorConfig = getAuditorTierConfig(tierIndex);
-  return resolveExecutionConfig(auditorConfig, 'auditor', apiKey);
+export function getAuditorExecutionConfig(
+    apiKey?: string,
+    tierIndex: number = 0,
+): ExecutionConfig {
+    const auditorConfig = getAuditorTierConfig(tierIndex);
+    return resolveExecutionConfig(auditorConfig, "auditor", apiKey);
 }
 
 export interface RotatingAuditorSelection {
-  readonly executionConfig: ExecutionConfig;
-  /** Number of models currently configured in the pool. */
-  readonly poolSize: number;
-  /** The pool index actually selected for this call (rotationIndex normalized into pool bounds). */
-  readonly selectedIndex: number;
-  /** Value to persist as the rotation index for the *next* call (RM-REQ-031: session-persisted, deterministic). */
-  readonly nextRotationIndex: number;
-  /** True when the configured pool has only one model (RM-REQ-032: warn, don't block). */
-  readonly singleModelPool: boolean;
+    readonly executionConfig: ExecutionConfig;
+    /** Number of models currently configured in the pool. */
+    readonly poolSize: number;
+    /** The pool index actually selected for this call (rotationIndex normalized into pool bounds). */
+    readonly selectedIndex: number;
+    /** Value to persist as the rotation index for the *next* call (RM-REQ-031: session-persisted, deterministic). */
+    readonly nextRotationIndex: number;
+    /** True when the configured pool has only one model (RM-REQ-032: warn, don't block). */
+    readonly singleModelPool: boolean;
 }
 
 /**
@@ -167,33 +186,42 @@ export interface RotatingAuditorSelection {
  * returned flags rather than logged here directly, so callers can route
  * them through whatever logger/session-event mechanism they already use.
  */
-export function selectRotatingAuditorConfig(rotationIndex: number, apiKey?: string): RotatingAuditorSelection {
-  const pool = DEFAULT_ROLES_CONFIG.auditorPool;
-  if (pool.length === 0) {
-    throw new Error('Auditor pool is empty');
-  }
-  const normalizedIndex = ((rotationIndex % pool.length) + pool.length) % pool.length;
-  const auditorConfig = selectFromAuditorPool(normalizedIndex);
+export function selectRotatingAuditorConfig(
+    rotationIndex: number,
+    apiKey?: string,
+): RotatingAuditorSelection {
+    const pool = DEFAULT_ROLES_CONFIG.auditorPool;
+    if (pool.length === 0) {
+        throw new Error("Auditor pool is empty");
+    }
+    const normalizedIndex =
+        ((rotationIndex % pool.length) + pool.length) % pool.length;
+    const auditorConfig = selectFromAuditorPool(normalizedIndex);
 
-  // The `apiKey` passed in here originates upstream as the Implementor's key,
-  // which is always a Gemini key (gateLoop's `keyToUse = apiKey ||
-  // process.env.GEMINI_API_KEY`). For a multi-provider pool
-  // (e.g. AUDITOR_POOL=gemini:...,openai:gpt-4o-mini), forwarding that key
-  // verbatim into resolveExecutionConfig for a non-Gemini selection would
-  // send the wrong provider's API key and break auth. Only forward it when
-  // the selected pool entry is actually a Gemini entry; otherwise let
-  // resolveExecutionConfig fall back to that provider's own env var
-  // (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.).
-  const keyForSelectedProvider = auditorConfig.provider === 'gemini' ? apiKey : undefined;
-  const executionConfig = resolveExecutionConfig(auditorConfig, 'auditor pool', keyForSelectedProvider);
+    // The `apiKey` passed in here originates upstream as the Implementor's key,
+    // which is always a Gemini key (gateLoop's `keyToUse = apiKey ||
+    // process.env.GEMINI_API_KEY`). For a multi-provider pool
+    // (e.g. AUDITOR_POOL=gemini:...,openai:gpt-4o-mini), forwarding that key
+    // verbatim into resolveExecutionConfig for a non-Gemini selection would
+    // send the wrong provider's API key and break auth. Only forward it when
+    // the selected pool entry is actually a Gemini entry; otherwise let
+    // resolveExecutionConfig fall back to that provider's own env var
+    // (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.).
+    const keyForSelectedProvider =
+        auditorConfig.provider === "gemini" ? apiKey : undefined;
+    const executionConfig = resolveExecutionConfig(
+        auditorConfig,
+        "auditor pool",
+        keyForSelectedProvider,
+    );
 
-  return {
-    executionConfig,
-    poolSize: pool.length,
-    selectedIndex: normalizedIndex,
-    nextRotationIndex: rotationIndex + 1,
-    singleModelPool: pool.length <= 1,
-  };
+    return {
+        executionConfig,
+        poolSize: pool.length,
+        selectedIndex: normalizedIndex,
+        nextRotationIndex: rotationIndex + 1,
+        singleModelPool: pool.length <= 1,
+    };
 }
 /**
  * Shared instruction, reused by both the PR-reviewer and codebase-audit agent
@@ -203,7 +231,7 @@ export function selectRotatingAuditorConfig(rotationIndex: number, apiKey?: stri
  * which artifacts say what (see issue #292).
  */
 export function crossArtifactDisagreementInstruction(): string {
-  return `**Cross-Artifact Disagreement:**
+    return `**Cross-Artifact Disagreement:**
 - When checking a code change against spec requirements, if two or more of {spec doc, JSON schema, TS interface, system prompt text} disagree about the same requirement, do not resolve the disagreement yourself (e.g. by picking whichever you encountered first, or by recommending which artifact should change). Report it as a 'blocking' finding that plainly names which artifacts say what, and stop there.`;
 }
 /**
@@ -214,7 +242,11 @@ export function crossArtifactDisagreementInstruction(): string {
  * Throws a loud error if no API key is available for the required provider.
  */
 export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
-  return resolveExecutionConfig(DEFAULT_ROLES_CONFIG.reviewer, 'reviewer', apiKey);
+    return resolveExecutionConfig(
+        DEFAULT_ROLES_CONFIG.reviewer,
+        "reviewer",
+        apiKey,
+    );
 }
 
 /**
@@ -230,74 +262,100 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
  * (system prompt + retry nudge with a worked example).
  */
 export function buildAuditorSessionSettings(
-  executionConfig: ExecutionConfig,
-  systemPrompt: string,
-  tool: ToolDefinition,
-  onResult: (result: unknown) => void
+    executionConfig: ExecutionConfig,
+    systemPrompt: string,
+    tool: ToolDefinition,
+    onResult: (result: unknown) => void,
 ) {
-  const toolName = tool.function.name;
-  return {
-    model: executionConfig.model,
-    ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
-    // Requests incremental reasoning-summary streaming (assistant.reasoning_delta
-    // events) for models that support it. Without this, a model's thinking phase
-    // produces no SDK events at all until it finishes -- observed in practice as
-    // single generations running 60-170s+ of near-total silence (almost entirely
-    // reasoning tokens) that our stall watchdog in toolCallEnforcement.ts
-    // (STALL_TIMEOUT_MS = 90s of total SDK silence) can't distinguish from a
-    // genuinely dead connection. "concise" gives the watchdog a periodic
-    // heartbeat during long reasoning turns without the token overhead of
-    // "detailed". Models that don't support reasoning summaries ignore this.
-    reasoningSummary: 'concise' as const,
-    // Explicit `replace` with our curated content -- NOT left unset. An
-    // unset/absent systemMessage makes the SDK fall back to its own full
-    // default `copilot-cli` system prompt (task/sub-agent, sql,
-    // report_intent, submit_code_review docs, etc.), which is exactly what
-    // TOOL_USAGE_BOILERPLATE's doc comment above says this session
-    // deliberately excludes. See issue #208: the original bug was that
-    // resumeSession()'s `resumeConfig` (toolCallEnforcement.ts) didn't
-    // carry this field, not that the field itself was wrong -- so the fix
-    // is to also pass it on resume, not drop it. This is a general SDK
-    // hazard, not specific to this session -- see AGENTS.md ("resumeSession()
-    // drops the system prompt unless you re-pass it") for the rule any
-    // future resumeSession() caller (e.g. run-issue-task.ts) must follow.
-    systemMessage: {
-        mode: "replace",
-        content: `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}`,
-    },
-    tools: [
-      {
-        name: toolName,
-        description: tool.function.description,
-        parameters: tool.function.parameters,
-        handler: async (args: unknown) => {
-          onResult(args);
-          return { status: 'received' };
-        }
-      }
-    ],
-    // NOTE: this onPermissionRequest is currently unreachable in practice --
-    // CopilotClient.createSession/resumeSession (src/copilotSdk/boundary.ts)
-    // default `autoApproveAll` to `true`, which replaces whatever
-    // onPermissionRequest is passed here with an unconditional approve-once.
-    // Actual tool-use narrowing happens via the `availableTools` restriction
-    // applied on retry in executeAuditSession, not via this callback. Kept
-    // here (rather than removed) so it takes effect automatically if a caller
-    // ever passes `autoApproveAll: false`.
-    onPermissionRequest: async (req: PermissionRequest): Promise<PermissionRequestResult> => {
-      const record = req as unknown as Record<string, unknown>;
-      const requestedTool = (record.toolName as string | undefined) || 
-                            (record.name as string | undefined) || 
-                            (Array.isArray(record.toolCalls) && record.toolCalls[0] && typeof record.toolCalls[0] === 'object'
-                              ? ((record.toolCalls[0] as Record<string, unknown>).function as Record<string, unknown> | undefined)?.name as string | undefined
-                              : undefined);
-      const allowed = !requestedTool || requestedTool === toolName || 
-                      (Array.isArray(record.toolCalls) && record.toolCalls.every((tc: unknown) => 
-                        tc && typeof tc === 'object' && ((tc as Record<string, unknown>).function as Record<string, unknown> | undefined)?.name === toolName));
-      return allowed ? { kind: 'approve-once' } : { kind: 'reject', feedback: 'Auditor sessions must not execute tools.' };
-    },
-    streaming: false,
-  };
+    const toolName = tool.function.name;
+    return {
+        model: executionConfig.model,
+        ...(executionConfig.provider
+            ? { provider: executionConfig.provider as SdkProviderConfig }
+            : {}),
+        // Requests incremental reasoning-summary streaming (assistant.reasoning_delta
+        // events) for models that support it. Without this, a model's thinking phase
+        // produces no SDK events at all until it finishes -- observed in practice as
+        // single generations running 60-170s+ of near-total silence (almost entirely
+        // reasoning tokens) that our stall watchdog in toolCallEnforcement.ts
+        // (STALL_TIMEOUT_MS = 90s of total SDK silence) can't distinguish from a
+        // genuinely dead connection. "concise" gives the watchdog a periodic
+        // heartbeat during long reasoning turns without the token overhead of
+        // "detailed". Models that don't support reasoning summaries ignore this.
+        reasoningSummary: "concise" as const,
+        // Explicit `replace` with our curated content -- NOT left unset. An
+        // unset/absent systemMessage makes the SDK fall back to its own full
+        // default `copilot-cli` system prompt (task/sub-agent, sql,
+        // report_intent, submit_code_review docs, etc.), which is exactly what
+        // TOOL_USAGE_BOILERPLATE's doc comment above says this session
+        // deliberately excludes. See issue #208: the original bug was that
+        // resumeSession()'s `resumeConfig` (toolCallEnforcement.ts) didn't
+        // carry this field, not that the field itself was wrong -- so the fix
+        // is to also pass it on resume, not drop it. This is a general SDK
+        // hazard, not specific to this session -- see AGENTS.md ("resumeSession()
+        // drops the system prompt unless you re-pass it") for the rule any
+        // future resumeSession() caller (e.g. run-issue-task.ts) must follow.
+        systemMessage: {
+            mode: "replace",
+            content: `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}`,
+        },
+        tools: [
+            {
+                name: toolName,
+                description: tool.function.description,
+                parameters: tool.function.parameters,
+                handler: async (args: unknown) => {
+                    onResult(args);
+                    return { status: "received" };
+                },
+            },
+        ],
+        // NOTE: this onPermissionRequest is currently unreachable in practice --
+        // CopilotClient.createSession/resumeSession (src/copilotSdk/boundary.ts)
+        // default `autoApproveAll` to `true`, which replaces whatever
+        // onPermissionRequest is passed here with an unconditional approve-once.
+        // Actual tool-use narrowing happens via the `availableTools` restriction
+        // applied on retry in executeAuditSession, not via this callback. Kept
+        // here (rather than removed) so it takes effect automatically if a caller
+        // ever passes `autoApproveAll: false`.
+        onPermissionRequest: async (
+            req: PermissionRequest,
+        ): Promise<PermissionRequestResult> => {
+            const record = req as unknown as Record<string, unknown>;
+            const requestedTool =
+                (record.toolName as string | undefined) ||
+                (record.name as string | undefined) ||
+                (Array.isArray(record.toolCalls) &&
+                record.toolCalls[0] &&
+                typeof record.toolCalls[0] === "object"
+                    ? ((
+                          (record.toolCalls[0] as Record<string, unknown>)
+                              .function as Record<string, unknown> | undefined
+                      )?.name as string | undefined)
+                    : undefined);
+            const allowed =
+                !requestedTool ||
+                requestedTool === toolName ||
+                (Array.isArray(record.toolCalls) &&
+                    record.toolCalls.every(
+                        (tc: unknown) =>
+                            tc &&
+                            typeof tc === "object" &&
+                            (
+                                (tc as Record<string, unknown>).function as
+                                    | Record<string, unknown>
+                                    | undefined
+                            )?.name === toolName,
+                    ));
+            return allowed
+                ? { kind: "approve-once" }
+                : {
+                      kind: "reject",
+                      feedback: "Auditor sessions must not execute tools.",
+                  };
+        },
+        streaming: false,
+    };
 }
 
 /**
@@ -306,83 +364,115 @@ export function buildAuditorSessionSettings(
  * calling the target tool.
  */
 export async function executeAuditSession<T>(
-  workingDirectory: string,
-  executionConfig: ExecutionConfig,
-  systemPrompt: string,
-  tool: ToolDefinition,
-  userPrompt: string,
-  responseRequirements: ResponseRequirement,
-  abortSignal?: AbortSignal,
-  timeoutMs: number = 300000,
-  onSessionId?: (sessionId: string) => void,
-  maxRetries: number = 2
+    workingDirectory: string,
+    executionConfig: ExecutionConfig,
+    systemPrompt: string,
+    tool: ToolDefinition,
+    userPrompt: string,
+    responseRequirements: ResponseRequirement,
+    abortSignal?: AbortSignal,
+    timeoutMs: number = 300000,
+    onSessionId?: (sessionId: string) => void,
+    maxRetries: number = 2,
+    onHistory?: (events: readonly unknown[]) => void,
 ): Promise<T | null> {
-  const client = new CopilotClient({
-    workingDirectory,
-    logLevel: 'none',
-    useLoggedInUser: false,
-  });
-  const toolName = tool.function.name;
-  let result: T | null = null;
-  let lastAssistantText = '';
-  let sessionId: string | undefined;
-
-  try {
-    try {
-      await client.start();
-    } catch (e) {
-      console.warn(`[executeAuditSession] client.start() failed: ${e}`);
-      throw e;
-    }
-
-    const sessionSettings = buildAuditorSessionSettings(
-      executionConfig,
-      systemPrompt,
-      tool,
-      (args) => { result = args as T; }
-    );
-
-    let session: CopilotSession;
-    try {
-      // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
-      session = await client.createSession(sessionSettings as SessionConfig & { autoApproveAll?: boolean });
-    } catch (e) {
-      console.warn(`[executeAuditSession] createSession() failed: ${e}`);
-      throw e;
-    }
-    sessionId = session.sessionId;
-    onSessionId?.(session.sessionId);
-
-    const turnResult = await runForcedToolTurnUntilTimeout(session, executionConfig, toolName, userPrompt, {
-      client,
-      abortSignal,
-      timeoutMs,
-      maxRetries,
-      getResult: () => result,
-      tools: sessionSettings.tools,
-      systemMessage: sessionSettings.systemMessage as SessionConfig['systemMessage'],
-      responseRequirements,
-      onSessionId: (id) => {
-        sessionId = id;
-        onSessionId?.(id);
-      },
+    const client = new CopilotClient({
+        workingDirectory,
+        logLevel: "none",
+        // copilot-native has no custom provider config, so the SDK must authenticate
+        // via the logged-in user. All other providers supply their own credentials
+        // via executionConfig.provider and do not need the logged-in user.
+        useLoggedInUser: executionConfig.providerType === "copilot-native",
     });
-    
-    result = turnResult.result;
-    
+    const toolName = tool.function.name;
+    let result: T | null = null;
+    let lastAssistantText = "";
+    let sessionId: string | undefined;
+
     try {
-      await turnResult.session.disconnect();
-    } catch (e) {
-      // Best-effort: don't let disconnect failures mask an already-captured result.
-      // Not logged as it's expected-benign and would just add noise.
+        try {
+            await client.start();
+        } catch (e) {
+            console.warn(`[executeAuditSession] client.start() failed: ${e}`);
+            throw e;
+        }
+
+        const sessionSettings = buildAuditorSessionSettings(
+            executionConfig,
+            systemPrompt,
+            tool,
+            (args) => {
+                result = args as T;
+            },
+        );
+
+        let session: CopilotSession;
+        try {
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
+            session = await client.createSession(
+                sessionSettings as SessionConfig & { autoApproveAll?: boolean },
+            );
+        } catch (e) {
+            console.warn(`[executeAuditSession] createSession() failed: ${e}`);
+            throw e;
+        }
+        sessionId = session.sessionId;
+        onSessionId?.(session.sessionId);
+
+        const turnResult = await runForcedToolTurnUntilTimeout(
+            session,
+            executionConfig,
+            toolName,
+            userPrompt,
+            {
+                client,
+                abortSignal,
+                timeoutMs,
+                maxRetries,
+                getResult: () => result,
+                tools: sessionSettings.tools,
+                systemMessage:
+                    sessionSettings.systemMessage as SessionConfig["systemMessage"],
+                responseRequirements,
+                onSessionId: (id) => {
+                    sessionId = id;
+                    onSessionId?.(id);
+                },
+            },
+        );
+
+        result = turnResult.result;
+
+        try {
+            if (onHistory) {
+                try {
+                    // getEvents() is present in the SDK implementation but not
+                    // in its type declarations -- call through unknown to avoid TS error.
+                    const events = await (
+                        turnResult.session as unknown as {
+                            getEvents(): Promise<readonly unknown[]>;
+                        }
+                    ).getEvents();
+                    onHistory(events);
+                } catch (e) {
+                    // Best-effort: don't let history retrieval failures mask the result.
+                    console.warn(
+                        `[executeAuditSession] getEvents() failed: ${e}`,
+                    );
+                }
+            }
+            await turnResult.session.disconnect();
+        } catch (e) {
+            // Best-effort: don't let disconnect failures mask an already-captured result.
+            // Not logged as it's expected-benign and would just add noise.
+        }
+
+        return result;
+    } finally {
+        try {
+            await client.stop();
+        } catch (e) {
+            // Silence stop errors as the main intent (audit result) is already captured or failed
+        }
     }
-    
-    return result;
-  } finally {
-    try {
-      await client.stop();
-    } catch (e) {
-      // Silence stop errors as the main intent (audit result) is already captured or failed
-    }
-  }
 }
