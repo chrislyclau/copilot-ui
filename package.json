@@ -14,6 +14,7 @@
         "agent:audit": "tsx scripts/audit-codebase.ts",
         "import:repo": "tsx scripts/import-repo.ts",
         "diff:repo": "tsx scripts/remote-diff.ts",
+        "agent:task": "tsx scripts/run-task.ts",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage"
     },
@@ -50,7 +51,7 @@
         "eslint": "^10.6.0",
         "node-forge": "^1.4.0",
         "openai": "^6.44.0",
-        "tsx": "^4.21.0",
+        "tsx": "^4.23.9",
         "typescript": "~5.8.2",
         "vite": "^6.2.3",
         "vitest": "^4.1.9",
