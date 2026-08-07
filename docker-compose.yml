@@ -6,8 +6,10 @@ services:
     # Keep the container running indefinitely
     command: tail -f /dev/null
     volumes:
-      # Mounts the /app directory in a temporary directory on the host machine
-      - ${WORKSPACE_HOST_LOCATION:-/tmp/applet_workspace}:/app
+      # Mounts the workspace at the same absolute path inside the container as
+      # on the host, so paths reported by container-exec tools and host-side
+      # tools (e.g. the SDK's `view`) are identical and cross-resolvable.
+      - ${WORKSPACE_HOST_LOCATION:-/tmp/applet_workspace}:${WORKSPACE_HOST_LOCATION:-/tmp/applet_workspace}
     environment:
       - NODE_ENV=development
     # Hardening: the orchestrator auto-executes LLM-generated commands in this
@@ -19,14 +21,14 @@ services:
       - no-new-privileges:true
     pids_limit: 512
     # Resource ceilings: pids_limit alone doesn't stop a single process from
-    # exhausting host memory/CPU, and the /app bind mount is otherwise
+    # exhausting host memory/CPU, and the workspace bind mount is otherwise
     # unbounded, so cap all three explicitly.
     mem_limit: ${APPLET_MEM_LIMIT:-2g}
     memswap_limit: ${APPLET_MEM_LIMIT:-2g}
     cpus: ${APPLET_CPU_LIMIT:-2}
-    # Root filesystem is read-only; only /app (the bind-mounted workspace) and
-    # /tmp are writable. This limits blast radius of arbitrary auto-executed
-    # commands beyond the workspace itself.
+    # Root filesystem is read-only; only the bind-mounted workspace (at
+    # WORKSPACE_HOST_LOCATION) and /tmp are writable. This limits blast radius
+    # of arbitrary auto-executed commands beyond the workspace itself.
     read_only: true
     tmpfs:
       - /tmp

@@ -4,18 +4,27 @@ guessed, or something worked differently than expected. Keep it high-signal.
 
 ---
 
-## Workspace path spaces — do not default to process.cwd() or getWorkspaceHostLocation()
+## Workspace path spaces — do not default to process.cwd()
 
-There are three path spaces, and `runTests`/`runLint`/`getExecCommand()` only accept one
+There are two path spaces, and `runTests`/`runLint`/`getExecCommand()` only accept one
 of them:
 
 - `getWorkspaceRoot()` — correct for anything that runs through `getExecCommand()`
   (gates, `runWithTimeout`, any shell command). This is the path as seen _inside_ the
-  execution environment (`/app` in Docker mode).
-- `getWorkspaceHostLocation()` — correct only for callers touching the Node process's
-  own filesystem directly (e.g. `CopilotClient.workingDirectory`). In Docker mode this
-  is a _different, host-relative_ path (`./workspace`) than `getWorkspaceRoot()`.
+  execution environment.
+- `getWorkspaceHostLocation()` — correct for callers touching the Node process's own
+  filesystem directly (e.g. `CopilotClient.workingDirectory`).
 - `process.cwd()` — the app's own source tree. Never a workspace default.
+
+As of the fix for issue #302, the Docker mount binds the workspace at the same
+absolute path inside the container as on the host (`WORKSPACE_HOST_LOCATION`), so
+`getWorkspaceRoot()` and `getWorkspaceHostLocation()` now return the *same* value in
+Docker mode (previously `getWorkspaceRoot()` returned the container-remapped `/app`
+while `getWorkspaceHostLocation()` returned a different host-relative path). Despite
+now coinciding in value, keep using the semantically correct function at each callsite
+— they can diverge again under a different runner mode (e.g. non-Docker/native
+execution), and using the wrong one is still a latent bug even when it happens to work
+today.
 
 **Resolved** (see `copilot-ui-remediation-plan.md` Phase 0-A/2-A): gate execution cwd
 now sources from `getWorkspaceRoot()` throughout `src/orchestrator/gateLoop.ts` and

@@ -2,8 +2,11 @@ import { spawn } from "child_process";
 import * as crypto from "crypto";
 import { killProcessGroup } from "./processGroup";
 
-const FIXED_WORKSPACE_ROOT = "/app";
 const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "/tmp/applet_workspace";
+// The compose mount now binds the host workspace to the identical absolute
+// path inside the container (see docker-compose.yml), so the container-side
+// root is just the host location, not a separately-remapped constant.
+const FIXED_WORKSPACE_ROOT = WORKSPACE_HOST_LOCATION;
 // Default timeout for user-supplied commands. Callers can override by passing
 // their own AbortSignal; this deadline applies only when none is provided.
 const EXEC_TIMEOUT_MS = 60_000;
@@ -219,7 +222,7 @@ export async function runDockerProcess(
 }
 
 /**
- * Executes a command in /app.
+ * Executes a command in the workspace root (WORKSPACE_HOST_LOCATION).
  *
  * If no AbortSignal is supplied, a default timeout of EXEC_TIMEOUT_MS is
  * applied to prevent LLM-generated commands from hanging indefinitely.
