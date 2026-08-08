@@ -830,7 +830,7 @@ export async function runForcedToolTurnUntilTimeout<T>(
 
     registerSessionPolicy(
       currentSessionId,
-      buildResumePolicy(targetTools, opts.tools, opts.systemMessage)
+      buildResumePolicy(opts.availableTools ?? targetTools, opts.tools, opts.systemMessage)
     );
     currentSession = await resumeHardenedSession(
       opts.client,

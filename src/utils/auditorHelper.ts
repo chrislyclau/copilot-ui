@@ -420,10 +420,15 @@ export async function executeAuditSession<T>(
       maxRetries,
       getResult: () => result,
       tools: sessionSettings.tools,
-      // Explicit, not left to the [toolName]-only default: without this, a
-      // stall/nudge resume's SessionPolicy would silently drop
-      // run_terminal_docker from the allowlist even though it's still
-      // present in `tools` above (issue #299).
+      // Explicit, not left to the [toolName]-only default: runForcedToolTurnUntilTimeout's
+      // nudge-retry resume rebuilds its SessionPolicy from opts.availableTools
+      // (see toolCallEnforcement.ts) each time it resumes, so without this the
+      // resumed session would silently lose run_terminal_docker from its
+      // allowlist after the first nudge, even though it's still present in
+      // `tools` above (issue #299). (There is no separate stall-recovery path
+      // in this function -- only the nudge-retry loop -- fixed alongside this
+      // in toolCallEnforcement.ts, which previously ignored opts.availableTools
+      // here and always collapsed the resume policy to just [toolName].)
       availableTools: [toolName, RUN_TERMINAL_DOCKER_TOOL.function.name],
       systemMessage: sessionSettings.systemMessage as SessionConfig['systemMessage'],
       responseRequirements,

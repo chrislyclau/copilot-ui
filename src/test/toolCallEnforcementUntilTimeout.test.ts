@@ -124,6 +124,35 @@ describe('runForcedToolTurnUntilTimeout', () => {
     expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves an explicit availableTools set (not narrowed to targetTools) across a nudge-retry resume (issue #299 regression)', async () => {
+    let callCount = 0;
+    const mockSession = {
+      sessionId: 'test-session',
+      on: vi.fn().mockReturnValue(vi.fn()),
+      sendAndWait: vi.fn().mockImplementation(async () => {
+        callCount++;
+      }),
+    } as any;
+
+    const mockClient = {
+      resumeSession: vi.fn().mockImplementation(async (_id, opts) => {
+        expect(opts.availableTools).toEqual(['my_tool', 'run_terminal_docker']);
+        return mockSession;
+      }),
+    } as any;
+
+    const runPromise = runForcedToolTurnUntilTimeout(mockSession, {}, 'my_tool', 'test prompt', {
+      client: mockClient,
+      maxRetries: 1,
+      getResult: () => null,
+      tools: [],
+      availableTools: ['my_tool', 'run_terminal_docker'],
+    });
+
+    await expect(runPromise).rejects.toThrow(/Session ended without calling 'my_tool'/);
+    expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects on abort signal without touching resumeSession', async () => {
     const abortController = new AbortController();
     const mockSession = {
