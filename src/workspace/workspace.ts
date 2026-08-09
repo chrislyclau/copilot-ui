@@ -1,10 +1,7 @@
 import * as docker from "./dockerRunner";
 import * as native from "./nativeRunner";
 import { GitSandbox } from "./git";
-
-function isAIStudio(): boolean {
-  return process.env.AI_STUDIO === "true" || process.env.NODE_ENV === "test" || process.env.VITEST === "true";
-}
+import { isAIStudio } from "./workspace.pure";
 
 function getRunner() {
   return isAIStudio() ? native : docker;

@@ -153,3 +153,57 @@ currently only wired up inside `sendAndWaitWithAbort`'s dormant watchdog, but wa
 pulled out on its own so the pattern doesn't have to be rediscovered if it's ever
 needed by a new call site -- reach for it directly rather than re-deriving the
 `tool.execution_start`/`tool.execution_complete` bookkeeping from scratch.
+
+## `*.pure.ts` convention (issue #320)
+
+Pure decision logic gets split out of side-effect-heavy code into a co-located
+`foo.pure.ts` beside `foo.ts` -- no new directory structure, just a suffix.
+This started with issue #301 (`getRunner()` mode selection,
+`buildAuditorSessionSettings` tool-list assembly) and issue #320 turned it
+into an enforced convention rather than an ad-hoc pattern.
+
+**The rule:** a `*.pure.ts` file may not import anything I/O-bearing --
+`fs`, `child_process`, `net`/`http`/`https`, `src/workspace` (or any module
+that transitively reaches `getExecCommand`/`getGitSandbox`), or SDK client
+modules (`@github/copilot-sdk`, or any module under `src/copilotSdk/`,
+e.g. `boundary.ts`/`hardenedSession.ts`). This is enforced by the
+`**/*.pure.ts` block in `eslint.config.js`, not just documented -- an
+unenforced naming convention drifts silently (see below).
+
+**Why enforcement over naming alone:** `buildAuditorSessionSettings`
+(`src/utils/auditorHelper.ts`) was the exact function #301 cited as an
+example of pure "config in, tool array out" logic. It wasn't -- it returned
+an object containing closures that captured `getExecCommand()` (via
+`makeAuditorExecToolHandler`) and an `onResult` callback. Naming that file
+`auditorHelper.pure.ts` on the strength of its current shape would have been
+a mislabel, and nothing short of a lint rule catches that reliably before it
+ships.
+
+**Where the split landed:** `buildAuditorSessionSettings` was split into
+`buildAuditorSessionDeclarativeSettings` (`auditorHelper.pure.ts` --
+model/provider/systemMessage/tool metadata only, no handlers) and the
+original `buildAuditorSessionSettings` (`auditorHelper.ts`, now a thin
+wrapper that attaches the `onResult` and `getExecCommand()`-closing
+handlers on top of the declarative shape). `isAIStudio()`
+(`src/workspace/workspace.pure.ts`) is the second reference case -- it only
+reads `process.env`, so it moved as-is with no further split needed.
+
+**Type-level note:** the pure builder above types its `provider` field
+using `providerRegistry.ProviderConfig`, not the SDK's own
+`SdkProviderConfig` (`src/copilotSdk/boundary.ts`) -- even a type-only
+import of an SDK client module from a `*.pure.ts` file trips the same rule.
+The cast to `SdkProviderConfig` happens at the impure boundary, in the
+`auditorHelper.ts` wrapper, where SDK-shaped output is actually assembled.
+
+**Getting a function into scope for this rule:** if it returns closures
+capturing I/O, split it into a declarative pure half and a thin impure
+wrapper (see above) rather than just renaming the file -- the lint rule will
+catch the mismatch immediately if the split isn't clean.
+
+**Out of scope as of #320:** `getRunner()` (`src/workspace/workspace.ts`)
+still returns the `native`/`docker` module namespace directly, both of which
+transitively import `child_process` -- it fails this rule too and isn't
+"already pure." Splitting it (e.g. returning a plain mode value instead of a
+module) is an implementation change that belongs to #301, once this
+convention exists to implement against -- don't fold it into a `*.pure.ts`
+split without that follow-up issue.
