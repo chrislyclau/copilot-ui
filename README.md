@@ -293,10 +293,11 @@ Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git manag
 
 ---
 
-# SessionWrapper Spec (EARS)
+# SessionWrapper — Spec Draft (EARS)
 
 **Status:** draft, replaces SYS-REQ-026 family (decision made — see below)
-**Relationship to existing spec:** `README.md` §5.3 currently contains SYS-REQ-026/026a/026b/026c,
+**Relationship to existing spec:** `README.md` §5.5 ("Hardened Session Wrapper
+(Sole SDK Session Entry Point)") currently contains SYS-REQ-026/026a/026b/026c,
 implemented today by `src/copilotSdk/hardenedSession.ts` (function module keyed by
 `sessionId` against two separate `Map`s — `policyBySessionId` and `sessionBySessionId`
 — correlated only by matching keys). `SessionWrapper` **replaces** this module outright,
@@ -466,4 +467,3 @@ drift this spec exists to close off. See "Migration plan" section at the end.
 
 No intermediate commit should have both `SessionWrapper` and `hardenedSession.ts`
 wired into live call sites at once.
-
