@@ -197,6 +197,34 @@ describe('SessionWrapper.sendAndWait', () => {
     expect(resumeCalls[0]?.config.availableTools).toEqual(['bash']);
   });
 
+  it('setSystemPrompt called after the session has started is never rejected and applies next turn (SYS-REQ-027f)', async () => {
+    const { client, createCalls, resumeCalls } = fakeClient();
+    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    expect(() => wrapper.setSystemPrompt({ mode: 'replace', content: 'be terse' })).not.toThrow();
+    await wrapper.sendAndWait('turn two');
+
+    expect(typeof createCalls[0]?.systemMessage === 'object' ? createCalls[0]?.systemMessage?.content : '').not.toContain(
+      'be terse'
+    );
+    expect(
+      typeof resumeCalls[0]?.config.systemMessage === 'object' ? resumeCalls[0]?.config.systemMessage?.content : ''
+    ).toContain('be terse');
+  });
+
+  it('setModelName called after the session has started is never rejected and applies next turn (SYS-REQ-027f)', async () => {
+    const { client, createCalls, resumeCalls } = fakeClient();
+    const wrapper = new SessionWrapper(client).addTools('bash').setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    expect(() => wrapper.setModelName('claude-opus-4.8')).not.toThrow();
+    await wrapper.sendAndWait('turn two');
+
+    expect(createCalls[0]?.model).toBe('claude-sonnet-4.5');
+    expect(resumeCalls[0]?.config.model).toBe('claude-opus-4.8');
+  });
+
   it('throws a clear error rather than calling the SDK when no client was supplied', async () => {
     const wrapper = new SessionWrapper().addTools('bash').setModelName('claude-sonnet-4.5');
     await expect(wrapper.sendAndWait('hello')).rejects.toThrow(/no CopilotClient/);
@@ -218,5 +246,28 @@ describe('SessionWrapper.sendAndWait', () => {
 
     expect(createCalls[0]?.workingDirectory).toBe('/tmp/work');
     expect(createCalls[0]?.model).toBe('claude-sonnet-4.5');
+  });
+});
+
+describe('SessionWrapper side-door surface (SYS-REQ-027g)', () => {
+  it('exposes no method that could bind policy/config to a session it did not create', () => {
+    // Enumerates the intended public API. If a `registerSessionPolicy`-style
+    // side door is ever added, this list must grow to match it -- catching
+    // that as a deliberate, reviewable diff rather than a silent addition.
+    const allowedPublicMethods = new Set(['addTools', 'removeTools', 'setSystemPrompt', 'setModelName', 'sendAndWait']);
+    // `_createConfig` is intentionally public (tests call it directly) but is
+    // a pure derivation from own state, not an adoption mechanism -- excluded
+    // from `allowedPublicMethods` on purpose so it's visible here as the one
+    // deliberate exception rather than silently allowed by the loop below.
+    const excludedFromCheck = new Set(['constructor', '_createConfig']);
+
+    const actualMethods = Object.getOwnPropertyNames(SessionWrapper.prototype).filter(
+      (name) => !excludedFromCheck.has(name)
+    );
+
+    for (const name of actualMethods) {
+      expect(allowedPublicMethods.has(name)).toBe(true);
+    }
+    expect(actualMethods.sort()).toEqual([...allowedPublicMethods].sort());
   });
 });

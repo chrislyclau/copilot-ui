@@ -137,8 +137,11 @@ function mergeToolUsageIntoSystemMessage(
  * Private state, builder-style mutators (SYS-REQ-027, 027a, 027a-1), config
  * derivation (`_createConfig()`, SYS-REQ-027b/h/i/j), and the create/resume
  * lifecycle (`sendAndWait()`, SYS-REQ-027c/d) all live here. Post-start
- * mutator behavior (SYS-REQ-027f) is still out of scope and tracked in a
- * separate issue.
+ * mutator behavior (SYS-REQ-027f) is resolved, not open: mutators are plain
+ * field updates (SYS-REQ-027j) with no started-state check, so a mutator
+ * called after a session has started is never rejected -- it's applied and
+ * takes effect starting the next `_createConfig()` derivation (i.e. the
+ * next `sendAndWait()` call), never mid-turn. See each mutator below.
  */
 export class SessionWrapper {
   /**
@@ -180,7 +183,10 @@ export class SessionWrapper {
 
   /**
    * Adds one or more tools to the session's tool list. Builder-style: only
-   * ever grows `_tools`, never replaces it wholesale (SYS-REQ-027a).
+   * ever grows `_tools`, never replaces it wholesale (SYS-REQ-027a). If
+   * called after a session has started, never rejected -- takes effect
+   * starting the next `_createConfig()` derivation, not the in-flight turn
+   * (SYS-REQ-027f, resolved by SYS-REQ-027j).
    */
   addTools(...names: readonly string[]): this {
     for (const name of names) {
@@ -191,7 +197,10 @@ export class SessionWrapper {
 
   /**
    * Removes one or more tools from the session's tool list. The
-   * counterpart builder-style mutator to `addTools` (SYS-REQ-027a).
+   * counterpart builder-style mutator to `addTools` (SYS-REQ-027a). If
+   * called after a session has started, never rejected -- takes effect
+   * starting the next `_createConfig()` derivation, not the in-flight turn
+   * (SYS-REQ-027f, resolved by SYS-REQ-027j).
    */
   removeTools(...names: readonly string[]): this {
     for (const name of names) {
@@ -200,13 +209,23 @@ export class SessionWrapper {
     return this;
   }
 
-  /** Replaces the session's system prompt (SYS-REQ-027a). */
+  /**
+   * Replaces the session's system prompt (SYS-REQ-027a). If called after a
+   * session has started, never rejected -- takes effect starting the next
+   * `_createConfig()` derivation, not the in-flight turn (SYS-REQ-027f,
+   * resolved by SYS-REQ-027j).
+   */
   setSystemPrompt(systemPrompt: SessionConfig['systemMessage']): this {
     this._systemPrompt = systemPrompt;
     return this;
   }
 
-  /** Replaces the session's model name (SYS-REQ-027a). */
+  /**
+   * Replaces the session's model name (SYS-REQ-027a). If called after a
+   * session has started, never rejected -- takes effect starting the next
+   * `_createConfig()` derivation, not the in-flight turn (SYS-REQ-027f,
+   * resolved by SYS-REQ-027j).
+   */
   setModelName(modelName: string): this {
     this._modelName = modelName;
     return this;
