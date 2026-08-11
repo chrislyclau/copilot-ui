@@ -208,7 +208,7 @@ describe('SessionWrapper.sendAndWait', () => {
     await expect(wrapper.sendAndWait('hello')).rejects.toThrow(/no model name was set/);
   });
 
-  it('does not let an unset _modelName clobber a caller-supplied _baseConfig field with undefined', async () => {
+  it('_baseConfig fields survive the create config merge alongside a set model', async () => {
     const { client, createCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { workingDirectory: '/tmp/work' })
       .addTools('bash')
