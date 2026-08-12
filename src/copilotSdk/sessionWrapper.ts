@@ -34,6 +34,22 @@ export type SessionWrapperBaseConfig = Omit<SessionConfig, ConfigOwnedKeys>;
  * identified by `kind` alone, so a wire name absent from this map is
  * assumed to already resolve via `toolName` (custom/MCP/hook tools) and is
  * checked unchanged.
+ *
+ * FOOTGUN (verified against the live SDK, see
+ * sessionWrapper.integration.test.ts "kind collision" test): `view` and
+ * `grep` collide on kind `'read'`. If a bare `kind: 'read'` PermissionRequest
+ * ever reached `_createConfig()`'s handler while only one of the two was
+ * added, `allowedKinds` (derived purely from kind, not tool identity) could
+ * not tell them apart and would wrongly approve the other. This is currently
+ * NOT exploitable in practice: the SDK's own `availableTools` filter is
+ * name-based and rejects an unlisted tool (e.g. `grep` when only `view` was
+ * added) before any kind-based reasoning in this handler is reached -- the
+ * integration test locks this in. But that safety is incidental to this
+ * file's own logic, not guaranteed by it: if the SDK's `availableTools`
+ * gating ever changes, or a future built-in tool is added to this map
+ * sharing a kind with one already in use, this handler alone would not
+ * catch the collision. Do not treat `onPermissionRequest`'s kind-based
+ * check as a name-level enforcement boundary.
  */
 const BUILTIN_TOOL_PERMISSION_KIND: Readonly<Record<string, string>> = {
   bash: 'shell',

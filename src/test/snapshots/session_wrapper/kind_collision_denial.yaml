@@ -1,0 +1,16 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: Searching with grep.
+        tool_calls:
+          - id: kind_call_0
+            type: function
+            function:
+              name: grep
+              arguments: '{"pattern":"TODO","path":"notes.txt"}'

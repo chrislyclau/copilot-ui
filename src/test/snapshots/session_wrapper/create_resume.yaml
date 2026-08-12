@@ -1,0 +1,14 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: First turn acknowledged.
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: Second turn acknowledged after resume.

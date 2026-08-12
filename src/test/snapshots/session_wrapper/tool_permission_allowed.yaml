@@ -1,0 +1,16 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: Checking the file first.
+        tool_calls:
+          - id: perm_call_0
+            type: function
+            function:
+              name: view
+              arguments: '{"path":"notes.txt"}'
