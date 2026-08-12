@@ -249,6 +249,58 @@ describe('SessionWrapper.sendAndWait', () => {
   });
 });
 
+describe('SessionWrapper SDK-footgun regression tests', () => {
+  it('never drops systemMessage on resume (issue #208: resumeSession does not inherit it from the SDK)', async () => {
+    const { client, createCalls, resumeCalls } = fakeClient();
+    const wrapper = new SessionWrapper(client)
+      .addTools('bash')
+      .setSystemPrompt({ mode: 'replace', content: 'be terse' })
+      .setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    await wrapper.sendAndWait('turn two');
+
+    // The regression this guards: resumeSession does not inherit systemMessage
+    // from the session being resumed, so a resumeConfig that forgets to
+    // re-pass it silently loses it. SessionWrapper always re-derives and
+    // re-passes systemMessage explicitly, so it must be present -- and equal
+    // to the create call's -- on every resume, not just the first turn.
+    expect(createCalls[0]?.systemMessage).toBeDefined();
+    expect(resumeCalls[0]?.config.systemMessage).toBeDefined();
+    expect(resumeCalls[0]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
+  });
+
+  it('keeps caller-supplied customize-mode sections untouched across a tool-list change (issue #146: per-tool section regeneration busts the prompt/KV cache)', async () => {
+    const { client, createCalls, resumeCalls } = fakeClient();
+    const customizeSections = {
+      identity: { action: 'append' as const, content: 'you are an auditor' },
+    };
+    const wrapper = new SessionWrapper(client)
+      .addTools('bash')
+      .setSystemPrompt({ mode: 'customize', sections: customizeSections })
+      .setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    wrapper.addTools('view'); // changes the tool list between calls
+    await wrapper.sendAndWait('turn two');
+
+    // Tool-usage guidance must be folded into `content` (the mode's own free-
+    // form field), never into `sections` -- regenerating per-tool section
+    // overrides on every resume is exactly what invalidated the prompt/KV
+    // cache in #146. So `sections` must be byte-identical create-to-resume
+    // even though the tool list changed, and the tool-usage text must live
+    // in `content` instead.
+    const created = createCalls[0]?.systemMessage;
+    const resumed = resumeCalls[0]?.config.systemMessage;
+    expect(created?.mode).toBe('customize');
+    expect(resumed?.mode).toBe('customize');
+    expect(created?.mode === 'customize' ? created.sections : undefined).toEqual(customizeSections);
+    expect(resumed?.mode === 'customize' ? resumed.sections : undefined).toEqual(customizeSections);
+    expect(created?.mode === 'customize' ? created.content : '').toContain('bash');
+    expect(resumed?.mode === 'customize' ? resumed.content : '').toContain('view');
+  });
+});
+
 describe('SessionWrapper side-door surface (SYS-REQ-027g)', () => {
   it('exposes no method that could bind policy/config to a session it did not create', () => {
     // Enumerates the intended public API. If a `registerSessionPolicy`-style
