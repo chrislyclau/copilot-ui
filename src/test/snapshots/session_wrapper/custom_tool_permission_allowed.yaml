@@ -1,0 +1,16 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: Let me look that up with the custom tool.
+        tool_calls:
+          - id: perm_call_0
+            type: function
+            function:
+              name: echo_notes
+              arguments: '{"path":"notes.txt"}'

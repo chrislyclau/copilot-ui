@@ -43,6 +43,11 @@ export default [
       "src/copilotSdk/boundary.ts",
       "src/copilotSdk/hardenedSession.ts",
       "src/copilotSdk/sessionWrapper.ts",
+      // Manual, human-triggered SDK-baseline capture (issue #345 follow-up),
+      // not a call site the wrapper needs to police -- see the file's own
+      // header comment for why it lives under src/test/ despite not being a
+      // `*.test.ts` itself.
+      "src/test/scripts/capture-system-message-baseline.ts",
       "**/*.test.ts",
       "**/*.test.tsx",
     ],

@@ -1,102 +1,69 @@
-
-**HOW TO USE THE ReplayingCapiProxy FOR GATE-LOOP TESTS**
+**HOW TO USE CapiProxy FOR SESSIONWRAPPER / SDK INTEGRATION TESTS**
 
 ---
 
 **Architecture**
 
-The proxy is a real HTTP server that sits between `CopilotClient` and the CAPI endpoint. It intercepts `/chat/completions` requests, matches them against YAML snapshots, and streams back stored responses. Tool calls are part of the YAML — the proxy replays the LLM's tool call request; your actual tool handler executes; the result goes back through the proxy for the next match.
+`CapiProxy` (`src/test/harness/CapiProxy.ts`) is a plain in-process `http.Server` that stands in for the CAPI `/chat/completions` endpoint. Point `CopilotClient` at it via `COPILOT_API_URL` and the real SDK runs against it exactly as it would against the real network: session create/resume, tool-permission enforcement, and `systemMessage`/config derivation all execute for real inside the SDK. Only the LLM completion boundary itself is faked — the proxy reads each incoming request, matches it against a YAML snapshot, and returns a scripted `assistant` reply (text or tool call). Tool calls are part of the YAML; the proxy replays the LLM's tool-call decision, your actual tool handler executes, and the tool's real output goes back through the proxy as the next request's `role: tool` message.
 
-Two modes:
-- **Record** (no snapshot on disk): passes through to real CAPI, writes YAML on stop
-- **Replay** (snapshot exists): serves from YAML, no network calls
-
----
-
-**Setup — what to copy from the SDK**
-
-Copy these files verbatim into your repo (e.g. `test/harness/`):
-
-```
-test/harness/replayingCapiProxy.ts   ← core proxy class
-test/harness/capturingHttpProxy.ts   ← base class
-test/harness/connectProxy.ts         ← HTTPS CONNECT tunnel + TLS intercept
-test/harness/certUtils.ts            ← CA cert generation for TLS
-test/harness/mockHandlers.ts         ← request routing
-test/harness/server.ts               ← process entrypoint (spawn this)
-test/harness/util.ts                 ← sleep, retry helpers
-```
-
-Dependencies needed in your `package.json`:
-```json
-"openai": "^6.17.0",
-"node-forge": "^1.4.0",
-"yaml": "^2.8.2",
-"tsx": "^4.21.0"
-```
+There is no TLS interception, no child process, and no pass-through to a real endpoint anywhere in this file — `CapiProxy` only ever serves from a YAML snapshot already on disk. **Snapshots are hand-authored, not recorded.** Generating one is just writing YAML in the format below; there's no live-network step required or implemented.
 
 ---
 
 **Starting the proxy in tests**
 
-The proxy runs as a **child process** (not in-process). The SDK's `CapiProxy` wrapper handles this — copy `nodejs/test/e2e/harness/CapiProxy.ts` too. It spawns `server.ts` via `npx tsx server.ts`, reads the startup URL from stdout, then controls the proxy over HTTP.
+The proxy runs in-process, in the same test process as everything else:
 
 ```typescript
 const proxy = new CapiProxy();
 const proxyUrl = await proxy.start();
-
-// Register fake auth token → user profile mapping
-await proxy.setCopilotUserByToken("fake-token", {
-  login: "test-user",
-  copilot_plan: "individual_pro",
-  endpoints: {
-    api: proxyUrl,
-    telemetry: "https://localhost:1/telemetry",
-  },
-  analytics_tracking_id: "test-tracking-id",
-});
 ```
+
+`proxy.setCopilotUserByToken(...)` exists only as a no-op stub for interface compatibility with the SDK's own harness naming — this `CapiProxy` doesn't do real auth-token handling, so there's nothing to configure there.
 
 ---
 
 **Wiring CopilotClient to the proxy**
 
-Point the client at the proxy URL via env vars. The proxy also spins up a CONNECT tunnel for HTTPS interception — use `getProxyEnv()` to get all required vars:
-
 ```typescript
 const client = new CopilotClient({
   workingDirectory: workDir,
-  gitHubToken: "fake-token",
+  logLevel: "none",
+  useLoggedInUser: false,
   env: {
     ...process.env,
-    ...proxy.getProxyEnv(),   // sets HTTP_PROXY, HTTPS_PROXY, NODE_EXTRA_CA_CERTS, etc.
+    ...proxy.getProxyEnv(),   // sets COPILOT_API_URL -- the only var this harness needs
     COPILOT_API_URL: proxyUrl,
   },
-  logLevel: "error",
-  connection: RuntimeConnection.forStdio({ path: process.env.COPILOT_CLI_PATH }),
 });
 ```
+
+`getProxyEnv()` only sets `COPILOT_API_URL`. There's no `HTTP_PROXY`/`HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` to set, because there's no TLS-intercepting tunnel involved — the client just talks HTTP directly to the local proxy.
 
 ---
 
 **Pointing each test at its snapshot**
 
-Before each test, POST `/config` to tell the proxy which YAML file to use:
-
 ```typescript
 await proxy.updateConfig({
-  filePath: "test/snapshots/gate_loop/single_retry.yaml",
-  workDir,  // used for ${workdir} placeholder substitution
+  filePath: "src/test/snapshots/session_wrapper/create_resume.yaml",
+  workDir,
 });
 ```
 
-The proxy flushes any pending writes from the previous test and loads the new snapshot. In the SDK this is done in `beforeEach` via `sdkTestContext.ts`.
+Loads the YAML file synchronously from disk and resets the proxy's per-test call counter. Call this once per test, typically in the test body or `beforeEach`, before starting the client.
 
 ---
 
 **YAML snapshot format**
 
-The proxy matches on conversation prefix — each incoming `/chat/completions` request is checked against stored conversations; the first one where the request messages are a prefix of the stored messages returns the next assistant turn.
+Each `conversations` entry describes one round-trip's worth of messages. The proxy matches an incoming request's `messages` array against each entry (by role sequence, comparing prefix-wise) and, on a match, returns the next `assistant` turn as the completion.
+
+Matching rules (see `CapiProxy.ts` for the exact logic):
+- `role` must match at every compared index.
+- For `system`/`user` messages, the expected `content` is checked as a **substring** of the incoming content (not exact equality) — so an expected value only needs to contain the part you actually care about.
+- `${system}` and `${user}` as the expected `content` are **wildcards**: they skip content comparison entirely for that message. Use these whenever the exact prompt/system-message text isn't what the test is checking.
+- Non-string content (e.g. `tool_calls`) is compared with `JSON.stringify` equality.
 
 **Simple text response:**
 ```yaml
@@ -105,7 +72,7 @@ models:
 conversations:
   - messages:
       - role: system
-        content: ${system}        # placeholder — matches any system prompt
+        content: ${system}        # wildcard -- matches any system prompt
       - role: user
         content: Run the gate check.
       - role: assistant
@@ -151,38 +118,36 @@ conversations:
 ```
 
 Key points about the format:
-- Each `conversations` entry is one full conversation thread
-- Multiple entries in the list = multiple round-trips within one test
-- The proxy matches by prefix: first request matches entry[0] up to first assistant turn, second request matches entry[1] up to next assistant turn, etc.
-- `${system}` and `${workdir}` are placeholders — normalized during both record and replay so path/prompt differences don't break matches
-- Tool results in `role: tool` messages are also normalized via `toolResultNormalizers` (strip absolute paths, exit markers, etc.) — you can add custom normalizers via `proxy.addToolResultNormalizer(toolName, fn)`
+- Each `conversations` entry is one full conversation thread; multiple entries in the list back multiple round-trips within one test (e.g. the second entry above is what the proxy returns once the tool result comes back).
+- `${system}`/`${user}` placeholders exist specifically so a snapshot doesn't need to encode exact prompt text it doesn't care about — write the real, meaningful content (a specific user message, an expected tool call) and wildcard the rest.
 
 ---
 
-**Generating snapshots (record mode)**
+**Generating snapshots**
 
-Delete the YAML file (or don't create it). Run the test with a real `GITHUB_TOKEN` and `COPILOT_CLI_PATH`. The proxy passes through to real CAPI, captures all exchanges, and writes the YAML on `proxy.stop()`. Commit the YAML. Subsequent runs replay without network.
+Write the YAML by hand. That's the only supported path in this repo — `CapiProxy` has no record mode, so there's nothing to run against a live endpoint and nothing to capture. Since these tests exercise the integration between `SessionWrapper`/`CopilotClient` and the real SDK (session lifecycle, config derivation, tool dispatch, permission enforcement), not the integration between the SDK and an actual model, a hand-written scripted reply is exactly what the test needs: it fixes the model's decision so the real SDK code around it can be exercised deterministically. There is no live-network step to reach for, optional or otherwise, for this class of test.
 
-In CI, set `GITHUB_ACTIONS=true` — the proxy will never write, only read. This prevents partial test runs from corrupting snapshot files.
+If a genuine live-recording capability (real CAPI pass-through, writing a YAML from the actual exchange) is ever wanted, that's new functionality to build in `CapiProxy.ts` — TLS interception, a real auth path, etc. — not something already present here that a test can just enable.
 
 ---
 
 **Teardown**
 
 ```typescript
-afterAll(async () => {
+afterEach(async () => {
   await client.stop();
-  await proxy.stop();   // flushes writes if not in CI
+  await proxy.stop();
 });
 ```
+
+`proxy.stop()` just closes the HTTP server. There's nothing to flush — the proxy never writes to disk.
 
 ---
 
 **What this tests end-to-end**
 
-With this setup your actual gate loop code runs unmodified. The proxy replays the LLM decisions (tool call or text response), your registered tool handlers execute against real inputs, results feed back through the normal SDK path. You're testing:
-- Tool handler registration and dispatch
-- `sendAndWait` round-trip behavior
-- Retry/escalation logic triggered by real gate evaluation of tool outputs
-- SSE event ordering and `sequenceId` correctness
-- Session lifecycle (create → send → tool calls → disconnect)
+With this setup your actual `SessionWrapper`/`CopilotClient` code runs unmodified against the real SDK. The proxy only replays the LLM's decision (tool call or text response); everything else — session create/resume, `_createConfig()` derivation, tool handler dispatch, `onPermissionRequest` enforcement, `sendAndWait` round-tripping — runs for real. You're testing:
+- Session lifecycle (create → send → resume → tool calls → stop)
+- Config re-derivation across resumes (`availableTools`, `systemMessage`, permission handler)
+- Tool handler registration and dispatch, including real handler output flowing back through the SDK
+- Retry/escalation logic triggered by real tool-output evaluation

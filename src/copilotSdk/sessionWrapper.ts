@@ -6,7 +6,9 @@ import {
   PermissionRequest,
   PermissionRequestResult,
   SessionConfig,
+  Tool,
 } from './boundary';
+import { FROZEN_SDK_SYSTEM_MESSAGE_BASELINE } from './systemMessageBaseline';
 
 /** Config fields callers must NOT supply themselves -- always derived by `_createConfig()`. */
 type ConfigOwnedKeys =
@@ -107,40 +109,82 @@ function buildToolUsageSection(tools: readonly string[]): string {
 }
 
 /**
- * Folds `toolUsageSection` into `systemPrompt` according to its mode, so the
- * tool-usage guidance is present regardless of whether the caller supplied a
- * system prompt at all, or which mode they chose:
- * - undefined / `append`: tool section + caller content, both appended after
- *   the SDK-managed prompt.
- * - `replace`: tool section is folded into `content`, since replace mode
- *   removes the SDK-managed prompt entirely and nothing else would supply it.
- * - `customize`: tool section goes in the mode's own `content` field
- *   (appended after all sections) rather than a per-tool section override --
- *   per-tool section regeneration on `resumeSession` retries invalidates the
- *   prompt/KV cache (issue #146).
+ * Builds the entire outgoing `systemMessage` in the SDK's `replace` mode,
+ * unconditionally (issue #345 follow-up). `append`/`customize` modes still
+ * splice an SDK-managed `tool_instructions` section into the prompt that's
+ * re-derived from the live `availableTools` on every single turn -- that
+ * per-turn regeneration is exactly the KV-cache-prefix hazard #345 exists to
+ * close, and no combination of our own content in those modes can stop the
+ * SDK from doing it. `replace` mode is the only one that hands us the whole
+ * prompt with nothing left for the SDK to inject.
+ *
+ * That means WE now own reproducing the SDK's own baseline guidance
+ * (`FROZEN_SDK_SYSTEM_MESSAGE_BASELINE`, a hand-captured, hand-maintained
+ * copy -- see systemMessageBaseline.ts for what's deliberately excluded from
+ * it and why) rather than getting it "for free" from `append`/`customize`
+ * mode. The tradeoff, called out directly in the SDK's own docs: replace
+ * mode also drops the SDK's built-in guardrail/security sections, which
+ * `FROZEN_SDK_SYSTEM_MESSAGE_BASELINE` does still carry forward as of the
+ * capture date, but it will silently stop tracking any *future* guardrail
+ * the SDK adds until this file's baseline is re-captured.
  */
-function mergeToolUsageIntoSystemMessage(
+function buildFrozenReplaceSystemMessage(
   toolUsageSection: string,
-  systemPrompt: SessionConfig['systemMessage']
+  callerContent: string | undefined
 ): SessionConfig['systemMessage'] {
-  if (!systemPrompt || systemPrompt.mode === undefined || systemPrompt.mode === 'append') {
-    const content = systemPrompt?.content;
-    return {
-      mode: 'append',
-      content: content ? `${toolUsageSection}\n\n${content}` : toolUsageSection,
-    };
+  const parts = [FROZEN_SDK_SYSTEM_MESSAGE_BASELINE, toolUsageSection];
+  if (callerContent) {
+    parts.push(callerContent);
   }
-  if (systemPrompt.mode === 'replace') {
-    return {
-      mode: 'replace',
-      content: `${toolUsageSection}\n\n${systemPrompt.content}`,
-    };
+  return { mode: 'replace', content: parts.join('\n\n') };
+}
+
+/**
+ * Builds a plain-text notice describing what changed in tool list / system
+ * prompt since the last turn, or `undefined` if nothing changed. Appended to
+ * the outgoing prompt on resume (SYS-REQ-027k) instead of folding the change
+ * into `systemMessage`, which -- per the KV-cache prefix hazard documented on
+ * issue #345 -- must stay byte-identical across every `resumeSession` call
+ * for a given session. A message appended to the *end* of the conversation
+ * only ever grows the prompt; it never rewrites tokens the cache already has,
+ * so it cannot itself cause a prefix mismatch the way editing `systemMessage`
+ * does.
+ */
+function buildSessionUpdateNotice(
+  previousTools: readonly string[],
+  nextTools: readonly string[],
+  previousSystemPrompt: string | undefined,
+  nextSystemPrompt: string | undefined
+): string | undefined {
+  const previousSet = new Set(previousTools);
+  const nextSet = new Set(nextTools);
+  const added = nextTools.filter((name) => !previousSet.has(name));
+  const removed = previousTools.filter((name) => !nextSet.has(name));
+  const systemPromptChanged = previousSystemPrompt !== nextSystemPrompt;
+
+  if (added.length === 0 && removed.length === 0 && !systemPromptChanged) {
+    return undefined;
   }
-  // mode === 'customize'
-  return {
-    ...systemPrompt,
-    content: systemPrompt.content ? `${toolUsageSection}\n\n${systemPrompt.content}` : toolUsageSection,
-  };
+
+  const lines: string[] = [
+    '# Session update',
+    "This session's configuration changed since the last turn. The system " +
+      'prompt shown above is not being regenerated (it must stay fixed for ' +
+      'prompt-cache reasons), so this note is how any change reaches you.',
+  ];
+  if (added.length > 0) {
+    lines.push(`Tools added: ${added.join(', ')}.`);
+  }
+  if (removed.length > 0) {
+    lines.push(
+      `Tools removed: ${removed.join(', ')}. Do not call these; calls to them will be rejected.`
+    );
+  }
+  lines.push(`Tools currently available: ${nextTools.length > 0 ? nextTools.join(', ') : '(none)'}.`);
+  if (systemPromptChanged) {
+    lines.push('Additional operating instructions have also been updated for this turn.');
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -173,7 +217,26 @@ export class SessionWrapper {
    */
   private _tools: Set<string> = new Set();
 
-  private _systemPrompt: SessionConfig['systemMessage'] | undefined = undefined;
+  /**
+   * Handler-backed tools this instance owns (SYS-REQ-027a, this issue).
+   * Stored separately from `_tools` (wire names only, `Set<string>`)
+   * because a `Tool` carries a handler and other SDK-dispatch fields that
+   * `_tools` has no room for. Keyed by name so `addTool`/`removeTool`
+   * mirror `addTools`/`removeTools`'s builder shape -- add is idempotent
+   * per name, remove is a no-op if the name isn't present.
+   */
+  private _customTools: Map<string, Tool> = new Map();
+
+  /**
+   * Caller-supplied additional instructions, plain text only. Unlike before
+   * #345's `replace`-mode switch, there is no `mode`/`sections` concept left
+   * to expose here: `_createConfig()` always forces `systemMessage` into the
+   * SDK's `replace` mode (see `buildFrozenReplaceSystemMessage`), so an
+   * `append`/`customize` mode or a `sections` override from the caller would
+   * never reach the SDK -- exposing them here would silently do nothing,
+   * which is worse than not offering them.
+   */
+  private _systemPrompt: string | undefined = undefined;
 
   private _modelName: string | undefined = undefined;
 
@@ -184,6 +247,28 @@ export class SessionWrapper {
    * of resume (SYS-REQ-027c).
    */
   private _session: CopilotSession | undefined = undefined;
+
+  /**
+   * The `systemMessage` passed on session *creation* (SYS-REQ-027k). Frozen
+   * the moment `createSession` is called and reused byte-for-byte on every
+   * subsequent `resumeSession` for this session's lifetime, regardless of
+   * later `addTool`/`removeTool`/`setSystemPrompt` calls -- the SDK includes
+   * `systemMessage` in the cached prompt prefix, so re-deriving it per turn
+   * (the pre-#345 behavior) busts that prefix's KV cache on every resume.
+   * `undefined` until the first `sendAndWait()` creates a session.
+   */
+  private _frozenSystemMessage: SessionConfig['systemMessage'] | undefined = undefined;
+
+  /**
+   * Snapshot of `_tools`/`_systemPrompt` as of the last turn actually sent
+   * to the SDK (create or resume) -- NOT the same as "as of the last
+   * mutator call". Diffed against current state in `sendAndWait()` to decide
+   * what belongs in the update notice appended to this turn's prompt
+   * (SYS-REQ-027k). Tool identity only; `_customTools`' handlers don't
+   * factor into the diff.
+   */
+  private _announcedTools: readonly string[] = [];
+  private _announcedSystemPrompt: string | undefined = undefined;
 
   /**
    * `_client` is optional at construction so existing `_createConfig()`-only
@@ -217,22 +302,73 @@ export class SessionWrapper {
    * called after a session has started, never rejected -- takes effect
    * starting the next `_createConfig()` derivation, not the in-flight turn
    * (SYS-REQ-027f, resolved by SYS-REQ-027j).
+   *
+   * Also clears any matching entry from `_customTools` (SYS-REQ-027h): a
+   * name removed here may have been added via `addTool` rather than
+   * `addTools`, and `_createConfig()` derives `availableTools` from `_tools`
+   * but `tools` (the handler-dispatch array) from `_customTools` -- leaving
+   * a stale `_customTools` entry after `_tools` no longer has the name would
+   * let those two derived outputs disagree (a handler-backed tool present
+   * in `tools` but absent from `availableTools`/the permission allowlist),
+   * violating the single-derivation-point invariant `_createConfig()`
+   * exists to guarantee. `removeTool` remains the more explicit way to
+   * remove a custom tool, but `removeTools` must not leave this door open
+   * just because the caller used the built-in-shaped method instead.
    */
   removeTools(...names: readonly string[]): this {
     for (const name of names) {
       this._tools.delete(name);
+      this._customTools.delete(name);
     }
     return this;
   }
 
   /**
-   * Replaces the session's system prompt (SYS-REQ-027a). If called after a
+   * Attaches a handler-backed custom `Tool` this session owns from
+   * creation (this issue; not the #327 `registerSessionPolicy` side door --
+   * this takes a `Tool` this instance is given directly, never a
+   * `sessionId` or externally-created session). Builder-style, mirroring
+   * `addTools`: adds `tool.name` to the SDK-level allowlist (`_tools`,
+   * SYS-REQ-027h membership) and stores the handler-backed `Tool` itself so
+   * `_createConfig()` can include it in the derived `tools` array. If
+   * called after a session has started, never rejected -- takes effect
+   * starting the next `_createConfig()` derivation, not the in-flight turn
+   * (SYS-REQ-027f, resolved by SYS-REQ-027j).
+   */
+  addTool(tool: Tool): this {
+    this._tools.add(tool.name);
+    this._customTools.set(tool.name, tool);
+    return this;
+  }
+
+  /**
+   * Removes a handler-backed custom tool previously added via `addTool`.
+   * The counterpart builder-style mutator to `addTool`, mirroring
+   * `removeTools`. A no-op if `name` was never added. If called after a
    * session has started, never rejected -- takes effect starting the next
    * `_createConfig()` derivation, not the in-flight turn (SYS-REQ-027f,
    * resolved by SYS-REQ-027j).
    */
-  setSystemPrompt(systemPrompt: SessionConfig['systemMessage']): this {
-    this._systemPrompt = systemPrompt;
+  removeTool(name: string): this {
+    this._tools.delete(name);
+    this._customTools.delete(name);
+    return this;
+  }
+
+  /**
+   * Sets the caller's additional operating instructions (SYS-REQ-027a),
+   * appended after the SDK baseline and tool-usage section that
+   * `_createConfig()` always builds first. Plain text only -- as of #345's
+   * `replace`-mode switch there's no `mode`/`sections` for a caller to pick,
+   * since `_createConfig()` always forces the SDK's `replace` mode itself
+   * (see `buildFrozenReplaceSystemMessage`); an `append`/`customize`
+   * distinction here would imply a choice that no longer does anything. If
+   * called after a session has started, never rejected -- takes effect
+   * starting the next `_createConfig()` derivation, not the in-flight turn
+   * (SYS-REQ-027f, resolved by SYS-REQ-027j).
+   */
+  setSystemPrompt(content: string | undefined): this {
+    this._systemPrompt = content;
     return this;
   }
 
@@ -254,9 +390,21 @@ export class SessionWrapper {
    * all computed here from the same `_tools` snapshot, so they cannot
    * independently drift from one another (SYS-REQ-027h).
    *
-   * Called fresh at the start of every turn (by `sendAndWait`, below) --
-   * never cached -- so a tool removed via `removeTools` is denied starting
-   * next turn without needing any other bookkeeping (SYS-REQ-027j).
+   * Called fresh at the start of every turn (by `sendAndWait`, below) for
+   * `availableTools`/`tools`/permission handling, so a tool removed via
+   * `removeTools` is denied starting next turn without needing any other
+   * bookkeeping (SYS-REQ-027j).
+   *
+   * `systemMessage` is the one exception: once a session exists,
+   * `_frozenSystemMessage` (set by `sendAndWait` on creation) is returned
+   * as-is rather than re-derived. Without this, a caller inspecting
+   * `_createConfig()`'s output after the session has started -- tests, or
+   * anything reading the config for logging/assertions -- would see a
+   * freshly-recomputed `systemMessage` reflecting current tools/prompt,
+   * while `sendAndWait` actually sends the *frozen* one on resume
+   * (SYS-REQ-027k). That mismatch is exactly the footgun this guards
+   * against: `_createConfig()`'s return value must always match what's
+   * really in flight, never a preview of what a fresh derivation would be.
    */
   _createConfig(): Pick<SessionConfig, 'availableTools' | 'tools' | 'systemMessage' | 'model'> & {
     autoApproveAll: false;
@@ -273,11 +421,18 @@ export class SessionWrapper {
 
     return {
       availableTools: tools as SessionConfig['availableTools'],
-      // No custom tool handlers are registered on this instance today --
-      // `_tools` holds wire names only (SYS-REQ-027a-1's built-ins). Extend
-      // this once SessionWrapper grows a way to attach a handler per name.
-      tools: [] as SessionConfig['tools'],
-      systemMessage: mergeToolUsageIntoSystemMessage(buildToolUsageSection(tools), this._systemPrompt),
+      // Handler-backed tools added via `addTool` -- `_tools` (above) holds
+      // the wire-name allowlist for all tools including these, while
+      // `_customTools` holds the actual `Tool` objects (with handlers) so
+      // the SDK can dispatch calls to them. Re-read fresh every call, same
+      // as `_tools` itself (SYS-REQ-027j).
+      tools: [...this._customTools.values()] as SessionConfig['tools'],
+      // Frozen once a session exists (see the doc comment above) -- only
+      // ever recomputed for the pre-creation call whose result becomes that
+      // frozen value in the first place.
+      systemMessage:
+        this._frozenSystemMessage ??
+        buildFrozenReplaceSystemMessage(buildToolUsageSection(tools), this._systemPrompt),
       model: this._modelName,
       autoApproveAll: false,
       onPermissionRequest: async (
@@ -329,16 +484,49 @@ export class SessionWrapper {
       throw new Error('SessionWrapper.sendAndWait: no model name was set. Call setModelName() first.');
     }
     const config = this._createConfig();
+    let effectivePrompt = prompt;
 
-    this._session = this._session
-      ? await this._client.resumeSession(this._session.sessionId, { ...this._baseConfig, ...config })
-      : await this._client.createSession({ ...this._baseConfig, ...config });
+    if (!this._session) {
+      // Creating: `config.systemMessage` becomes the permanent prefix for
+      // this session's life (SYS-REQ-027k) -- freeze it now, before it's
+      // ever sent, so every later resume reuses this exact value.
+      this._frozenSystemMessage = config.systemMessage;
+      this._session = await this._client.createSession({ ...this._baseConfig, ...config });
+    } else {
+      // Resuming: reuse the frozen systemMessage rather than `config`'s
+      // freshly-derived one, so this call's prefix is byte-identical to the
+      // create call's (SYS-REQ-027k / issue #345). Any drift in tools or
+      // system prompt since the last turn is relayed via a notice appended
+      // to the prompt below instead -- that only grows the conversation, so
+      // it can't itself invalidate the cached prefix the way editing
+      // `systemMessage` would.
+      const notice = buildSessionUpdateNotice(
+        this._announcedTools,
+        [...this._tools],
+        this._announcedSystemPrompt,
+        this._systemPrompt
+      );
+      const resumeConfig = { ...config, systemMessage: this._frozenSystemMessage };
+      this._session = await this._client.resumeSession(this._session.sessionId, {
+        ...this._baseConfig,
+        ...resumeConfig,
+      });
+      if (notice) {
+        effectivePrompt =
+          typeof prompt === 'string'
+            ? `${notice}\n\n${prompt}`
+            : { ...prompt, prompt: `${notice}\n\n${prompt.prompt}` };
+      }
+    }
+
+    this._announcedTools = [...this._tools];
+    this._announcedSystemPrompt = this._systemPrompt;
 
     // TS can't resolve `session.sendAndWait`'s overloads against a `string |
     // MessageOptions` union directly (call site, not signature, must narrow) --
     // this branch exists only for that; both arms call the same thing.
-    return typeof prompt === 'string'
-      ? this._session.sendAndWait(prompt, timeout)
-      : this._session.sendAndWait(prompt, timeout);
+    return typeof effectivePrompt === 'string'
+      ? this._session.sendAndWait(effectivePrompt, timeout)
+      : this._session.sendAndWait(effectivePrompt, timeout);
   }
 }

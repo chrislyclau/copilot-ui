@@ -1,0 +1,20 @@
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: Understood, standing by.
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: Attempting the custom tool call again.
+        tool_calls:
+          - id: perm_call_1
+            type: function
+            function:
+              name: echo_notes
+              arguments: '{"path":"notes.txt"}'

@@ -370,8 +370,9 @@ drift this spec exists to close off. See "Migration plan" section at the end.
 - **SYS-REQ-027d:** On resume, `SessionWrapper` **shall** re-derive the full
   config via `_createConfig()` — never reuse a partial or previously cached
   config — so a resumed session cannot silently diverge from the tool list or
-  system prompt currently set on the instance. (Carries forward SYS-REQ-026b's
-  intent.)
+  system prompt currently set on the instance, **except** `systemMessage`
+  itself, which is carved out by SYS-REQ-027k below. (Carries forward
+  SYS-REQ-026b's intent for every field other than that carve-out.)
 
 - **SYS-REQ-027e (Unwanted Behavior):** **If** any module calls
   `CopilotClient.createSession` or `CopilotClient.resumeSession` directly instead
@@ -421,6 +422,39 @@ drift this spec exists to close off. See "Migration plan" section at the end.
   the *current* turn is unaffected, since permission for that turn was already
   derived. Behavior is well-defined per-turn, not "live" within a turn.
 
+- **SYS-REQ-027k (Resolved — issue #345):** `systemMessage` **shall** be
+  frozen at session creation and reused byte-for-byte on every subsequent
+  `resumeSession` call for that session's lifetime — `SessionWrapper` **shall
+  not** regenerate it on resume, even though SYS-REQ-027d requires everything
+  else in the config to be freshly re-derived. Rationale: the SDK includes
+  `systemMessage` in the cached prompt prefix; any per-turn edit to it —
+  whether from a tool-list change (the original #345 report, `addTool`/
+  `removeTool` regenerating the tool-usage section) or a caller's own
+  `setSystemPrompt` call taking effect on resume — invalidates that prefix's
+  KV cache on every single resume, defeating prompt caching for the entire
+  session. This supersedes the "systemMessage mode selection" framing in
+  SYS-REQ-027b/issue #146: #146's fix (keep `sections` static, fold tool
+  guidance into `content` only) still let `content` itself change turn to
+  turn, which still busted the prefix — #345 is the stricter fix and is the
+  one that actually holds the prefix fixed.
+  - **If** the tool list or system prompt has changed since the last turn
+    actually sent to the SDK (create or resume), **then** `sendAndWait()`
+    **shall** prepend a plain-text notice to that turn's outgoing prompt
+    (`buildSessionUpdateNotice()`) describing what changed (tools added,
+    tools removed, and/or that operating instructions were updated) — this
+    is how the change reaches the model instead. A notice **shall** only be
+    appended to the *end* of the conversation, never inserted earlier or
+    used to rewrite prior turns, so it can only grow the prompt and can
+    never itself invalidate tokens the cache already has.
+  - **If** nothing changed since the last turn, **then** no notice **shall**
+    be appended — an unconditional per-turn notice would itself grow the
+    prompt on every single turn for no reason.
+  - This carve-out applies to `systemMessage` only. `availableTools`, the
+    handler-dispatch `tools` array, and `onPermissionRequest`'s allowlist
+    are unaffected by SYS-REQ-027k and remain fully re-derived per turn per
+    SYS-REQ-027d/h/i — those are runtime SDK parameters, not part of the
+    cached prompt prefix, so re-deriving them carries none of this hazard.
+
 ---
 
 ## Test coverage implied by this spec
@@ -429,17 +463,23 @@ drift this spec exists to close off. See "Migration plan" section at the end.
    system-prompt tool section, SDK tool config, and permission outcome for every
    candidate tool (in-list → approved, not-in-list → denied) never disagree —
    assert on `_createConfig()`'s output as a black box.
-2. **SDK-footgun regression tests (027b, 027d):** one per documented landmine
+2. **SDK-footgun regression tests (027b, 027d, 027k):** one per documented landmine
    (issue #208 resume dropping `systemMessage`, issue #146 customize-mode cache
-   invalidation, any others surfaced in comments) — these exist specifically
-   because `_createConfig()` is intentionally opaque, so the tests are the only
-   enforcement that those constraints keep holding.
+   invalidation, issue #345 systemMessage regeneration on resume busting the
+   prompt/KV cache prefix, any others surfaced in comments) — these exist
+   specifically because `_createConfig()` is intentionally opaque, so the
+   tests are the only enforcement that those constraints keep holding.
 3. **Contract tests on `sendAndWait` (027c):** call it fresh, call it again on
    the same instance, assert no caller-visible difference except where the SDK
    genuinely requires different plumbing internally.
 4. **Mutator-after-start tests (027f):** whatever the chosen behavior is
    (reject vs. apply-next-turn), assert it explicitly rather than leaving it
    implicit.
+5. **Resume-notice tests (027k):** for a tool-list or system-prompt change
+   between turns, the resumed `systemMessage` **shall** stay byte-identical
+   to the create call's while the change instead appears as a notice
+   prepended to the resumed turn's prompt; for no change between turns, no
+   notice **shall** be appended at all.
 
 ## Migration plan (hotswap)
 
