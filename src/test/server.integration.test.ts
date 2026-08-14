@@ -230,7 +230,7 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
     expect(resumeCalls[0]?.sessionId).toBe('session-0');
   });
 
-  it('resume sends onPermissionRequest, autoApproveAll, tools, and availableTools -- no systemMessage, model, or base-config fields (SYS-REQ-028g)', async () => {
+  it('resume sends onPermissionRequest, autoApproveAll, tools, availableTools, and systemMessage -- no model or other base-config fields (SYS-REQ-028g)', async () => {
     const { client, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { builtins: ['bash'] }, { workingDirectory: '/tmp/work' })
       .setSystemPrompt('be terse')
@@ -251,10 +251,15 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
     // false` must also be explicit, since `CopilotClient.resumeSession`
     // (boundary.ts) defaults it to `true` when omitted, which would swap in
     // an always-approve handler and discard `onPermissionRequest` entirely.
-    // `systemMessage`/`model`/base-config fields are still correctly absent:
+    // `systemMessage` is ALSO resent on resume, byte-identical to creation
+    // (issue #208 / AGENTS.md "resumeSession() drops the system prompt
+    // unless you re-pass it"): the base SDK's `resumeSession` does not
+    // inherit `systemMessage` from the session being resumed, so omitting it
+    // would silently fall back to the SDK's default prompt for the rest of
+    // the turn. `model`/other base-config fields are still correctly absent:
     // those may never legitimately differ from what creation already sent.
     expect(Object.keys(resumeConfig ?? {}).sort()).toEqual(
-      ['autoApproveAll', 'availableTools', 'onPermissionRequest', 'tools'].sort()
+      ['autoApproveAll', 'availableTools', 'onPermissionRequest', 'systemMessage', 'tools'].sort()
     );
     expect(resumeConfig?.autoApproveAll).toBe(false);
   });
@@ -279,7 +284,7 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
 });
 
 describe('SessionWrapper.sendAndWait: systemMessage (SYS-REQ-028h)', () => {
-  it('is sent in customize mode, carrying the caller instructions, and never re-sent on resume', async () => {
+  it('is sent in customize mode, carrying the caller instructions, and resent byte-identical on resume', async () => {
     const { client, createCalls, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { builtins: ['bash'] })
       .setSystemPrompt('you are an auditor')
@@ -290,7 +295,11 @@ describe('SessionWrapper.sendAndWait: systemMessage (SYS-REQ-028h)', () => {
 
     expect(createCalls[0]?.systemMessage?.mode).toBe('customize');
     expect(createCalls[0]?.systemMessage?.content).toContain('you are an auditor');
-    expect(resumeCalls[0]?.config.systemMessage).toBeUndefined();
+    // `resumeSession` does not inherit `systemMessage` from the session
+    // being resumed (issue #208 / AGENTS.md) -- it falls into the same "SDK
+    // requires it re-sent" carve-out as `tools`/`availableTools`, so it must
+    // be resent here byte-identical to what creation sent (SYS-REQ-028l).
+    expect(resumeCalls[0]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
   });
 
   it('setSystemPrompt after the session has started does not change what was already frozen at creation', async () => {

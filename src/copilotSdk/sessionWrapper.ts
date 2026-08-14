@@ -246,11 +246,13 @@ export class SessionWrapper {
 
   /**
    * The `systemMessage` passed on session *creation*. Frozen the moment
-   * `createSession` is called; `resumeSession` never re-sends `systemMessage`
-   * at all (SYS-REQ-028g), but this is still kept so `_createConfig()`'s
-   * output (read by tests, or anything inspecting config post-creation)
-   * never disagrees with what was actually sent at creation, regardless of
-   * any `setSystemPrompt` call made afterward.
+   * `createSession` is called, and reused verbatim on every subsequent
+   * `resumeSession` call (SYS-REQ-028g/028h) -- `resumeSession` does not
+   * inherit `systemMessage` from the session it's resuming (issue #208), so
+   * this is what `sendAndWait()`'s resume branch re-sends. Also kept so
+   * `_createConfig()`'s output (read by tests, or anything inspecting config
+   * post-creation) never disagrees with what was actually sent at creation,
+   * regardless of any `setSystemPrompt` call made afterward.
    */
   private _frozenSystemMessage: SessionConfig['systemMessage'] | undefined = undefined;
 
@@ -447,13 +449,12 @@ export class SessionWrapper {
    * results in `createSession` on the first call -- resuming only ever
    * happens through reusing this same instance (SYS-REQ-028f).
    *
-   * On resume, the ONLY config field passed to the SDK is
-   * `onPermissionRequest` (SYS-REQ-028g) -- `tools`, `availableTools`,
-   * `systemMessage`, `model`, and any `_baseConfig` field are all omitted,
+   * On resume, the config fields passed to the SDK are `onPermissionRequest`
+   * (SYS-REQ-028g), plus `tools`/`availableTools`/`systemMessage` re-sent
+   * byte-identical to what creation sent (see the resume-branch comment
+   * below for why) -- `model` and any other `_baseConfig` field are omitted,
    * since none of them may legitimately change across resume under this
-   * spec (they were already sent byte-identical at creation and are frozen
-   * for the session's life) and the SDK is expected to retain them from the
-   * session it's resuming.
+   * spec and the SDK does retain them from the session it's resuming.
    *
    * The per-turn enablement notice (SYS-REQ-028i/028l) is prepended to every
    * outgoing turn, including the first -- not only turns following a
@@ -513,6 +514,21 @@ export class SessionWrapper {
       // construction-time values keeps this compliant with SYS-REQ-028/
       // 028d-1 (the wire-level set is unchanged, just re-declared).
       //
+      // `systemMessage` falls into that same carve-out, for a different
+      // reason (issue #208, see AGENTS.md "resumeSession() drops the system
+      // prompt unless you re-pass it", and the docstring on
+      // `CopilotClient.resumeSession` in boundary.ts): `resumeSession` does
+      // NOT inherit `systemMessage` from the session being resumed -- the
+      // SDK's base `resumeSession` simply doesn't carry it forward. Omitting
+      // it here would silently fall back to the SDK's full default
+      // `copilot-cli` system prompt for the rest of the turn, quietly
+      // discarding SYS-REQ-028h's frozen prompt (and the tool-usage contract
+      // `buildEnablementNotice` assumes is still in effect) without any
+      // error. `this._frozenSystemMessage` is exactly the byte-identical
+      // value creation sent, so reuse it directly rather than recomputing
+      // via `_createConfig()` (which would derive from the possibly-mutated
+      // `_systemPrompt` instead of the frozen one).
+      //
       // `autoApproveAll: false` must also be explicit here: `boundary.ts`'s
       // `CopilotClient.resumeSession` override defaults `autoApproveAll` to
       // `true` whenever it's omitted, which swaps in its own always-approve
@@ -525,6 +541,7 @@ export class SessionWrapper {
         autoApproveAll: false,
         tools: resumeConfig.tools,
         availableTools: resumeConfig.availableTools,
+        systemMessage: this._frozenSystemMessage,
       });
     }
 

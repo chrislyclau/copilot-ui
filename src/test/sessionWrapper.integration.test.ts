@@ -246,9 +246,10 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
       expect(firstSystem).toContain('Initial prompt marker.');
       expect(firstSystem).not.toContain('Updated prompt marker.');
 
-      // SYS-REQ-028g/h: the second request's systemMessage is not even sent
-      // on resume (only onPermissionRequest is), so it stays whatever the
-      // SDK already has cached from creation regardless of what changed.
+      // SYS-REQ-028g/h: the second request's systemMessage IS resent on
+      // resume (byte-identical to creation, since resumeSession does not
+      // inherit it -- issue #208), so it stays identical to what creation
+      // sent regardless of what `_systemPrompt` changed to afterward.
       expect(secondSystem).toBe(firstSystem);
 
       // The mutation is instead visible only via the per-turn enablement

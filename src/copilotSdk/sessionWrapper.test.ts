@@ -230,7 +230,7 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
     expect(resumeCalls[0]?.sessionId).toBe('session-0');
   });
 
-  it('resume sends onPermissionRequest, autoApproveAll: false, and the SDK-mandatory tools/availableTools -- no systemMessage, model, or base-config fields (SYS-REQ-028g)', async () => {
+  it('resume sends onPermissionRequest, autoApproveAll: false, and the SDK-mandatory tools/availableTools/systemMessage -- no model or other base-config fields (SYS-REQ-028g)', async () => {
     const { client, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { builtins: ['bash'] }, { workingDirectory: '/tmp/work' })
       .setSystemPrompt('be terse')
@@ -246,10 +246,17 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
     // omitted, which would silently replace onPermissionRequest with an
     // auto-approve-everything handler and defeat SYS-REQ-028d entirely.
     expect(resumeConfig?.autoApproveAll).toBe(false);
+    // systemMessage IS resent on resume: `resumeSession` does not inherit it
+    // from the session being resumed (AGENTS.md, "resumeSession() drops the
+    // system prompt unless you re-pass it"; boundary.ts docstring on
+    // `CopilotClient.resumeSession`; issue #208). Omitting it here would
+    // silently fall back to the SDK's default system prompt for the rest of
+    // the turn.
     expect(Object.keys(resumeConfig ?? {}).sort()).toEqual([
       'autoApproveAll',
       'availableTools',
       'onPermissionRequest',
+      'systemMessage',
       'tools',
     ]);
   });
@@ -274,7 +281,7 @@ describe('SessionWrapper.sendAndWait: construction/resume lifecycle (SYS-REQ-028
 });
 
 describe('SessionWrapper.sendAndWait: systemMessage (SYS-REQ-028h)', () => {
-  it('is sent in customize mode, carrying the caller instructions, and never re-sent on resume', async () => {
+  it('is sent in customize mode, carrying the caller instructions, and resent byte-identical on resume', async () => {
     const { client, createCalls, resumeCalls } = fakeClient();
     const wrapper = new SessionWrapper(client, { builtins: ['bash'] })
       .setSystemPrompt('you are an auditor')
@@ -285,7 +292,28 @@ describe('SessionWrapper.sendAndWait: systemMessage (SYS-REQ-028h)', () => {
 
     expect(createCalls[0]?.systemMessage?.mode).toBe('customize');
     expect(createCalls[0]?.systemMessage?.content).toContain('you are an auditor');
-    expect(resumeCalls[0]?.config.systemMessage).toBeUndefined();
+    // `resumeSession` does not inherit `systemMessage` from the session
+    // being resumed (issue #208 / AGENTS.md) -- it falls into the same
+    // "SDK requires it re-sent" carve-out as `tools`/`availableTools`, so it
+    // must be resent here byte-identical to what creation sent, frozen for
+    // the session's life (SYS-REQ-028l).
+    expect(resumeCalls[0]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
+  });
+
+  it('stays byte-identical across every resume even if setSystemPrompt is called again mid-session', async () => {
+    const { client, createCalls, resumeCalls } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] })
+      .setSystemPrompt('initial')
+      .setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+    wrapper.setSystemPrompt('changed');
+    await wrapper.sendAndWait('turn two');
+    await wrapper.sendAndWait('turn three');
+
+    expect(resumeCalls[0]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
+    expect(resumeCalls[1]?.config.systemMessage).toEqual(createCalls[0]?.systemMessage);
+    expect(resumeCalls[0]?.config.systemMessage?.content).not.toContain('changed');
   });
 
   it('setSystemPrompt after the session has started does not change what was already frozen at creation', async () => {
@@ -316,7 +344,6 @@ describe('SessionWrapper.sendAndWait: per-turn enablement notice (SYS-REQ-028i/0
     expect(firstPrompt).toContain('bash, view');
     expect(firstPrompt.endsWith('turn one')).toBe(true);
   });
-});
 
   it('is present again on the second turn even when nothing changed', async () => {
     const { client, sessions } = fakeClient();
@@ -383,7 +410,7 @@ describe('SessionWrapper.sendAndWait: per-turn enablement notice (SYS-REQ-028i/0
     const secondPrompt = resumedSendAndWait.mock.calls[0]?.[0] as string;
     expect(secondPrompt).toContain("additional operating instructions changed");
   });
-
+});
 
 describe('SessionWrapper.sendAndWait: mid-turn enablement race (SYS-REQ-028k)', () => {
   it('an in-flight call is unaffected by a disableTools that lands after its permission check already ran; a later call to the same tool is denied', async () => {

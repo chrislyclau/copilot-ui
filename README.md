@@ -295,6 +295,21 @@ Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git manag
 
 # SessionWrapper — Spec Draft (EARS)
 
+> **Superseded in part by SYS-REQ-028** (see `docs/SessionWrapper-spec.md`,
+> "SessionWrapper: Tool Enablement & Cache Stability"). That spec replaces
+> the tool-mutation and system-message requirements below — SYS-REQ-027a,
+> 027a-1, 027d, 027h, 027i, 027j, and 027k — with a fixed construction-time
+> tool schema (`enableTools`/`disableTools` over a set declared at
+> construction, not `addTools`/`removeTools`/`addTool`/`removeTool`) and a
+> three-state permission model (declared-but-disabled vs. declared-and-enabled
+> vs. never-declared) in place of 027h's present-in-`_tools` pure-membership
+> model. 027f's underlying concern (post-start mutator calls need
+> explicitly-defined behavior) still applies but now names
+> `enableTools`/`disableTools`, not `addTools`/`removeTools`. The rest of
+> this section (027, 027b, 027c, 027e, 027g) is still current. The
+> "Migration plan" and "Test coverage implied by this spec" subsections
+> below reference the pre-028 mutator names and predate the rename.
+
 **Status:** draft, replaces SYS-REQ-026 family (decision made — see below)
 **Relationship to existing spec:** `README.md` §5.5 ("Hardened Session Wrapper
 (Sole SDK Session Entry Point)") currently contains SYS-REQ-026/026a/026b/026c,
