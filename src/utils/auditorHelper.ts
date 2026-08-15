@@ -444,13 +444,22 @@ export async function executeAuditSession<T>(
       timeoutMs,
       maxRetries,
       getResult: () => result,
-      // Explicit, not left to the [toolName]-only default: runForcedToolTurnUntilTimeout's
-      // nudge-retry restricts the wrapper's enabled-tool subset (see
-      // toolCallEnforcement.ts) each time it resumes, so without this the
-      // resumed session would silently lose run_terminal_docker from its
-      // allowlist after the first nudge, even though it's still present in
-      // the wrapper's construction-time tool set (issue #299).
-      availableTools: [toolName, RUN_TERMINAL_DOCKER_TOOL.function.name],
+      // Left at the [toolName]-only default (i.e. omitted) rather than also
+      // listing `run_terminal_docker`: under the pre-#346/#359 `SessionPolicy`
+      // implementation, `availableTools` fed a wire-level allowlist, so
+      // including `run_terminal_docker` here kept it *callable* across a
+      // nudge-retry resume (issue #299). Under the migrated
+      // `restrictToTargetTools` implementation (toolCallEnforcement.ts),
+      // `availableTools` (defaulting to `targetTools`) is instead the
+      // disable-then-reenable-target scope for a nudge retry -- listing
+      // `run_terminal_docker` here would disable it and only re-enable
+      // `toolName`, the opposite of #299's goal. Omitting the option (or
+      // passing just `[toolName]`) leaves `run_terminal_docker` untouched by
+      // `restrictToTargetTools`, so it keeps whatever enabled state it had
+      // from construction (see `builtins`/`custom` above) -- i.e. it stays
+      // callable, preserving #299's intent. See
+      // toolCallEnforcementUntilTimeout.test.ts's nudge-retry tests for the
+      // regression guard.
       responseRequirements,
       onSession: (s) => {
         sessionId = s.sessionId;
