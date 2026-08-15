@@ -364,8 +364,7 @@ export class SessionWrapper {
 
   /**
    * Replaces the session's model name. If called after a session has
-   * started, never rejected -- takes effect starting the next
-   * `_createConfig()` derivation (i.e. the next `sendAndWait()` call).
+   * started, it will have no effects.
    */
   setModelName(modelName: string): this {
     this._modelName = modelName;
