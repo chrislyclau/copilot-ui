@@ -52,6 +52,7 @@ describe('Scenario 3: Mutation gate failure (SYS-REQ-004)', () => {
               arguments: '{"command": "echo hello"}'`);
       await proxy.updateConfig({ filePath: snapshotPath, workDir: tempCwd });
       fs.writeFileSync(path.join(tempCwd, '.git'), 'gitdir: /fake/path');
+      const historyLenBefore = proxy.requestHistory.length;
       const res = await fetch(`http://127.0.0.1:${serverPort}/api/copilot/gate-run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -72,6 +73,27 @@ describe('Scenario 3: Mutation gate failure (SYS-REQ-004)', () => {
         }
       }
       assert.ok(!finalData.includes('"gateName":"MutationGate"'), 'Should NOT fail with MutationGate on retry');
+
+      // SYS-REQ-004 narrowed retry (issue #361): the retry must resume the
+      // SAME session -- not spin up a fresh, history-less one -- so the
+      // model still sees turn 1's context on the forced-tool retry turn.
+      // Assert directly on what was actually sent to CAPI, rather than only
+      // checking that a tool call eventually landed, since a brand-new
+      // session could also produce a tool call while silently losing
+      // context.
+      const requestsThisTest = proxy.requestHistory.slice(historyLenBefore);
+      const retryRequestSawPriorTurn = requestsThisTest.some((req: any) =>
+        JSON.stringify(req.messages).includes(
+          "I will now implement the feature by changing many files"
+        )
+      );
+      assert.ok(
+        retryRequestSawPriorTurn,
+        "Narrowed retry should resume the original session: the retry's outgoing " +
+          "request must still include turn 1's assistant message, proving " +
+          "conversation history/context survived the retry rather than being " +
+          "silently dropped by starting a fresh session."
+      );
     } finally {
       fs.rmSync(tempCwd, { recursive: true, force: true });
     }
