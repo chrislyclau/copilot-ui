@@ -12,8 +12,7 @@ import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction } from '../src/utils/auditorHelper';
 import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
-import { CopilotClient, type SessionConfig, type SdkProviderConfig, type ToolInvocation, ToolSet } from '../src/copilotSdk/boundary';
-import { createHardenedSession, type SessionPolicy } from '../src/copilotSdk/hardenedSession';
+import { CopilotClient, type SdkProviderConfig, type ToolInvocation, ToolSet } from '../src/copilotSdk/boundary';
 import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
 import { createRunGhCommandTool, RUN_GH_COMMAND_TOOL_NAME, type RunGhCommandArgs } from './tools/agentGhTool';
 
@@ -188,24 +187,12 @@ async function main() {
     await client.start();
 
     console.log('[audit-codebase] creating session...');
-    const systemMessage: SessionConfig['systemMessage'] = {
-      mode: 'replace',
-      content: systemPrompt,
-    };
     // availableTools is keyed by the built-in tool's *wire name* (this is
     // what actually gets included as a callable tool schema in the request
-    // sent to the model) -- separate from autoApprovedTools below, which is
-    // checked against the permission *kind* the SDK reports at call time
-    // (see hardenedSession.ts's extractRequestedToolName). This split isn't
-    // uniform across the four tools: bash/view report as the built-in kinds
-    // 'shell'/'read', while grep/glob report as { kind: 'custom-tool',
-    // toolName: 'grep' | 'glob' }, which extractRequestedToolName resolves
-    // to the toolName itself, not 'read'/'shell'. So autoApprovedTools needs
-    // all four identifiers -- 'read', 'shell', 'grep', 'glob' -- or calls to
-    // whichever tool isn't listed get permission-rejected. Both lists (this
-    // one and availableTools) are required regardless: without the wire
-    // names here, the model is never offered bash/view/grep/glob as
-    // callable at all.
+    // sent to the model). Also passed to runForcedToolTurnUntilTimeout below
+    // as the nudge-retry `restrictToTargetTools` scope (issue #346/#359) --
+    // see auditorHelper.ts's `wrapper` construction for the equivalent,
+    // already-migrated pattern this mirrors.
     const availableTools = new ToolSet()
       .addBuiltIn('bash')
       .addBuiltIn('view')
@@ -213,48 +200,23 @@ async function main() {
       .addBuiltIn('glob')
       .addCustom(RUN_GH_COMMAND_TOOL_NAME)
       .toArray();
-    const policy: SessionPolicy = {
-      availableTools,
-      tools: [auditGhCommandTool] as unknown as SessionPolicy['tools'],
-      systemMessage,
-      autoApprovedTools: ['read', 'shell', 'grep', 'glob', RUN_GH_COMMAND_TOOL_NAME],
-    };
-    // sessionConfig retains the non-policy fields (plus tools/systemMessage,
-    // which runForcedToolTurnUntilTimeout below also needs) that
-    // createHardenedSession doesn't own; the policy-owned fields
-    // (availableTools/autoApproveAll/onPermissionRequest) are derived from
-    // `policy` above instead of set here.
-    const sessionConfig = {
-      model: executionConfig.model,
-      ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
-      systemMessage,
-      tools: [auditGhCommandTool],
-      streaming: false,
-    };
-    const session = await createHardenedSession(client, sessionConfig, policy);
-
-    sessionId = session.sessionId;
-    console.log(`[audit-codebase] session created: ${sessionId}`);
-    setActiveOpenRouterSessionId(sessionId);
-
-    console.log('[audit-codebase] sending task and waiting for completion...');
-    // Adopts the already-hardened `session` above (see SessionWrapper.adopt's
-    // docstring, issue #359) rather than letting runForcedToolTurnUntilTimeout
-    // create its own -- this session's permissions were already fixed by
-    // `policy` at createHardenedSession time.
-    // TODO(#78): audit nit -- this `toolsConfig` declares only `custom`
-    // tools, omitting `builtins`, so the wrapper's `_onPermissionRequest`
-    // rejects built-in tool calls (bash/view/edit/grep/glob) during forced
-    // tool turns here. The previous `createHardenedSession` +
-    // `autoApprovedTools` path auto-approved all tools, so this is an
-    // undocumented behavioral tightening -- differs from
-    // `auditorHelper.ts`'s wrapper, which explicitly lists builtins per
-    // issue #77. May be correct (the model should only call the target
-    // tool on a forced turn) but needs a decision before assuming so.
-    const wrapper = SessionWrapper.adopt(
-      session,
+    // Constructs a SessionWrapper up front instead of
+    // createHardenedSession() + SessionWrapper.adopt() (issue #360) -- this
+    // session is created fresh for this one audit run (no
+    // continuation/adoption concern), so it's a straightforward drop-in,
+    // same as auditorHelper.ts's executeAuditSession (issue #359).
+    //
+    // `builtins` must be declared here (issue #77/#78) -- SessionWrapper's
+    // `_onPermissionRequest` gate only auto-approves construction-time
+    // `_enabledTools`, and `autoApproveAll` is always `false` for wrapped
+    // sessions. Without this, every SDK built-in tool call (bash/view/
+    // grep/glob) is rejected. `view`/`grep`/`glob` share permission-request
+    // kind `'read'` (see `_kindSiblings`), so all three must be listed
+    // together or none of them will be approved.
+    const wrapper = new SessionWrapper(
       client,
       {
+        builtins: ['bash', 'view', 'grep', 'glob'],
         // `Tool<RunGhCommandArgs>` isn't structurally assignable to
         // `SessionWrapperToolsConfig.custom`'s `Tool<unknown>` (contravariant
         // handler param) -- adapt at this boundary rather than widening the
@@ -262,29 +224,38 @@ async function main() {
         // itself already treats as pre-validated against its JSON schema
         // (the SDK validates before invoking the handler), so this is the
         // same trust boundary `auditGhCommandTool.handler` already relies on.
-        custom: sessionConfig.tools.map((tool) => ({
+        custom: [auditGhCommandTool].map((tool) => ({
           ...tool,
           handler: (args: unknown, invocation: ToolInvocation) =>
             tool.handler!(args as RunGhCommandArgs, invocation),
         })),
       },
-      {},
-      executionConfig.model,
-      sessionConfig.systemMessage as SessionConfig['systemMessage'],
-    );
-    await runForcedToolTurnUntilTimeout(wrapper, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
+      {
+        ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
+        streaming: false,
+      },
+    )
+      .setModelName(executionConfig.model)
+      .setSystemPrompt(systemPrompt);
+
+    console.log('[audit-codebase] sending task and waiting for completion...');
+    const turnResult = await runForcedToolTurnUntilTimeout(wrapper, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
       timeoutMs: 900000,
       maxRetries: 2,
       getResult: () => undefined,
       availableTools,
-      onSessionId: (id) => {
-        sessionId = id;
-        setActiveOpenRouterSessionId(id);
+      onSession: (s) => {
+        sessionId = s.sessionId;
+        setActiveOpenRouterSessionId(s.sessionId);
       },
     });
 
     console.log('[audit-codebase] disconnecting session...');
-    await session.disconnect();
+    try {
+      await turnResult.session.disconnect();
+    } catch (e) {
+      // Best-effort: don't let disconnect failures mask an already-completed run.
+    }
 
     console.log('[audit-codebase] complete!');
   } catch (err: any) {

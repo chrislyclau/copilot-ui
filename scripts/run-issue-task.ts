@@ -11,8 +11,7 @@ import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig } from '../src/utils/auditorHelper';
 import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
-import { CopilotClient, type SessionConfig, type SdkProviderConfig, type ToolInvocation, ToolSet } from '../src/copilotSdk/boundary';
-import { createHardenedSession, type SessionPolicy } from '../src/copilotSdk/hardenedSession';
+import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/copilotSdk/boundary';
 import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
 import {
   createRunGhCommandTool,
@@ -123,43 +122,18 @@ async function main() {
     await client.start();
 
     console.log('[run-issue-task] creating session...');
-    const systemMessage: SessionConfig['systemMessage'] = {
-      mode: 'replace',
-      content: systemPrompt,
-    };
-    const policy: SessionPolicy = {
-      availableTools: new ToolSet().addCustom(RUN_GH_COMMAND_TOOL_NAME).toArray(),
-      tools: [runGhCommandTool] as unknown as SessionPolicy['tools'],
-      systemMessage,
-      autoApprovedTools: [RUN_GH_COMMAND_TOOL_NAME],
-    };
-    // sessionConfig retains the non-policy fields (plus tools/systemMessage, which
-    // runForcedToolTurnUntilTimeout below also needs) that createHardenedSession
-    // doesn't own; the policy-owned fields (availableTools/autoApproveAll/
-    // onPermissionRequest) are derived from `policy` above instead of set here.
-    const sessionConfig = {
-      model: executionConfig.model,
-      ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
-      systemMessage,
-      tools: [runGhCommandTool],
-      streaming: false,
-    };
-    const session = await createHardenedSession(client, sessionConfig, policy);
-
-    sessionId = session.sessionId;
-    console.log(`[run-issue-task] session created: ${sessionId}`);
-    setActiveOpenRouterSessionId(sessionId);
-
-    console.log('[run-issue-task] sending task and waiting for completion...');
-    // See SessionWrapper.adopt's docstring (issue #359): `session` above was
-    // already hardened by `policy` at createHardenedSession time.
-    // TODO(#78): audit nit -- see the matching TODO in
-    // scripts/audit-codebase.ts. This `toolsConfig` also omits `builtins`,
-    // so built-in tool calls are rejected here too during forced tool
-    // turns, an undocumented tightening vs. the old auto-approved-all
-    // behavior. Needs a decision before assuming it's correct.
-    const wrapper = SessionWrapper.adopt(
-      session,
+    // Constructs a SessionWrapper up front instead of createHardenedSession()
+    // + SessionWrapper.adopt() (issue #360) -- this session is created fresh
+    // for this one issue-resolution run (no continuation/adoption concern),
+    // mirroring scripts/audit-codebase.ts's identical migration and
+    // auditorHelper.ts's executeAuditSession (issue #359).
+    //
+    // No `builtins` here (unlike audit-codebase.ts's bash/view/grep/glob) --
+    // this agent resolves an issue via the gh-only tool with no filesystem
+    // access (see the module doc comment above), so leaving `builtins`
+    // empty preserves that no-filesystem-access scope rather than an
+    // oversight.
+    const wrapper = new SessionWrapper(
       client,
       {
         // See the matching comment in scripts/audit-codebase.ts: adapt at
@@ -167,28 +141,37 @@ async function main() {
         // type. `args` is already validated against the tool's JSON schema
         // by the SDK before the handler runs -- same trust boundary
         // `runGhCommandTool.handler` itself relies on.
-        custom: sessionConfig.tools.map((tool) => ({
+        custom: [runGhCommandTool].map((tool) => ({
           ...tool,
           handler: (args: unknown, invocation: ToolInvocation) =>
             tool.handler!(args as RunGhCommandArgs, invocation),
         })),
       },
-      {},
-      executionConfig.model,
-      sessionConfig.systemMessage as SessionConfig['systemMessage'],
-    );
-    await runForcedToolTurnUntilTimeout(wrapper, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
+      {
+        ...(executionConfig.provider ? { provider: executionConfig.provider as SdkProviderConfig } : {}),
+        streaming: false,
+      },
+    )
+      .setModelName(executionConfig.model)
+      .setSystemPrompt(systemPrompt);
+
+    console.log('[run-issue-task] sending task and waiting for completion...');
+    const turnResult = await runForcedToolTurnUntilTimeout(wrapper, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
       timeoutMs: 900000,
       maxRetries: 2,
       getResult: () => undefined,
-      onSessionId: (id) => {
-        sessionId = id;
-        setActiveOpenRouterSessionId(id);
+      onSession: (s) => {
+        sessionId = s.sessionId;
+        setActiveOpenRouterSessionId(s.sessionId);
       },
     });
 
     console.log('[run-issue-task] disconnecting session...');
-    await session.disconnect();
+    try {
+      await turnResult.session.disconnect();
+    } catch (e) {
+      // Best-effort: don't let disconnect failures mask an already-completed run.
+    }
 
     console.log('[run-issue-task] complete!');
   } catch (err: any) {
