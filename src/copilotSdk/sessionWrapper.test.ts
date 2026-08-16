@@ -466,6 +466,134 @@ describe('SessionWrapper: misc lifecycle errors', () => {
   });
 });
 
+// NOTE: adopt() is a transitional mechanism (issue #358), not a permanent
+// spec-sanctioned feature -- see the docstring on SessionWrapper.adopt().
+// These tests lock down its behavior while it's in use, not because it's
+// meant to be a lasting pattern; they should be revisited/retired alongside
+// adopt() once the raw-session call sites it unblocks are migrated.
+describe('SessionWrapper.adopt (issue #358: transitional caller-owned-session path)', () => {
+  function frozenSystemMessage(content: string): SessionConfig['systemMessage'] {
+    return { mode: 'customize', content };
+  }
+
+  it('the first sendAndWait after adopt resumes the adopted session, never creates a new one (adopt() is exempt from SYS-REQ-028f\'s create-on-first-call default, per its docstring -- not a spec amendment)', async () => {
+    const { client, createCalls, resumeCalls, sessions: _sessions } = fakeClient();
+    const preexistingSession = {
+      sessionId: 'preexisting-session',
+      sendAndWait: vi.fn().mockResolvedValue(undefined),
+    } as unknown as CopilotSession;
+
+    const wrapper = SessionWrapper.adopt(
+      preexistingSession,
+      client,
+      { builtins: ['bash'] },
+      {},
+      'claude-sonnet-4.5',
+      frozenSystemMessage('you are an auditor')
+    );
+
+    await wrapper.sendAndWait('continue the retry');
+
+    expect(createCalls).toHaveLength(0);
+    expect(resumeCalls).toHaveLength(1);
+    expect(resumeCalls[0]?.sessionId).toBe('preexisting-session');
+  });
+
+  it('resends the exact frozenSystemMessage passed to adopt(), byte-identical, on every subsequent resume (per SYS-REQ-028g/h, applied to adopt()\'s caller-supplied value rather than a wrapper-issued one)', async () => {
+    const { client, resumeCalls } = fakeClient();
+    const preexistingSession = {
+      sessionId: 'preexisting-session',
+      sendAndWait: vi.fn().mockResolvedValue(undefined),
+    } as unknown as CopilotSession;
+    const originalSystemMessage = frozenSystemMessage('original prompt from createHardenedSession');
+
+    const wrapper = SessionWrapper.adopt(
+      preexistingSession,
+      client,
+      { builtins: ['bash'] },
+      {},
+      'claude-sonnet-4.5',
+      originalSystemMessage
+    );
+
+    await wrapper.sendAndWait('turn one');
+    await wrapper.sendAndWait('turn two');
+
+    expect(resumeCalls[0]?.config.systemMessage).toEqual(originalSystemMessage);
+    expect(resumeCalls[1]?.config.systemMessage).toEqual(originalSystemMessage);
+  });
+
+  it('does not fire a spurious "system prompt changed" notice on the first post-adoption turn', async () => {
+    const { client, sessions } = fakeClient();
+    const preexistingSession = {
+      sessionId: 'preexisting-session',
+      sendAndWait: vi.fn().mockResolvedValue(undefined),
+    } as unknown as CopilotSession;
+
+    const wrapper = SessionWrapper.adopt(
+      preexistingSession,
+      client,
+      { builtins: ['bash'] },
+      {},
+      'claude-sonnet-4.5',
+      frozenSystemMessage('original prompt')
+    );
+
+    await wrapper.sendAndWait('turn one');
+
+    const firstSendAndWait = sessions[0]?.sendAndWait as ReturnType<typeof vi.fn>;
+    const firstPrompt = firstSendAndWait.mock.calls[0]?.[0] as string;
+    expect(firstPrompt).not.toContain('additional operating instructions changed');
+    // The unconditional per-turn enablement notice (SYS-REQ-028i) must still
+    // fire, though -- adoption doesn't exempt this call site from it.
+    expect(firstPrompt).toContain('Tools enabled this turn');
+  });
+
+  it('enableTools/disableTools govern the adopted session exactly as they would a self-created one (SYS-REQ-028b/c/d)', async () => {
+    const { client } = fakeClient();
+    const preexistingSession = {
+      sessionId: 'preexisting-session',
+      sendAndWait: vi.fn().mockResolvedValue(undefined),
+    } as unknown as CopilotSession;
+
+    const wrapper = SessionWrapper.adopt(
+      preexistingSession,
+      client,
+      { builtins: ['bash', 'view'] },
+      {},
+      'claude-sonnet-4.5',
+      frozenSystemMessage('original prompt')
+    );
+
+    const configBefore = wrapper._createConfig();
+    await expect(configBefore.onPermissionRequest({ kind: 'shell' } as PermissionRequest, { sessionId: 's1' })).resolves.toEqual({
+      kind: 'approve-once',
+    });
+
+    wrapper.disableTools('bash');
+    const configAfter = wrapper._createConfig();
+    // Wire-level schema is still fixed to the full construction-time list
+    // (028/028d-1) -- adoption doesn't change that either.
+    expect(configAfter.availableTools).toEqual(['bash', 'view']);
+    await expect(configAfter.onPermissionRequest({ kind: 'shell' } as PermissionRequest, { sessionId: 's1' })).resolves.toMatchObject({
+      kind: 'reject',
+    });
+  });
+
+  it('each call to adopt() builds an independent wrapper -- adopting twice never mutates a wrapper that already has a session', async () => {
+    const { client } = fakeClient();
+    const sessionA = { sessionId: 'session-a', sendAndWait: vi.fn().mockResolvedValue(undefined) } as unknown as CopilotSession;
+    const sessionB = { sessionId: 'session-b', sendAndWait: vi.fn().mockResolvedValue(undefined) } as unknown as CopilotSession;
+
+    const wrapperA = SessionWrapper.adopt(sessionA, client, { builtins: ['bash'] }, {}, 'claude-sonnet-4.5', frozenSystemMessage('a'));
+    const wrapperB = SessionWrapper.adopt(sessionB, client, { builtins: ['bash'] }, {}, 'claude-sonnet-4.5', frozenSystemMessage('b'));
+
+    expect(wrapperA.session).toBe(sessionA);
+    expect(wrapperB.session).toBe(sessionB);
+    expect(wrapperA).not.toBe(wrapperB);
+  });
+});
+
 describe('SessionWrapper side-door surface (SYS-REQ-028e/028j)', () => {
   it('exposes no method that could bind policy/config to a session it did not create, and no post-construction tool-adding method', () => {
     const allowedPublicMethods = new Set([
