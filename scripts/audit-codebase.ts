@@ -240,7 +240,7 @@ async function main() {
 
     console.log('[audit-codebase] sending task and waiting for completion...');
     const turnResult = await runForcedToolTurnUntilTimeout(wrapper, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
-      timeoutMs: 900000,
+      timeoutMs: 1800000, // 30 minutes
       maxRetries: 2,
       getResult: () => undefined,
       availableTools,
