@@ -145,6 +145,50 @@ describe('SessionWrapper._createConfig (SYS-REQ-028/028a/028d-1: schema is fixed
   });
 });
 
+describe('SessionWrapper permission-kind derivation (issue #277 regression coverage, ported per #347)', () => {
+  // Regression coverage for issue #277: `availableTools` (wire names) and the
+  // permission-request `kind` the SDK reports for built-ins are two
+  // different namespaces, and a caller who conflates them gets every
+  // built-in tool call silently rejected. `hardenedSession.ts`'s
+  // `deriveAutoApprovedTools`/`BUILTIN_TOOL_PERMISSION_KIND` had a dedicated
+  // regression suite (`issue277.test.ts`) for its own copy of this mapping;
+  // `SessionWrapper` derives the same mapping internally (its own
+  // `BUILTIN_TOOL_PERMISSION_KIND`, unexported) via `_createConfig()`'s
+  // `onPermissionRequest`, so this ports the same assertions onto that
+  // surface: constructing a wrapper with a single built-in and asserting its
+  // *kind*-shaped request is approved, matching #277's "wire name maps to
+  // kind" table one entry at a time (avoids the deliberate
+  // multiple-siblings-share-a-kind collision behavior covered separately by
+  // 'rejects a real "grep" tool call ...' in sessionWrapper.integration.test.ts).
+  it.each([
+    { builtin: 'bash', request: shellRequest(), kindLabel: 'shell' },
+    { builtin: 'view', request: readRequest(), kindLabel: 'read' },
+    { builtin: 'grep', request: readRequest(), kindLabel: 'read' },
+    { builtin: 'glob', request: readRequest(), kindLabel: 'read' },
+    { builtin: 'edit', request: { kind: 'write' } as PermissionRequest, kindLabel: 'write' },
+  ])('built-in "$builtin" round-trips to permission kind "$kindLabel"', async ({ builtin, request }) => {
+    const wrapper = new SessionWrapper(undefined, { builtins: [builtin] });
+    const config = wrapper._createConfig();
+
+    expect(config.availableTools).toEqual([builtin]);
+    await expect(config.onPermissionRequest(request, { sessionId: 's1' })).resolves.toEqual({
+      kind: 'approve-once',
+    });
+  });
+
+  it('a name with no known built-in mapping (custom/MCP/hook tool name) passes through unchanged', async () => {
+    const wrapper = new SessionWrapper(undefined, { builtins: [], custom: [fakeTool('github-list_issues')] });
+    const config = wrapper._createConfig();
+
+    await expect(
+      config.onPermissionRequest(customToolRequest('github-list_issues'), { sessionId: 's1' })
+    ).resolves.toEqual({ kind: 'approve-once' });
+    await expect(
+      config.onPermissionRequest(customToolRequest('some_other_unlisted_tool'), { sessionId: 's1' })
+    ).resolves.toMatchObject({ kind: 'reject' });
+  });
+});
+
 describe('SessionWrapper.enableTools/disableTools (SYS-REQ-028b/028c)', () => {
   it('disableTools denies at the permission layer without touching availableTools/tools', async () => {
     const wrapper = new SessionWrapper(undefined, { builtins: ['bash'] });
