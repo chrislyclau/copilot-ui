@@ -123,6 +123,7 @@ import {
   CopilotCreateSessionOptions,
   getCodeState,
   runLlmAudit,
+  checkActiveOrchestrationSession,
 } from "./sessionState";
 
 import { ExtendedResponse, SseWriter } from "../utils/sseWriter";
@@ -971,6 +972,7 @@ export const handleGateLoop = async (
                 writeLog,
                 sensitiveValuesCache || new Set<string>(),
                 sessionId || undefined,
+                () => globalAutoApproveAll,
               ),
             },
             {
@@ -985,6 +987,11 @@ export const handleGateLoop = async (
                 },
               },
               handler: async (args: unknown) => {
+                const gate = checkActiveOrchestrationSession(globalAutoApproveAll, "run_tests");
+                if (!gate.ok) {
+                  writeLog(`[run_tests] Blocked: ${gate.message}`, LogLevel.WARN);
+                  return { status: "error", output: gate.message };
+                }
                 const res = await runTests(runCwd);
                 return { status: "success", output: res.output };
               },
@@ -1796,6 +1803,7 @@ export const handleGateLoop = async (
                   writeLog,
                   sensitiveValuesCache || new Set<string>(),
                   sessionId || undefined,
+                  () => globalAutoApproveAll,
                 ),
               },
               {
@@ -1810,6 +1818,11 @@ export const handleGateLoop = async (
                   },
                 },
                 handler: async (args: unknown) => {
+                  const gate = checkActiveOrchestrationSession(globalAutoApproveAll, "run_tests");
+                  if (!gate.ok) {
+                    writeLog(`[run_tests] Blocked: ${gate.message}`, LogLevel.WARN);
+                    return { status: "error", output: gate.message };
+                  }
                   const res = await runTests(runCwd);
                   return { status: "success", output: res.output };
                 },

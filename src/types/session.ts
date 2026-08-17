@@ -1,5 +1,6 @@
 import { ModelTier } from '../config/models';
 import { CopilotSession } from '../copilotSdk/boundary';
+import { SessionWrapper } from '../copilotSdk/sessionWrapper';
 
 export interface TaskDecomposition {
   readonly version: number;
@@ -96,4 +97,14 @@ export interface SessionRecord {
   readonly unsubscribe?: () => void;
   readonly pendingPatchedSpec?: string;
   readonly lastPassedSpecAuditSha?: string;
+
+  // Hotswap migration target for issue #246 item 7 / #346 (see
+  // getOrCreateSessionWrapper in sessionState.ts). Populated only by callers
+  // migrated onto the SessionWrapper-owning path; `copilotSession` above
+  // remains the source of truth for unmigrated callers during the
+  // call-site-by-call-site migration. A record should never carry both a
+  // meaningfully-live `copilotSession` AND a `sessionWrapper` at once outside
+  // of the migration window for a single call site -- exactly one lifecycle
+  // owner should be in play for a given sessionId once migration completes.
+  readonly sessionWrapper?: SessionWrapper;
 }

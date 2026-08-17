@@ -2,7 +2,8 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { CopilotClient, SessionConfig, SdkProviderConfig, Tool, CopilotSession } from '../copilotSdk/boundary';
-import { MODEL_TIERS } from '../config/models';
+import { SessionWrapper, SessionWrapperToolsConfig, SessionWrapperBaseConfig } from '../copilotSdk/sessionWrapper';
+import { MODEL_TIERS, ModelTier } from '../config/models';
 import { SessionRecord, StateSnapshot } from '../types/session';
 import { AuditResult } from '../types/audit';
 import { getWorkspaceHostLocation, getExecCommand, getWorkspaceRoot } from '../workspace';
@@ -69,6 +70,43 @@ export class SessionMap extends Map<string, SessionRecord> {
 export const activeSessions = new SessionMap();
 export const sseResToSessionId = new Map<express.Response, string>();
 export const sessionWritePromises = new Map<string, Promise<void>>();
+
+/**
+ * Shared active-orchestration-session gate for tools whose handler code we
+ * own (`run_terminal_docker`, `run_tests`) -- moved from the permission
+ * layer (`handleGateRunPermission` in gateLoop.ts) into the tool handlers
+ * themselves as part of the #346 migration off `SessionWrapper.adopt()`.
+ * `SessionWrapper`'s own `onPermissionRequest` only expresses static
+ * name-based enablement (SYS-REQ-028d); it has no hook for this kind of
+ * live-state check, so rather than extending SessionWrapper's permission
+ * surface (a spec change), the check moves to where we already own the
+ * code path and can simply decline to do the side-effecting work.
+ *
+ * `autoApproveAll` is passed in rather than imported directly, since the
+ * source of truth (`globalAutoApproveAll` in gateLoop.ts) would otherwise
+ * create a circular import (gateLoop.ts already imports the tool handlers
+ * this function is used by). Preserves handleGateRunPermission's exact
+ * prior scope: checks for ANY active, non-awaiting-human session across
+ * `activeSessions`, not just the calling session -- not narrowed here.
+ */
+export function checkActiveOrchestrationSession(
+  autoApproveAll: boolean,
+  toolName: string
+): { ok: true } | { ok: false; message: string } {
+  if (autoApproveAll) {
+    return { ok: true };
+  }
+  const hasActiveSession = Array.from(activeSessions.values()).some(
+    s => s.stateSnapshot?.isRunning && !s.stateSnapshot?.awaitingHuman
+  );
+  if (hasActiveSession) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    message: `Execution of ${toolName} requires an active, authorized orchestration session context.`,
+  };
+}
 export const activeLocks = new Map<string, AbortController>();
 
 export let sensitiveValuesCache: Set<string> | null = null;
@@ -146,29 +184,35 @@ export const DIAGNOSTIC_SCENARIOS: Record<string, { gateSequence: boolean[], exe
  * A no-op (returns `options` unchanged) when there's no history to carry
  * forward, so callers with a brand-new session never pay for this.
  */
+/**
+ * Builds the plain-text "[Retained Conversation History]" block used to
+ * fold bookkeeping history into a fresh session's system prompt, applying
+ * the same 40k-char working-memory truncation as every other
+ * history-to-model path (see `withRetainedHistory` below). Returns
+ * `undefined` when there's no history to carry forward, so callers can
+ * treat that as "nothing to append."
+ */
+export function buildRetainedHistoryBlock(
+  history: SessionRecord['conversationHistory'] | undefined
+): string | undefined {
+  if (!history || history.length === 0) {
+    return undefined;
+  }
+  const truncatedHistory = enforceWorkingMemoryTruncation(history);
+  if (truncatedHistory.length === 0) {
+    return undefined;
+  }
+  return `\n\n[Retained Conversation History]\n${truncatedHistory.map(h => `${h.role}: ${h.content}`).join('\n')}`;
+}
+
 export function withRetainedHistory(
   options: CopilotCreateSessionOptions,
   history: SessionRecord['conversationHistory']
 ): CopilotCreateSessionOptions {
-  if (!history || history.length === 0) {
+  const historyBlock = buildRetainedHistoryBlock(history);
+  if (!historyBlock) {
     return options;
   }
-
-  // conversationHistory grows unboundedly during an active session (bounded
-  // only loosely by a length>50 slice(-20) elsewhere), so apply the same
-  // 40k-char working-memory truncation every other history-to-model path
-  // uses (pruneConversationHistory in gateLoop.ts/serverRuntime.ts) before
-  // folding it into the system message. Otherwise a long-running session's
-  // full unpruned history could land here on recreate and risk context
-  // overflow / createSession failure.
-  const truncatedHistory = enforceWorkingMemoryTruncation(history);
-  if (truncatedHistory.length === 0) {
-    return options;
-  }
-
-  const historyBlock = `\n\n[Retained Conversation History]\n${truncatedHistory
-    .map(h => `${h.role}: ${h.content}`)
-    .join('\n')}`;
 
   const existingSystemMessage = options.systemMessage;
 
@@ -360,6 +404,139 @@ export async function getOrCreateSession(
   };
   activeSessions.set(sessionId, record);
   return record;
+}
+
+/**
+ * Hotswap replacement for `getOrCreateSession`, introduced for issue #246
+ * item 7 / #346 (see AGENTS.md "SessionWrapper: toolCallEnforcement.ts retry
+ * logic needs to own a SessionWrapper" comment thread). Coexists with the
+ * original `getOrCreateSession` -- nothing here removes or calls it -- so
+ * call sites can migrate one at a time rather than all at once. Once every
+ * caller of `getOrCreateSession` has moved to this function, the old one
+ * (and `SessionRecord.copilotSession`/`SessionWrapper.adopt()`) become
+ * removable in a follow-up.
+ *
+ * Behavioral difference from `getOrCreateSession`, by design: `SessionWrapper`
+ * never creates/resumes a session at construction time (SYS-REQ-028f) -- only
+ * the wrapper's own first `sendAndWait()` call does. So unlike
+ * `getOrCreateSession`, this function does NOT eagerly call
+ * `client.createSession`/`client.resumeSession` itself; it only decides
+ * *which* `SessionWrapper` instance the caller should send this turn's
+ * prompt through, and persistence of `copilotSessionId`/DB save must happen
+ * at the caller's `sendAndWait({ onSessionReady })` callback instead of here
+ * (see the migrated call site for the pattern).
+ *
+ * Model/cwd-change semantics are preserved: an existing wrapper whose
+ * `currentModel`/`cwd` no longer match this call's is discarded (its live
+ * session, if any, disconnected) and replaced with a brand-new
+ * `SessionWrapper`, mirroring `getOrCreateSession`'s "deliberate context
+ * change, not a reconnect" createSession-not-resume behavior for the same
+ * cases.
+ *
+ * Rehydrate-from-DB (no in-memory `SessionRecord`, but a persisted
+ * `copilotSessionId` from a prior process) falls through to the
+ * fresh-construction branch below, same as a genuine model/cwd change.
+ * Unlike `getOrCreateSession`, this does not attempt to resume the prior
+ * SDK session by its known id -- `SessionWrapper`/`SessionConfig` has no
+ * "resume by bare id, no live object" construction path, and there's no
+ * correctness cost to not having one: the app's own `conversationHistory`
+ * is already persisted per session (`SessionRecord.conversationHistory`),
+ * so a fresh wrapper can fully recover context via
+ * `wrapper.setSystemPrompt(foldedHistoryText)` before its first
+ * `sendAndWait()` -- the same folding `withRetainedHistory` already does
+ * for `getOrCreateSession`'s own createSession-fallback branch, and
+ * `setSystemPrompt` content called pre-first-send becomes part of the
+ * frozen, byte-identical-across-resume `systemMessage` (SYS-REQ-028g/h),
+ * so this is spec-compliant, not a workaround. The only real cost is losing
+ * the prior session's server-side prompt-cache prefix -- and that cache is
+ * only warm for 5-60 minutes, so a process restart (which is what puts a
+ * record in this branch at all) has almost always already outlived it
+ * regardless of whether resume-by-id existed. Not treating this as a gap
+ * needing a spec change.
+ */
+export async function getOrCreateSessionWrapper(
+  sessionId: string,
+  currentModel: string,
+  cwd: string,
+  client: CopilotClient,
+  toolsConfig: SessionWrapperToolsConfig,
+  baseConfig: SessionWrapperBaseConfig
+): Promise<{ record: SessionRecord; wrapper: SessionWrapper }> {
+  const now = Date.now();
+  const existing = activeSessions.get(sessionId);
+
+  const safeModelTier = (MODEL_TIERS.includes(currentModel) ? currentModel : MODEL_TIERS[0]) || 'gemini-3.1-flash-lite';
+
+  const contextChanged = !existing || existing.currentModel !== currentModel || existing.cwd !== cwd || !existing.sessionWrapper;
+
+  if (!contextChanged && existing?.sessionWrapper) {
+    // Same model/cwd, wrapper already live: hand back the SAME wrapper
+    // instance so its next `sendAndWait()` resumes internally
+    // (SYS-REQ-028f/028e) -- no adopt(), no new construction.
+    const updated: SessionRecord = { ...existing, lastUsedAt: now };
+    activeSessions.set(sessionId, updated);
+    return { record: updated, wrapper: existing.sessionWrapper };
+  }
+
+  // Context changed, or no live wrapper yet (fresh session, or a
+  // rehydrate-from-DB case -- see the rehydrate note above): disconnect whatever
+  // live session the old wrapper may be holding, then construct a fresh
+  // wrapper. Its session is NOT created yet -- that happens on the caller's
+  // first `sendAndWait()`.
+  if (existing?.sessionWrapper?.session) {
+    try {
+      await existing.sessionWrapper.session.disconnect();
+    } catch (err) {
+      writeLog(`[SessionWrapper] Error disconnecting outdated wrapper session ${sessionId}: ${err}`, LogLevel.WARN);
+    }
+  }
+
+  const wrapper = new SessionWrapper(client, toolsConfig, baseConfig);
+
+  // Fold any retained bookkeeping history into the fresh wrapper's system
+  // prompt before its first sendAndWait -- see the rehydrate note above.
+  // Must happen before first send: setSystemPrompt content is only picked
+  // up while `_frozenSystemMessage` is still unset (SYS-REQ-028g/h).
+  // `systemMessage` is a `SessionWrapperBaseConfig`-excluded/owned key
+  // (SessionWrapper builds it itself from `setSystemPrompt` state), so
+  // there is no caller-supplied base content to prepend here -- the history
+  // block is the entire caller-facing prompt for a rehydrated session.
+  const historyBlock = buildRetainedHistoryBlock(existing?.conversationHistory ?? undefined);
+  if (historyBlock) {
+    wrapper.setSystemPrompt(historyBlock);
+  }
+
+  const record: SessionRecord = {
+    sessionId,
+    // `copilotSession` stays null under the wrapper-owned path -- callers
+    // migrated onto this function must stop reading it and use `wrapper`
+    // (or `wrapper.session`, post-`sendAndWait`) instead.
+    copilotSession: null,
+    copilotSessionId: existing?.copilotSessionId,
+    sessionWrapper: wrapper,
+    currentModel: safeModelTier,
+    cwd,
+    lastUsedAt: now,
+    totalInputTokens: existing?.totalInputTokens || 0,
+    totalOutputTokens: existing?.totalOutputTokens || 0,
+    eventSequenceCounter: existing?.eventSequenceCounter || 0,
+    stateSnapshot: {
+      ...(existing?.stateSnapshot || {
+        isRunning: false,
+        retryCount: 0,
+        currentTier: safeModelTier as ModelTier,
+        activeGate: undefined,
+        hasFailureState: false,
+        awaitingHuman: false,
+      }),
+      currentTier: safeModelTier as ModelTier,
+    },
+    conversationHistory: existing?.conversationHistory || [],
+    turns: existing?.turns || [],
+    diagnosticTrail: existing?.diagnosticTrail || [],
+  };
+  activeSessions.set(sessionId, record);
+  return { record, wrapper };
 }
 
 let globalClient: CopilotClient | null = null;

@@ -1,7 +1,7 @@
 import { truncateOutput } from './formatters';
 import { sanitizeSensitives } from './sanitizers';
 import { getExecCommand } from '../workspace';
-import { LogLevel } from '../orchestrator/sessionState';
+import { LogLevel, checkActiveOrchestrationSession } from '../orchestrator/sessionState';
 
 
 export function makeDockerToolHandler(
@@ -10,9 +10,20 @@ export function makeDockerToolHandler(
   abortSignal: AbortSignal,
   writeLog: (message: string, level?: LogLevel) => void,
   sensitiveValuesCache: Set<string> | null,
-  sessionId?: string
+  sessionId?: string,
+  getAutoApproveAll?: () => boolean
 ) {
   return async (args: unknown) => {
+    const gate = checkActiveOrchestrationSession(getAutoApproveAll ? getAutoApproveAll() : false, 'run_terminal_docker');
+    if (!gate.ok) {
+      writeLog(`[run_terminal_docker] Blocked: ${gate.message}`, LogLevel.WARN);
+      return {
+        stdout: '',
+        stderr: `Error: ${gate.message}`,
+        exitCode: 1,
+      };
+    }
+
     const wd = ((args as Record<string, unknown>).workingDir as string) || '';
     if (wd.includes('..')) {
       writeLog(`[run_terminal_docker] Traversal path attempt blocked: ${wd}`, LogLevel.WARN);
