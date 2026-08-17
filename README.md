@@ -313,12 +313,16 @@ Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git manag
 > below reference the pre-028 mutator names and predate the rename.
 
 **Status:** draft, replaces SYS-REQ-026 family (decision made — see below)
-**Relationship to existing spec:** `README.md` §5.5 ("Hardened Session Wrapper
-(Sole SDK Session Entry Point)") currently contains SYS-REQ-026/026a/026b/026c,
-implemented today by `src/copilotSdk/hardenedSession.ts` (function module keyed by
+**Relationship to existing spec:** `README.md` §5.5 ("SessionWrapper
+(Sole SDK Session Entry Point)") contains SYS-REQ-026/026a/026b/026c, now
+pointed at `src/copilotSdk/sessionWrapper.ts` as the sanctioned entry point.
+At the time this section was drafted, that entry point was still
+`src/copilotSdk/hardenedSession.ts` (function module keyed by
 `sessionId` against two separate `Map`s — `policyBySessionId` and `sessionBySessionId`
-— correlated only by matching keys). `SessionWrapper` **replaces** this module outright,
-rather than wrapping it. Reasons, found on inspection of the existing code:
+— correlated only by matching keys). `SessionWrapper` **replaced** that module outright,
+rather than wrapping it — see the "Migration plan (hotswap)" section for how the
+cutover happened. Reasons `SessionWrapper` replaced rather than wrapped
+`hardenedSession.ts`, found on inspection of the pre-migration code:
 
 - The policy/session map pair is itself a two-things-must-stay-in-sync problem
   (same class of bug SYS-REQ-026b was written to prevent, one level up) — an
