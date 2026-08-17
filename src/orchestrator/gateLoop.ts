@@ -1854,7 +1854,7 @@ export const handleGateLoop = async (
             writeLog(
               `[GateLoop] Creating fresh session for model ${currentModel}`,
             );
-            // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to SessionWrapper (issue #246 item 7, tracked separately from item 4's enforcement)
             session = await client.createSession(
               loopSessionOptions as SessionConfig,
             );
