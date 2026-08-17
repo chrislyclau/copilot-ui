@@ -140,14 +140,16 @@ To maintain portability and resilience across varying container virtualization e
 - **Frontend Blindness:** The user interface displays purely high-level verification outcomes and is strictly forbidden from maintaining state hooks, checkboxes, or payload parameters related to Docker, host bypass, or sandbox mechanisms (e.g., `bypassDocker`).
 - **Transparent Server Routing:** The server-side execution pipeline must handle environment diagnostics out-of-band using `DIAGNOSTIC_MODE` and local capabilities detection. When container engines are unreachable, the backend must transparently fall back to native child-process run-paths without exposing virtual-execution parameters to the frontend interface.
 
-### 5.5 Hardened Session Wrapper (Sole SDK Session Entry Point)
+### 5.5 SessionWrapper (Sole SDK Session Entry Point)
 
 Session creation and resumption are a common source of silent regressions (dropped `systemMessage`, dropped tool-scoping, cache-busting config drift on resume). Rather than spec each pitfall individually, the system closes them structurally with a single choke-point module.
 
-- **SYS-REQ-026:** All `CopilotClient.createSession` and `CopilotClient.resumeSession` calls **shall** be issued exclusively through `src/copilotSdk/hardenedSession.ts`. No other module — including scripts under `scripts/` — may call these SDK methods directly.
+> **Superseded `hardenedSession.ts`.** Per the "Migration plan (hotswap)" section below, `SessionWrapper` (`src/copilotSdk/sessionWrapper.ts`) replaced `hardenedSession.ts` as the sanctioned entry point once the one-pass call-site migration (step 4) and file deletion (step 5) landed. The detailed SessionWrapper requirements live under SYS-REQ-027 (and SYS-REQ-028 where noted); SYS-REQ-026/026a-c below are retained as the base system-level statement of the choke-point requirement, now pointed at the current module.
+
+- **SYS-REQ-026:** All `CopilotClient.createSession` and `CopilotClient.resumeSession` calls **shall** be issued exclusively through `src/copilotSdk/sessionWrapper.ts`. No other module — including scripts under `scripts/` — may call these SDK methods directly.
 - **SYS-REQ-026a:** Each session's tool policy (`availableTools`, `tools`, `systemMessage`, `autoApprovedTools`) **shall** be stored as an immutable value bound to the session at creation time.
-- **SYS-REQ-026b:** On every resume, for any reason (retry, reconnect, or otherwise), the wrapper **shall** re-derive the full session configuration from the stored policy — never a partial or caller-supplied config — so a resumed session cannot silently diverge from its original tool-scoping or system prompt.
-- **SYS-REQ-026c (Unwanted Behavior):** **If** any module attempts to call `createSession`/`resumeSession` outside the wrapper, **then** this **shall** be caught by lint rule (covering both `src/**` and `scripts/**`), not left to code review alone.
+- **SYS-REQ-026b:** On every resume, for any reason (retry, reconnect, or otherwise), `SessionWrapper` **shall** re-derive the full session configuration from the stored policy — never a partial or caller-supplied config — so a resumed session cannot silently diverge from its original tool-scoping or system prompt.
+- **SYS-REQ-026c (Unwanted Behavior):** **If** any module attempts to call `createSession`/`resumeSession` outside `SessionWrapper`, **then** this **shall** be caught by lint rule (covering both `src/**` and `scripts/**`), not left to code review alone.
 - _Rationale:_ This supersedes ad hoc handling of resume-time hazards (e.g. dropped `systemMessage`, dropped `onPermissionRequest`) by making them structurally unreachable rather than individually documented and re-discovered per call site.
 
 ---
@@ -507,18 +509,19 @@ drift this spec exists to close off. See "Migration plan" section at the end.
 3. **Resolve open items explicitly before step 2 is called done:**
    permission-policy ownership (027h), and confirm no code path reintroduces a
    `registerSessionPolicy`-style side door (027g).
-4. **One-pass call-site migration.** Identify every caller of
+4. **One-pass call-site migration (done).** Identify every caller of
    `createHardenedSession`/`resumeHardenedSession`/`registerSessionPolicy`
    (`toolCallEnforcement.ts` and any others), switch each to construct/own a
    `SessionWrapper` instance, in a single change — not incremental per-caller
    swaps that leave both mechanisms live in production simultaneously.
-5. **Delete `hardenedSession.ts`** and its direct tests
-   (`hardenedSession.test.ts`, `hardenedSession.typecheck.test.ts`) once step 4
-   lands and passes.
-6. **Update the eslint rule (SYS-REQ-027e)** to reference `SessionWrapper`
-   instead of `createHardenedSession`/`resumeHardenedSession` as the sanctioned
-   entry point, in the same change as step 4 — not left pointing at deleted
-   exports.
+5. **Delete `hardenedSession.ts` (done).** Its direct tests
+   (`hardenedSession.test.ts`, `hardenedSession.typecheck.test.ts`) are removed
+   along with it; issue #277 permission-kind regression coverage was ported to
+   `sessionWrapper.test.ts`.
+6. **Update the eslint rule (SYS-REQ-027e) (done).** References
+   `SessionWrapper` instead of `createHardenedSession`/`resumeHardenedSession`
+   as the sanctioned entry point.
 
 No intermediate commit should have both `SessionWrapper` and `hardenedSession.ts`
-wired into live call sites at once.
+wired into live call sites at once. SYS-REQ-026 (section 5.5) reflects this
+completed end state.

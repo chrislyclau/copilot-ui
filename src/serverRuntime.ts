@@ -593,7 +593,7 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
 
       addLine("Creating test session (targeting configured provider layer)...");
 
-      // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to SessionWrapper (issue #246 item 7, tracked separately from item 4's enforcement)
       testSession = await testClient.createSession({
         model: executionConfig.model,
         ...(executionConfig.provider
@@ -1011,7 +1011,7 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
         session = record.copilotSession;
         writeLog(`[SDK] Using session from getOrCreateSession for id: ${sessionId}`);
       } else {
-        // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to the hardened wrapper (issue #246 item 7, tracked separately from item 4's enforcement)
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing direct createSession call site; not yet migrated to SessionWrapper (issue #246 item 7, tracked separately from item 4's enforcement)
         session = await client.createSession(sessionOptions);
         writeLog(`[SDK] session created or reused, id: ${session?.sessionId}`);
       }
