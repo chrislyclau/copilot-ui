@@ -244,9 +244,9 @@ async function main() {
       maxRetries: 2,
       getResult: () => undefined,
       availableTools,
-      onSession: (s) => {
-        sessionId = s.sessionId;
-        setActiveOpenRouterSessionId(s.sessionId);
+      onSessionId: (id) => {
+        sessionId = id;
+        setActiveOpenRouterSessionId(id);
       },
     });
 

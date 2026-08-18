@@ -12,6 +12,7 @@ import {
   SessionEvent,
   MessageOptions,
   ToolExecutionCompleteContent,
+  TypedSessionEventHandler,
   defineTool,
 } from "../copilotSdk/boundary";
 
@@ -1175,38 +1176,37 @@ export const handleGateLoop = async (
           ).setModelName(clarityConfig.model);
 
           let clarityData: ClarityCheckData | null = null;
-          // NOTE: attached via onSession below (not just on the session
-          // active when this listener is defined), because
-          // runForcedToolTurnUntilTimeout's nudge retry calls
-          // wrapper.sendAndWait() internally, which may resume into a
-          // brand-new CopilotSession object. A listener bound only to the
-          // original session would silently miss the tool call if the
-          // model only complies on the retry.
-          const attachClarityListener = (s: CopilotSession) => {
-            return s.on("tool.execution_start", (event) => {
+          // Passed in below as a `listeners` entry (not attached to a
+          // specific session directly), because runForcedToolTurnUntilTimeout's
+          // nudge retry calls wrapper.sendAndWait() internally, which may
+          // resume into a brand-new CopilotSession object.
+          // SessionWrapper.sendAndWait re-subscribes `listeners` on every
+          // call, so this fires on the retry's session too without a
+          // listener bound only to the original session silently missing
+          // the tool call if the model only complies on the retry.
+          const clarityListener: TypedSessionEventHandler<"tool.execution_start"> = (event) => {
+            writeLog(
+              `[Ambiguity] Event: ${event.type} ${JSON.stringify(event.data || {})}`,
+            );
+            if (
+              event.data?.toolName === "submit_clarity_check" &&
+              event.data.arguments
+            ) {
+              const args = event.data.arguments as Record<string, unknown>;
+              clarityData = {
+                score: typeof args.score === "number" ? args.score : 0,
+                missingVariables: Array.isArray(args.missingVariables)
+                  ? args.missingVariables.map((v) => String(v))
+                  : [],
+                feedback:
+                  typeof args.feedback === "string"
+                    ? args.feedback
+                    : undefined,
+              };
               writeLog(
-                `[Ambiguity] Event: ${event.type} ${JSON.stringify(event.data || {})}`,
+                `[Ambiguity] Captured clarityData from tool.execution_start: ${JSON.stringify(clarityData)}`,
               );
-              if (
-                event.data?.toolName === "submit_clarity_check" &&
-                event.data.arguments
-              ) {
-                const args = event.data.arguments as Record<string, unknown>;
-                clarityData = {
-                  score: typeof args.score === "number" ? args.score : 0,
-                  missingVariables: Array.isArray(args.missingVariables)
-                    ? args.missingVariables.map((v) => String(v))
-                    : [],
-                  feedback:
-                    typeof args.feedback === "string"
-                      ? args.feedback
-                      : undefined,
-                };
-                writeLog(
-                  `[Ambiguity] Captured clarityData from tool.execution_start: ${JSON.stringify(clarityData)}`,
-                );
-              }
-            });
+            }
           };
 
           writeLog(`[Ambiguity] Sending request to ambiguity checker...`);
@@ -1225,7 +1225,7 @@ export const handleGateLoop = async (
               {
                 timeoutMs: 20000,
                 getResult: () => clarityData,
-                onSession: (s) => attachClarityListener(s),
+                listeners: [{ type: "tool.execution_start", handler: clarityListener }],
               },
             );
             clarityRunResult = (await Promise.race([
@@ -1323,34 +1323,30 @@ export const handleGateLoop = async (
             { provider: classificationConfig.provider as SdkProviderConfig },
           ).setModelName(classificationConfig.model);
           let toolArguments: ComposerRouteArguments | null = null;
-          // NOTE: attached via onSession below (not just on the session
-          // active when this listener is defined), because
-          // runForcedToolTurnUntilTimeout's nudge retry calls
-          // wrapper.sendAndWait() internally, which may resume into a
-          // brand-new CopilotSession object. A listener bound only to the
-          // original session would silently miss the tool call if the model
-          // only complies on the retry.
-          const attachClassificationListener = (s: CopilotSession) => {
-            return s.on("tool.execution_start", (event) => {
-              if (
-                event.data?.toolName === "initialize_blueprint" &&
-                event.data.arguments
-              ) {
-                const args = event.data.arguments as Record<string, unknown>;
-                toolArguments = {
-                  taskType:
-                    typeof args.taskType === "string"
-                      ? args.taskType
-                      : undefined,
-                  targetDirectories: Array.isArray(args.targetDirectories)
-                    ? args.targetDirectories.map((d) => String(d))
+          // Passed in below as a `listeners` entry (not attached to a
+          // specific session directly) -- see the ambiguity checker above
+          // for why: runForcedToolTurnUntilTimeout's nudge retry may resume
+          // into a brand-new CopilotSession, and SessionWrapper.sendAndWait
+          // re-subscribes `listeners` on every call so this still fires.
+          const classificationListener: TypedSessionEventHandler<"tool.execution_start"> = (event) => {
+            if (
+              event.data?.toolName === "initialize_blueprint" &&
+              event.data.arguments
+            ) {
+              const args = event.data.arguments as Record<string, unknown>;
+              toolArguments = {
+                taskType:
+                  typeof args.taskType === "string"
+                    ? args.taskType
                     : undefined,
-                };
-                writeLog(
-                  `[Composer] Captured toolArguments from tool.execution_start: ${JSON.stringify(toolArguments)}`,
-                );
-              }
-            });
+                targetDirectories: Array.isArray(args.targetDirectories)
+                  ? args.targetDirectories.map((d) => String(d))
+                  : undefined,
+              };
+              writeLog(
+                `[Composer] Captured toolArguments from tool.execution_start: ${JSON.stringify(toolArguments)}`,
+              );
+            }
           };
 
           const classificationPrompt = `Analyze the following user prompt for a code generation task and initialize the workspace blueprint: "${promptStr}"`;
@@ -1371,7 +1367,7 @@ export const handleGateLoop = async (
               {
                 timeoutMs: 30000,
                 getResult: () => toolArguments,
-                onSession: (s) => attachClassificationListener(s),
+                listeners: [{ type: "tool.execution_start", handler: classificationListener }],
               },
             );
             await Promise.race([runPromise, abortPromise]);

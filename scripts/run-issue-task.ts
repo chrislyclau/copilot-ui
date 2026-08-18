@@ -160,9 +160,9 @@ async function main() {
       timeoutMs: 900000,
       maxRetries: 2,
       getResult: () => undefined,
-      onSession: (s) => {
-        sessionId = s.sessionId;
-        setActiveOpenRouterSessionId(s.sessionId);
+      onSessionId: (id) => {
+        sessionId = id;
+        setActiveOpenRouterSessionId(id);
       },
     });
 

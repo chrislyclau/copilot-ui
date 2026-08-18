@@ -423,7 +423,7 @@ export async function getOrCreateSession(
  * `client.createSession`/`client.resumeSession` itself; it only decides
  * *which* `SessionWrapper` instance the caller should send this turn's
  * prompt through, and persistence of `copilotSessionId`/DB save must happen
- * at the caller's `sendAndWait({ onSessionReady })` callback instead of here
+ * at the caller's `sendAndWait(prompt, timeout, listeners)` call, not here
  * (see the migrated call site for the pattern).
  *
  * Model/cwd-change semantics are preserved: an existing wrapper whose

@@ -461,9 +461,9 @@ export async function executeAuditSession<T>(
       // toolCallEnforcementUntilTimeout.test.ts's nudge-retry tests for the
       // regression guard.
       responseRequirements,
-      onSession: (s) => {
-        sessionId = s.sessionId;
-        onSessionId?.(s.sessionId);
+      onSessionId: (id) => {
+        sessionId = id;
+        onSessionId?.(id);
       },
     });
 
