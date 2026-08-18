@@ -130,14 +130,22 @@ export function createExecutionAwareSilenceTracker() {
  * NOTE on cleanup timing: because the wrapper only unsubscribes once its
  * *own* internal `session.sendAndWait()` settles, a stall-triggered rejection
  * here (the watchdog racer winning `Promise.race` below) does not itself
- * force earlier unsubscription -- the stall listener stays attached (still
- * harmlessly recording events, not leaking, just not silenced) until the
- * abandoned turn's underlying SDK call eventually settles on its own. The
- * previous implementation unsubscribed immediately on any race outcome;
- * this is a minor behavior change traded for removing all listener-lifetime
- * bookkeeping from this function, matching #346's simplified sendAndWait
- * contract (nothing persists past one call, no manual reattachment/cleanup
- * needed by callers).
+ * force earlier unsubscription -- this function's own `stallListener` stays
+ * attached (still harmlessly recording events, not leaking, just not
+ * silenced) until the abandoned turn's underlying SDK call eventually
+ * settles on its own. That "harmless" characterization is specific to
+ * `stallListener`, though: it does NOT extend to `additionalListeners`
+ * forwarded in from a caller. If a caller's listener mutates state shared
+ * across retries (as `runForcedToolTurn`'s tool-call/assistant-text
+ * tracking below does), a belated event from the abandoned attempt can
+ * mutate a later, live attempt's state -- see the attempt-id guard in
+ * `runForcedToolTurn`'s listener closures below, which exists specifically
+ * to neutralize this. The previous implementation unsubscribed immediately
+ * on any race outcome; this is a minor behavior change traded for removing
+ * all listener-lifetime bookkeeping from this function, matching #346's
+ * simplified sendAndWait contract (nothing persists past one call, no
+ * manual reattachment/cleanup needed by callers) -- but it does shift the
+ * burden of staleness-safety for stateful listeners onto the caller.
  *
  * `timeoutMs` is intentionally NOT passed straight through to the SDK's own
  * sendAndWait deadline -- see SDK_HARD_TIMEOUT_CEILING_MS.
@@ -334,28 +342,35 @@ export async function runForcedToolTurn<T>(
   const targetTools = Array.isArray(toolName) ? toolName : [toolName];
   const turnAvailableTools = opts.availableTools ?? targetTools;
 
-  // Reset per attempt (see sendWithStallRetry below) rather than rebuilt
-  // per session: these are plain event handlers, forwarded as
-  // `additionalListeners` and subscribed/unsubscribed internally by
-  // `SessionWrapper.sendAndWait` on every call, so there is nothing here
-  // left to attach to or unsubscribe from a session directly (SYS-REQ-028j).
+  // Bumped every time sendWithStallRetry starts a new attempt (including
+  // stall retries). Captured by each attempt's listener closures below so a
+  // belated event from an abandoned attempt -- its listeners stay attached
+  // until SessionWrapper's own internal `sendAndWait` call settles, which
+  // can be well after `sendAndWaitWithAbort` has already returned control
+  // here on a stall -- can tell it's stale and no-op instead of mutating
+  // `toolCalled`/`assistantText` for whatever attempt is live by then.
+  let currentAttemptId = 0;
   let assistantText = '';
-  const textListener = (event: unknown): void => {
-    if (!event || typeof event !== 'object') return;
-    const ev = event as Record<string, unknown>;
-    const evData = ev.data as Record<string, unknown> | undefined;
-    if (ev.type === 'assistant.message') {
-      assistantText += (evData?.content as string | undefined) || '';
-    } else if (ev.type === 'assistant.message_delta') {
-      assistantText += (evData?.delta as string | undefined) || (evData?.content as string | undefined) || '';
-    }
-  };
-  const toolListener = (event: unknown): void => {
-    const ev = event as Record<string, unknown>;
-    if (eventMatchesTargetTool(ev, targetTools)) {
-      toolCalled = true;
-    }
-  };
+  const makeAttemptListeners = (attemptId: number) => ({
+    textListener: (event: unknown): void => {
+      if (attemptId !== currentAttemptId) return;
+      if (!event || typeof event !== 'object') return;
+      const ev = event as Record<string, unknown>;
+      const evData = ev.data as Record<string, unknown> | undefined;
+      if (ev.type === 'assistant.message') {
+        assistantText += (evData?.content as string | undefined) || '';
+      } else if (ev.type === 'assistant.message_delta') {
+        assistantText += (evData?.delta as string | undefined) || (evData?.content as string | undefined) || '';
+      }
+    },
+    toolListener: (event: unknown): void => {
+      if (attemptId !== currentAttemptId) return;
+      const ev = event as Record<string, unknown>;
+      if (eventMatchesTargetTool(ev, targetTools)) {
+        toolCalled = true;
+      }
+    },
+  });
   const callerListeners = opts.listeners ?? [];
 
   const sendWithStallRetry = async (
@@ -365,6 +380,8 @@ export async function runForcedToolTurn<T>(
     let currentPromptOpts = promptOpts;
     let resumeAttempted = false;
     while (true) {
+      currentAttemptId++;
+      const { textListener, toolListener } = makeAttemptListeners(currentAttemptId);
       toolCalled = false;
       assistantText = '';
       try {
