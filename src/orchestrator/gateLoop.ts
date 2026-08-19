@@ -45,7 +45,7 @@ import {
   AMBIGUITY_CHECK_TOOL,
 } from "../config/tools";
 import { runForcedToolTurnUntilTimeout } from "../utils/toolCallEnforcement";
-import { SessionWrapper, SessionListenerEntry } from "../copilotSdk/sessionWrapper";
+import { SessionWrapper, SessionListenerEntry, SessionWrapperBaseConfig } from "../copilotSdk/sessionWrapper";
 import {
   normalizeGates,
   TASK_TYPE_GATE_MAP,
@@ -1863,6 +1863,13 @@ export const handleGateLoop = async (
           const loopToolNames = (loopSessionOptions.tools ?? [])
             .map((t) => t.name)
             .filter(Boolean) as string[];
+          const loopWrapperBaseConfig: SessionWrapperBaseConfig = {
+            workingDirectory: runCwd,
+            streaming: true,
+            ...(loopExecutionConfig.provider
+              ? { provider: loopExecutionConfig.provider as SdkProviderConfig }
+              : {}),
+          };
           if (sessionId) {
             const { wrapper } = await getOrCreateSessionWrapper(
               sessionId,
@@ -1870,7 +1877,7 @@ export const handleGateLoop = async (
               runCwd,
               client,
               loopToolsConfig,
-              { streaming: true },
+              loopWrapperBaseConfig,
             );
             sessionWrapper = wrapper;
             sessionWrapper.enableTools(...loopToolNames);
@@ -1916,9 +1923,11 @@ export const handleGateLoop = async (
                 );
               }
             }
-            sessionWrapper = new SessionWrapper(client, loopToolsConfig, {
-              streaming: true,
-            });
+            sessionWrapper = new SessionWrapper(
+              client,
+              loopToolsConfig,
+              loopWrapperBaseConfig,
+            );
             sessionWrapper.setModelName(loopExecutionConfig.model);
             sessionWrapper.enableTools(...loopToolNames);
             writeLog(
@@ -2453,46 +2462,25 @@ export const handleGateLoop = async (
                   `[GateLoop] SYS-REQ-004: No tool call detected on first turn. Attempting one narrowed retry before failing MutationGate.`,
                   LogLevel.WARN,
                 );
-                // `session` here is a long-lived, multi-turn session created
-                // with its own `onPermissionRequest: handleGateRunPermission`
-                // (see `loopSessionOptions` above). `SessionWrapper.adopt()`
-                // (see its docstring) always installs the wrapper's own
-                // enabled-tool-based `onPermissionRequest` on every resumed
-                // retry turn instead of `handleGateRunPermission` -- but for
-                // THIS one narrowed retry turn that's exactly what we want:
-                // the wrapper is constructed with only the same
-                // `loopSessionOptions.tools` the original session already
-                // exposed, all enabled, so the wrapper approves precisely the
-                // same tool surface `handleGateRunPermission` would have
-                // approved for a forced tool call here. Scoped to this single
-                // adopted turn only -- `session` is repointed back below, so
-                // subsequent turns keep going through `handleGateRunPermission`
-                // as before.
+                // `sessionWrapper` is the same long-lived, multi-turn wrapper
+                // this loop's regular turns already send through (assigned
+                // above via `getOrCreateSessionWrapper`), with the same
+                // `loopSessionOptions.tools` already enabled on it
+                // (`enableTools(...loopToolNames)` above) -- so reusing it
+                // directly here approves precisely the same tool surface
+                // `handleGateRunPermission` would have approved for a forced
+                // tool call, without needing `SessionWrapper.adopt()` (issue
+                // #346 / #246 item 7) or a second, throwaway wrapper
+                // instance. This also resolves the `frozenSystemMessage`
+                // TODO(#78) that `adopt()` had here: `sessionWrapper` already
+                // captured its own `_frozenSystemMessage` internally the
+                // first time it sent, so resuming through it here reuses
+                // that byte-identical value automatically (SYS-REQ-028g)
+                // rather than needing a caller-supplied one at all.
                 try {
-                  // TODO(#78): SYS-REQ-028g violation flagged by audit. `session`
-                  // was created via `client.createSession(loopSessionOptions)`,
-                  // and `loopSessionOptions` has no `systemMessage` field, so the
-                  // SDK's own default system message was used at creation time.
-                  // Passing `undefined` here makes `_createConfig()` fall back to
-                  // `buildCustomizeSystemMessage(undefined)` -> `{ mode:
-                  // 'customize', content: '' }` on resume, which is NOT
-                  // byte-identical to that SDK default, as SYS-REQ-028g requires.
-                  // Not fixing now per owner direction (spec modifications are
-                  // forbidden without sign-off) -- needs a scope decision on
-                  // whether `_createConfig()`/`adopt()` should gain a path that
-                  // omits `systemMessage` entirely when creation didn't send one,
-                  // or whether SYS-REQ-028g/h need an explicit carve-out first.
-                  const retryWrapper = SessionWrapper.adopt(
-                    session,
-                    client,
-                    { custom: (loopSessionOptions.tools ?? []) as Tool[] },
-                    {},
-                    loopExecutionConfig.model,
-                    undefined,
-                  );
                   const retryResult = (await Promise.race([
                     runForcedToolTurnUntilTimeout(
-                      retryWrapper,
+                      activeSessionWrapper,
                       (loopSessionOptions.tools
                         ?.map(
                           (t) =>
@@ -2520,24 +2508,13 @@ export const handleGateLoop = async (
                     | undefined;
 
                   if (retryResult) {
-                    if (retryResult.session) {
-                      session = retryResult.session;
-                      // `runForcedToolTurnUntilTimeout` may have resumed into a brand-new
-                      // CopilotSession object (client.resumeSession() returns a
-                      // different handle than the one passed in). The next loop
-                      // iteration's getOrCreateSession() reads the cached
-                      // copilotSession for this sessionId, so if we don't
-                      // repoint the cache here, the next turn silently goes to
-                      // the stale pre-retry session and loses this retry's tool
-                      // call + result -- the exact context-loss bug this fixes.
-                      if (sessionId && activeSessions.has(sessionId)) {
-                        const sRecAfterRetry = activeSessions.get(sessionId)!;
-                        activeSessions.set(sessionId, {
-                          ...sRecAfterRetry,
-                          copilotSession: retryResult.session,
-                        });
-                      }
-                    }
+                    // `activeSessionWrapper` (== `sessionWrapper`) is the
+                    // one already cached in `activeSessions` for this
+                    // `sessionId` -- unlike the old `adopt()` path, there is
+                    // no separate raw `CopilotSession` to repoint the cache
+                    // to; `session` is just re-synced from the wrapper for
+                    // the local disconnect/`if (session)` call sites below.
+                    session = retryResult.session ?? activeSessionWrapper.session ?? session;
                     if (retryResult.toolCalled) {
                       toolWasCalledInThisTurn = true;
                     }
