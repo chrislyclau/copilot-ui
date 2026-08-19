@@ -722,10 +722,12 @@ export const handleGateLoop = async (
       try {
         if (session) {
           // If the session is part of the persistent activeSessions, do NOT disconnect here.
-          // Disconnecting would break context retention for future turns using getOrCreateSession.
+          // Disconnecting would break context retention for future turns using getOrCreateSession/getOrCreateSessionWrapper.
           // The global GC interval handles pruning inactive persistent sessions.
           const isPersistent = Array.from(activeSessions.values()).some(
-            (s) => s.copilotSession === session,
+            (s) =>
+              s.copilotSession === session ||
+              s.sessionWrapper?.session === session,
           );
           if (!isPersistent) {
             await session.disconnect();
