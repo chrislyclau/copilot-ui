@@ -204,6 +204,69 @@ describe('Upstream stall detection & retry (review-pr.ts stall-retry follow-up)'
       expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
     });
 
+    it('ignores a belated tool-call event from an abandoned stalled attempt instead of letting it mark a later attempt as already-complete', async () => {
+      // Regression test: sendAndWaitWithAbort returns control here on stall
+      // while the underlying SessionWrapper.sendAndWait call for that
+      // attempt keeps running internally (its listeners stay attached
+      // until it settles on its own -- see the NOTE in
+      // sendAndWaitWithAbort). Before the fix, runForcedToolTurn's
+      // toolListener closure was shared across every retry attempt, so a
+      // belated event from that abandoned attempt could set the shared
+      // `toolCalled` flag for whatever attempt was live by the time it
+      // fired -- here, turning a genuine persistent-stall failure into a
+      // false "already called the tool, treat the turn as complete"
+      // success.
+      let sessionCount = 0;
+      const eventHandlersBySession: Array<Array<(event: unknown) => void>> = [];
+      const stalledSession = () => {
+        sessionCount++;
+        const idx = sessionCount - 1;
+        eventHandlersBySession[idx] = [];
+        return {
+          sessionId: `session-${sessionCount}`,
+          on: vi.fn().mockImplementation((handler: (event: unknown) => void) => {
+            eventHandlersBySession[idx]!.push(handler);
+            return vi.fn();
+          }),
+          sendAndWait: vi.fn().mockImplementation(() => new Promise(() => {})),
+        };
+      };
+
+      const initialSession = stalledSession(); // session-1 (attempt 1, via createSession)
+      const mockClient = {
+        createSession: vi.fn().mockResolvedValue(initialSession),
+        resumeSession: vi.fn().mockImplementation(async () => stalledSession()), // session-2 (attempt 2)
+      } as any;
+
+      const runPromise = runForcedToolTurn(makeWrapper(mockClient), 'my_tool', 'test prompt', {
+        maxRetries: 0,
+        maxStallRetries: 1,
+        getResult: () => null,
+      });
+
+      const assertion = expect(runPromise).rejects.toMatchObject({ isStall: true });
+
+      // Let attempt 1 (session-1) stall and trigger the resume retry into
+      // attempt 2 (session-2).
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+      expect(mockClient.resumeSession).toHaveBeenCalledTimes(1);
+
+      // Attempt 2 is now live. Fire a belated tool-call event from
+      // session-1's still-attached (never-unsubscribed, since its mock
+      // sendAndWait never settles) listeners -- simulating the abandoned
+      // attempt's SDK call finally producing an event after the fact.
+      eventHandlersBySession[0]!.forEach((h) =>
+        h({ type: 'tool.execution_start', data: { toolName: 'my_tool' } }),
+      );
+
+      // Attempt 2 then also stalls, exhausting maxStallRetries=1. If the
+      // belated session-1 event above had been allowed to set the shared
+      // `toolCalled` flag, runForcedToolTurn would treat attempt 2 as
+      // already having called the tool and resolve instead of rejecting.
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 5000);
+      await assertion;
+    });
+
     it('tries resumeSession before falling back to createSession on stall when freshSessionConfig is provided', async () => {
       let sessionCount = 0;
       const makeSession = (resolves: boolean) => {
