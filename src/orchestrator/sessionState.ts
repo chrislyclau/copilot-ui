@@ -491,7 +491,7 @@ export async function getOrCreateSessionWrapper(
     }
   }
 
-  const wrapper = new SessionWrapper(client, toolsConfig, baseConfig);
+  const wrapper = new SessionWrapper(client, toolsConfig, baseConfig).setModelName(safeModelTier);
 
   // Fold any retained bookkeeping history into the fresh wrapper's system
   // prompt before its first sendAndWait -- see the rehydrate note above.
