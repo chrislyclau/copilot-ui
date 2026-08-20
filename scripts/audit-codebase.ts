@@ -12,7 +12,7 @@ import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/serverRuntime';
 import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction, makeAuditorExecToolHandler } from '../src/utils/auditorHelper';
 import { runForcedToolTurnUntilTimeout } from '../src/utils/toolCallEnforcement';
-import { CopilotClient, type SdkProviderConfig, type ToolInvocation, ToolSet } from '../src/copilotSdk/boundary';
+import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/copilotSdk/boundary';
 import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
 import { createRunGhCommandTool, RUN_GH_COMMAND_TOOL_NAME, type RunGhCommandArgs } from './tools/agentGhTool';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../src/config/tools';
@@ -237,20 +237,6 @@ async function main() {
     await client.start();
 
     console.log('[audit-codebase] creating session...');
-    // availableTools is keyed by the built-in tool's *wire name* (this is
-    // what actually gets included as a callable tool schema in the request
-    // sent to the model). Also passed to runForcedToolTurnUntilTimeout below
-    // as the nudge-retry `restrictToTargetTools` scope (issue #346/#359) --
-    // see auditorHelper.ts's `wrapper` construction for the equivalent,
-    // already-migrated pattern this mirrors.
-    const availableTools = new ToolSet()
-      .addBuiltIn('bash')
-      .addBuiltIn('view')
-      .addBuiltIn('grep')
-      .addBuiltIn('glob')
-      .addCustom(RUN_GH_COMMAND_TOOL_NAME)
-      .addCustom(RUN_TERMINAL_DOCKER_TOOL.function.name)
-      .toArray();
     // Constructs a SessionWrapper up front instead of
     // createHardenedSession() + SessionWrapper.adopt() (issue #360) -- this
     // session is created fresh for this one audit run (no
@@ -307,11 +293,21 @@ async function main() {
       .setSystemPrompt(systemPrompt);
 
     console.log('[audit-codebase] sending task and waiting for completion...');
+    // No `availableTools` option here (contrast with a prior version of this
+    // script, which passed the full construction-time tool list). Per
+    // toolCallEnforcement.ts, `turnAvailableTools` defaults to `targetTools`
+    // (i.e. just [RUN_GH_COMMAND_TOOL_NAME]) when omitted, so a nudge retry's
+    // `restrictToTargetTools` disables-then-reenables only that one tool --
+    // a no-op for everything else. Passing the full 6-tool list here would
+    // disable `run_terminal_docker` (and bash/view/grep/glob) on every nudge
+    // retry and never re-enable them, since `restrictToTargetTools` only
+    // re-enables `targetTools`. This omission is what actually reproduces
+    // auditorHelper.ts's `executeAuditSession` pattern (see its comment on
+    // this same option) rather than just mirroring its prose.
     const turnResult = await runForcedToolTurnUntilTimeout(wrapper, RUN_GH_COMMAND_TOOL_NAME, userPrompt, {
       timeoutMs: 1800000, // 30 minutes
       maxRetries: 2,
       getResult: () => undefined,
-      availableTools,
       onSessionId: (id) => {
         sessionId = id;
         setActiveOpenRouterSessionId(id);
