@@ -49,12 +49,15 @@ const CONTEXT_DIR = '.audit-context';
  * up itself for the duration of the agent run. (Same pattern as
  * scripts/review-pr.ts and scripts/run-issue-task.ts.)
  *
- * Set LOG_PROVIDER_TOOLS=1 to have that same proxy route log the tool-name
- * list it sees in each outbound provider request to the shared log file
- * (`writeLog`, readable via GET /api/logs) -- useful for confirming what
- * actually reached the model (e.g. OpenRouter), since that's not otherwise
- * visible from this script or the OpenRouter dashboard/logs, which show
- * request content but not the declared tool list.
+ * That same proxy route always logs the tool-name list it sees in each
+ * outbound provider request (once per turn -- the whole agentic loop until
+ * the agent goes idle, not each individual call within it; see
+ * `hasLoggedProviderToolsForCurrentSession` in serverRuntime.ts) to the
+ * shared log file (`writeLog`, readable via GET /api/logs) -- useful for
+ * confirming what actually reached the model (e.g. OpenRouter), since
+ * that's not otherwise visible from this script or the OpenRouter
+ * dashboard/logs, which show request content but not the declared tool
+ * list.
  */
 function startProviderProxy(): Promise<Server> {
   process.env.COPILOT_API_URL = `http://127.0.0.1:${PORT}`;

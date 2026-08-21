@@ -348,7 +348,29 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 let activeOpenRouterSessionId: string | undefined;
 export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
   activeOpenRouterSessionId = sessionId;
+  // A new session means a fresh agentic loop -- reset dedupe state so the
+  // next outbound request logs instead of being skipped as a repeat of the
+  // previous session's already-logged tools list. See
+  // `hasLoggedProviderToolsForCurrentSession` below for what this gates.
+  hasLoggedProviderToolsForCurrentSession = false;
 }
+
+/**
+ * Dedupe state for the tool-list logging in the '/api/providers/:provider/*'
+ * proxy route below. A "turn" here means the whole agentic loop -- every
+ * iteration of tool calls, nudge retries (toolCallEnforcement.ts), and
+ * streaming reconnects the agent runs through before it goes idle and hands
+ * control back -- not each individual outbound LLM call within that loop.
+ * Since the `tools` list is fixed for a session's entire lifetime
+ * (SessionWrapper._createConfig never re-derives it from later
+ * enableTools/disableTools calls), it's identical on every one of those
+ * calls anyway, so logging once per *session* -- gated by this flag,
+ * flipped back to false only when a new session starts -- is what "once per
+ * turn" actually means here, not once per distinct message count. Same
+ * single-module-value caveat as `activeOpenRouterSessionId` above -- not
+ * safe for concurrent multi-session use of this server.
+ */
+let hasLoggedProviderToolsForCurrentSession = false;
 
   // Generic adapter registry route for model providers (SYS-REQ-004 & SYS-REQ-005)
   app.all('/api/providers/:provider/*', (req, res) => {
@@ -412,18 +434,20 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
       delete headers['accept-encoding'];
       headers['content-length'] = Buffer.byteLength(modifiedBody).toString();
 
-      // Opt-in diagnostic: log just the tool names this request declares to
-      // the provider, not the full body (which carries prompt/message
-      // content we don't want landing in a shared log file by default).
-      // This is the earliest point in this codebase where the outbound
-      // provider-bound `tools` array is actually visible -- everything
-      // upstream of here (SessionWrapper, CopilotClient) hands off to the
-      // spawned Copilot CLI runtime over JSON-RPC, which builds this HTTP
-      // request itself; we only get to see it once it lands back here as a
-      // proxied request. Gated behind LOG_PROVIDER_TOOLS since this fires on
-      // every provider call, not just once per session, and most callers
-      // don't want that noise in their log file.
-      if (process.env.LOG_PROVIDER_TOOLS) {
+      // Log just the tool names this request declares to the provider, not
+      // the full body (which carries prompt/message content we don't want
+      // landing in a shared log file). This is the earliest point in this
+      // codebase where the outbound provider-bound `tools` array is
+      // actually visible -- everything upstream of here (SessionWrapper,
+      // CopilotClient) hands off to the spawned Copilot CLI runtime over
+      // JSON-RPC, which builds this HTTP request itself; we only get to see
+      // it once it lands back here as a proxied request.
+      //
+      // Deduped to once per turn (the whole agentic loop, not each
+      // individual call within it) via
+      // `hasLoggedProviderToolsForCurrentSession` -- see its declaration
+      // above for why session-scoped is the right granularity here.
+      if (!hasLoggedProviderToolsForCurrentSession) {
         try {
           const parsedForLogging = modifiedBody ? JSON.parse(modifiedBody) : undefined;
           const toolNames = Array.isArray(parsedForLogging?.tools)
@@ -434,11 +458,13 @@ export function setActiveOpenRouterSessionId(sessionId: string | undefined) {
               `[ProviderProxy] ${provider} request tools (${toolNames.length}): ${toolNames.join(', ')}` +
                 (activeOpenRouterSessionId ? ` [session_id=${activeOpenRouterSessionId}]` : ''),
             );
+            hasLoggedProviderToolsForCurrentSession = true;
           } else {
             writeLog(`[ProviderProxy] ${provider} request has no 'tools' field.`);
+            hasLoggedProviderToolsForCurrentSession = true;
           }
         } catch (e) {
-          writeLog(`[ProviderProxy] LOG_PROVIDER_TOOLS: failed to parse/log tools: ${e instanceof Error ? e.message : String(e)}`);
+          writeLog(`[ProviderProxy] tool-list logging: failed to parse/log tools: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
 
