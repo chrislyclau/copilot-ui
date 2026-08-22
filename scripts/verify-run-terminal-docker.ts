@@ -185,7 +185,7 @@ async function main(): Promise<void> {
   console.log('[verify-run-terminal-docker] PASS: run_terminal_docker executed inside the real, live container.');
   console.log(`  workspace root: ${expectedWorkspaceRoot}`);
   console.log(`  canary file seen: ${CANARY_FILENAME}`);
-  console.log(`  stdout:\n${result.stdout}`);
+  console.log(`  stdout:\n==>${result.stdout}<==`);
 }
 
 main().catch((err) => {
