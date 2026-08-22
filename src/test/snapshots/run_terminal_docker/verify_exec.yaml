@@ -21,7 +21,7 @@ conversations:
             type: function
             function:
               name: run_terminal_docker
-              arguments: '{"command": "pwd && echo VERIFY_RUN_TERMINAL_DOCKER_OK && ls /"}'
+              arguments: '{"command": "pwd && echo VERIFY_RUN_TERMINAL_DOCKER_OK && ls /tmp"}'
   - messages:
       - role: system
         content: ${system}
@@ -34,7 +34,7 @@ conversations:
             type: function
             function:
               name: run_terminal_docker
-              arguments: '{"command": "pwd && echo VERIFY_RUN_TERMINAL_DOCKER_OK && ls /"}'
+              arguments: '{"command": "pwd && echo VERIFY_RUN_TERMINAL_DOCKER_OK && ls /tmp"}'
       - role: tool
         tool_call_id: toolcall_verify_exec
         content: ${user}

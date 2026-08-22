@@ -42,9 +42,11 @@ const MARKER = 'VERIFY_RUN_TERMINAL_DOCKER_OK';
 const SNAPSHOT_PATH = path.resolve(process.cwd(), 'src/test/snapshots/run_terminal_docker/verify_exec.yaml');
 // Random per run so a stale/leftover file from a previous run (or a
 // coincidentally similar-looking image filesystem) can't produce a false
-// pass. Deliberately at container root (`/`), well outside the mounted
-// workspace, so this doesn't overlap with anything the pwd/workspace-root
-// check below is already covering.
+// pass. Planted in /tmp -- the container's root filesystem is read-only
+// (see docker-compose.yml: `read_only: true`), so /tmp (a tmpfs) is the
+// only writable location outside the workspace mount itself. Using a
+// location outside the workspace mount keeps this independent from the
+// pwd/workspace-root check below.
 const CANARY_FILENAME = `RUN_TERMINAL_DOCKER_CANARY_${randomUUID()}`;
 
 function fail(message: string): never {
@@ -62,12 +64,12 @@ function fail(message: string): never {
  * means `ls <mounted path>` alone doesn't rule that out).
  */
 async function plantCanary(containerName: string): Promise<void> {
-  await execFileAsync('docker', ['exec', containerName, 'sh', '-c', `touch /${CANARY_FILENAME}`]);
+  await execFileAsync('docker', ['exec', containerName, 'sh', '-c', `touch /tmp/${CANARY_FILENAME}`]);
 }
 
 async function removeCanary(containerName: string): Promise<void> {
   try {
-    await execFileAsync('docker', ['exec', containerName, 'sh', '-c', `rm -f /${CANARY_FILENAME}`]);
+    await execFileAsync('docker', ['exec', containerName, 'sh', '-c', `rm -f /tmp/${CANARY_FILENAME}`]);
   } catch {
     // best-effort cleanup; container teardown will remove it regardless
   }
