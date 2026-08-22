@@ -12,24 +12,67 @@
  *
  * Requires a real running container (CONTAINER_NAME + WORKSPACE_HOST_LOCATION
  * set consistently, matching the actual `docker compose up` mount -- see
- * workflow-hotswap/docker-tool-verify.yml). This is NOT run as part of
+ * .github/workflows/docker-tool-verify.yml). This is NOT run as part of
  * `npm test`; ordinary CI has no container available (see issue #403
  * discussion) and this script fails fast rather than silently skipping if
  * one isn't.
+ *
+ * Because the workspace bind mount uses the identical path string on the
+ * host and inside the container, listing that path alone doesn't prove much
+ * -- it could look "correct" by coincidence. So this script also plants a
+ * random canary file directly via a raw `docker exec` (bypassing all app
+ * code) before the session starts, and checks that the actual
+ * run_terminal_docker call -- driven end-to-end through the real handler --
+ * can see it. That's non-coincidental, ground-truth evidence the command
+ * ran inside this exact live container instance.
  */
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { CapiProxy } from '../src/test/harness/CapiProxy';
 import { CopilotClient, defineTool } from '../src/copilotSdk/boundary';
 import { SessionWrapper } from '../src/copilotSdk/sessionWrapper';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../src/config/tools';
 import { getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from '../src/workspace';
 
+const execFileAsync = promisify(execFile);
+
 const MARKER = 'VERIFY_RUN_TERMINAL_DOCKER_OK';
 const SNAPSHOT_PATH = path.resolve(process.cwd(), 'src/test/snapshots/run_terminal_docker/verify_exec.yaml');
+// Random per run so a stale/leftover file from a previous run (or a
+// coincidentally similar-looking image filesystem) can't produce a false
+// pass. Planted in /tmp -- the container's root filesystem is read-only
+// (see docker-compose.yml: `read_only: true`), so /tmp (a tmpfs) is the
+// only writable location outside the workspace mount itself. Using a
+// location outside the workspace mount keeps this independent from the
+// pwd/workspace-root check below.
+const CANARY_FILENAME = `RUN_TERMINAL_DOCKER_CANARY_${randomUUID()}`;
 
 function fail(message: string): never {
   console.error(`[verify-run-terminal-docker] FAIL: ${message}`);
   process.exit(1);
+}
+
+/**
+ * Plants a canary file directly via the `docker` CLI -- completely outside
+ * any app code path (no dockerRunner.ts, no getExecCommand()). This is the
+ * independent "ground truth" write: if `run_terminal_docker` later sees this
+ * file, that's real evidence the tool executed inside *this* container
+ * instance, not just a coincidentally-matching path (see discussion on
+ * issue #403 -- a bind mount with an identical host/container path string
+ * means `ls <mounted path>` alone doesn't rule that out).
+ */
+async function plantCanary(containerName: string): Promise<void> {
+  await execFileAsync('docker', ['exec', containerName, 'sh', '-c', `touch /tmp/${CANARY_FILENAME}`]);
+}
+
+async function removeCanary(containerName: string): Promise<void> {
+  try {
+    await execFileAsync('docker', ['exec', containerName, 'sh', '-c', `rm -f /tmp/${CANARY_FILENAME}`]);
+  } catch {
+    // best-effort cleanup; container teardown will remove it regardless
+  }
 }
 
 /**
@@ -52,8 +95,11 @@ async function main(): Promise<void> {
   if (!process.env.CONTAINER_NAME) {
     fail('CONTAINER_NAME is not set -- this script requires a real running container, not a mocked one.');
   }
+  const containerName = process.env.CONTAINER_NAME;
 
   const expectedWorkspaceRoot = getWorkspaceRoot();
+
+  await plantCanary(containerName);
 
   let capturedResult: { stdout: string; stderr: string; exitCode: number | null } | null = null;
 
@@ -96,6 +142,7 @@ async function main(): Promise<void> {
   } finally {
     await client.stop();
     await proxy.stop();
+    await removeCanary(containerName);
   }
 
   if (!capturedResult) {
@@ -125,9 +172,20 @@ async function main(): Promise<void> {
     fail(`Expected marker "${MARKER}" not found in stdout:\n${result.stdout}`);
   }
 
-  console.log('[verify-run-terminal-docker] PASS: run_terminal_docker executed in the correct real workspace root.');
+  if (!result.stdout.includes(CANARY_FILENAME)) {
+    fail(
+      `Canary file "${CANARY_FILENAME}" (planted via a raw \`docker exec\` before the session ` +
+        `started, completely outside app code) was not visible to run_terminal_docker's \`ls /\`. ` +
+        `This means the command executed by run_terminal_docker is NOT running inside the same ` +
+        `live container instance this script planted the canary in -- a stronger, non-coincidental ` +
+        `signal than a matching mount path alone. stdout was:\n${result.stdout}`
+    );
+  }
+
+  console.log('[verify-run-terminal-docker] PASS: run_terminal_docker executed inside the real, live container.');
   console.log(`  workspace root: ${expectedWorkspaceRoot}`);
-  console.log(`  stdout:\n${result.stdout}`);
+  console.log(`  canary file seen: ${CANARY_FILENAME}`);
+  console.log(`  stdout:\n==>${result.stdout}<==`);
 }
 
 main().catch((err) => {
