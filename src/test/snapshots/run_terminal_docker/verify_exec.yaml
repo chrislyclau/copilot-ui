@@ -1,0 +1,42 @@
+# Canned LLM turns for scripts/verify-run-terminal-docker.ts (issue #403).
+#
+# Only the LLM completion boundary is faked here (via CapiProxy) -- the
+# run_terminal_docker call itself is dispatched to the real production tool
+# handler (makeAuditorExecToolHandler -> getExecCommand() -> dockerRunner.ts),
+# which runs a real `docker exec` against a real container. This snapshot
+# exists purely to remove the "call a live LLM" step from the loop; every
+# hop after the tool call is scripted is real.
+models:
+  - claude-sonnet-4.5
+conversations:
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: ""
+        tool_calls:
+          - id: toolcall_verify_exec
+            type: function
+            function:
+              name: run_terminal_docker
+              arguments: '{"command": "pwd && echo VERIFY_RUN_TERMINAL_DOCKER_OK"}'
+  - messages:
+      - role: system
+        content: ${system}
+      - role: user
+        content: ${user}
+      - role: assistant
+        content: ""
+        tool_calls:
+          - id: toolcall_verify_exec
+            type: function
+            function:
+              name: run_terminal_docker
+              arguments: '{"command": "pwd && echo VERIFY_RUN_TERMINAL_DOCKER_OK"}'
+      - role: tool
+        tool_call_id: toolcall_verify_exec
+        content: ${user}
+      - role: assistant
+        content: Verification command executed.

@@ -1,0 +1,40 @@
+name: Verify run_terminal_docker
+
+# Staged here (not .github/workflows) due to permission restrictions on this
+# branch -- a maintainer needs to move this file into .github/workflows/ for
+# it to actually run as a workflow. See issue #403.
+
+on:
+    workflow_dispatch:
+    
+jobs:
+  verify-docker-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci --legacy-peer-deps
+
+      - name: Start sandbox container
+        env:
+          CONTAINER_NAME: applet-${{ github.run_id }}
+          WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
+        run: docker compose up -d
+
+      - name: Verify run_terminal_docker
+        env:
+          CONTAINER_NAME: applet-${{ github.run_id }}
+          WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
+        run: npx tsx scripts/verify-run-terminal-docker.ts
+
+      - name: Stop sandbox container
+        if: always()
+        env:
+          CONTAINER_NAME: applet-${{ github.run_id }}
+          WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
+        run: docker compose down

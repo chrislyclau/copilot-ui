@@ -447,24 +447,33 @@ let hasLoggedProviderToolsForCurrentSession = false;
       // individual call within it) via
       // `hasLoggedProviderToolsForCurrentSession` -- see its declaration
       // above for why session-scoped is the right granularity here.
+      //
+      // Uses console.log directly (in addition to writeLog, for the file
+      // record / GET /api/logs) rather than relying on writeLog's own
+      // console echo: that echo is gated behind CURRENT_LOG_LEVEL, which
+      // defaults to WARN unless LOG_LEVEL is exported (writeLog's default
+      // level is INFO, which doesn't clear that bar) -- so a caller running
+      // this script without LOG_LEVEL set would never see this line in
+      // their terminal even though it was being written to the debug file
+      // the whole time. This diagnostic exists specifically to be visible
+      // in a normal run, so it shouldn't be silently gated by quiet mode.
       if (!hasLoggedProviderToolsForCurrentSession) {
         try {
           const parsedForLogging = modifiedBody ? JSON.parse(modifiedBody) : undefined;
           const toolNames = Array.isArray(parsedForLogging?.tools)
             ? parsedForLogging.tools.map((t: { name?: string; function?: { name?: string } }) => t.function?.name ?? t.name ?? '<unnamed>')
             : undefined;
-          if (toolNames) {
-            writeLog(
-              `[ProviderProxy] ${provider} request tools (${toolNames.length}): ${toolNames.join(', ')}` +
-                (activeOpenRouterSessionId ? ` [session_id=${activeOpenRouterSessionId}]` : ''),
-            );
-            hasLoggedProviderToolsForCurrentSession = true;
-          } else {
-            writeLog(`[ProviderProxy] ${provider} request has no 'tools' field.`);
-            hasLoggedProviderToolsForCurrentSession = true;
-          }
+          const line = toolNames
+            ? `[ProviderProxy] ${provider} request tools (${toolNames.length}): ${toolNames.join(', ')}` +
+              (activeOpenRouterSessionId ? ` [session_id=${activeOpenRouterSessionId}]` : '')
+            : `[ProviderProxy] ${provider} request has no 'tools' field.`;
+          console.log(line);
+          writeLog(line);
+          hasLoggedProviderToolsForCurrentSession = true;
         } catch (e) {
-          writeLog(`[ProviderProxy] tool-list logging: failed to parse/log tools: ${e instanceof Error ? e.message : String(e)}`);
+          const errLine = `[ProviderProxy] tool-list logging: failed to parse/log tools: ${e instanceof Error ? e.message : String(e)}`;
+          console.log(errLine);
+          writeLog(errLine);
         }
       }
 
