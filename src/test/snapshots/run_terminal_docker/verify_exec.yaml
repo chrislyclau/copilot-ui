@@ -37,6 +37,6 @@ conversations:
               arguments: '{"command": "pwd && echo VERIFY_RUN_TERMINAL_DOCKER_OK && ls /tmp"}'
       - role: tool
         tool_call_id: toolcall_verify_exec
-        content: ${user}
+        content: VERIFY_RUN_TERMINAL_DOCKER_OK
       - role: assistant
         content: Verification command executed.
