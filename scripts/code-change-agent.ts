@@ -68,7 +68,7 @@ You have full repo exploration and editing tools (bash, view, edit, grep, glob),
 - "${RENAME_BRANCH_TOOL_NAME}": rename the current local branch, e.g. to follow this repo's "fix/issue-<number>-<short-name>" convention. Also never pushes.
 - "${CREATE_PR_TOOL_NAME}": push your current branch and open a pull request. This is the ONLY action in this session that reaches outside your local checkout.
 
-Do not attempt to run \`git\` or \`gh\` commands directly via "${RUN_TERMINAL_DOCKER_TOOL.function.name}" or any other tool -- use the three tools above instead. No push credentials are ever persisted to disk or to the shared environment, so direct git/gh push attempts from elsewhere will fail regardless.
+Do not attempt to run \`git\` or \`gh\` commands directly via "${RUN_TERMINAL_DOCKER_TOOL.function.name}" or any other tool -- use the three tools above instead. The write-scoped credential is captured once by "${CREATE_PR_TOOL_NAME}" and is not present anywhere else you can reach (not on disk, not in your shell environment), so direct git/gh push attempts from elsewhere will fail.
 
 **Hard rule:** only call "${CREATE_PR_TOOL_NAME}" if you have already made and committed real changes via "${MAKE_COMMIT_TOOL_NAME}". If, after investigating, you conclude no change is warranted (task already done, not reproducible, out of scope, etc.), it is completely fine to stop and explain why in your final message instead of calling "${CREATE_PR_TOOL_NAME}" -- do not force a change just to have something to submit.`;
 }
@@ -120,14 +120,18 @@ async function main() {
 
   // The write-scoped token is read from its own env var, once, right here
   // at construction time -- and handed directly into createCreatePrTool's
-  // closure. It is deliberately never assigned to `process.env.GH_TOKEN`
-  // (which stays whatever read-only value the workflow set for the general
-  // session environment), so no ad hoc `gh`/`git` call the agent makes from
-  // inside run_terminal_docker can see it.
+  // closure. It is then deleted from process.env immediately: the agent's
+  // `bash` builtin runs as a child of this very Node process, so anything
+  // left in process.env after this point would be inherited by it and
+  // usable for a direct `git push`/`gh pr create` outside create_pr,
+  // defeating the whole point of scoping this token to the tool's closure.
+  // create_pr itself never reads process.env for this value -- only the
+  // `writeToken` parameter captured below -- so deleting it here is safe.
   const writeToken = process.env.GH_WRITE_TOKEN;
   if (!writeToken) {
     throw new Error('GH_WRITE_TOKEN is required (write-scoped token for create_pr/checkout) and was not set.');
   }
+  delete process.env.GH_WRITE_TOKEN;
 
   const executionConfig = getReviewerExecutionConfig();
   const makeCommitTool = createMakeCommitTool();

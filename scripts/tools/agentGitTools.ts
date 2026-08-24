@@ -126,16 +126,23 @@ export function createRenameBranchTool(): Tool<RenameBranchArgs> {
  * Pushes the current branch and opens a PR via `gh pr create`. This is the
  * ONLY tool of the three with write credentials -- and those credentials
  * are passed directly into this closure at construction time, never read
- * from `process.env` (see the `writeToken` param below). That keeps the
- * general session environment's `GH_TOKEN` read-only (issue #407's
- * "Security / credential separation"): any ad hoc `gh`/`git` invocation the
- * agent makes from inside `run_terminal_docker` only ever sees the
- * read-only token. Crucially, the write token is never persisted to disk
- * either (the workflow checks out with `persist-credentials: false`), so
- * there's nothing in `.git/config` for a direct `git push` elsewhere to
- * find -- this tool authenticates its own push with a one-off
- * `-c http.extraheader=...` argument, making it the only code path capable
- * of a real push/PR.
+ * from `process.env` inside the handler below (see the `writeToken` param).
+ * That keeps the general session environment's `GH_TOKEN` read-only (issue
+ * #407's "Security / credential separation"): any ad hoc `gh`/`git`
+ * invocation the agent makes from inside `run_terminal_docker` only ever
+ * sees the read-only token.
+ *
+ * The `bash` builtin is a different story: it runs as a child of the same
+ * Node process as this script, so it inherits `process.env` directly --
+ * unlike `run_terminal_docker`'s containerized shell, which does not.
+ * `GH_WRITE_TOKEN` (the source of `writeToken`) is therefore deleted from
+ * `process.env` in `code-change-agent.ts`'s `main()` right after this
+ * closure captures it and before the session (and so `bash`) ever starts.
+ * The write token is also never persisted to disk: the workflow checks out
+ * with `persist-credentials: false`, so there's nothing in `.git/config`
+ * either. This tool authenticates its own push with a one-off
+ * `-c http.extraheader=...` argument built fresh from the closure value on
+ * every call, making it the only code path capable of a real push/PR.
  */
 export function createCreatePrTool(writeToken: string): Tool<CreatePrArgs> {
   if (!writeToken || !writeToken.trim()) {
