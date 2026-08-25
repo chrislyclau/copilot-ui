@@ -183,3 +183,7 @@ Auditor agents **SHALL NEVER** propose changing the spec to match the implementa
 Any change to a spec document **SHALL** be made in its own pull request containing only spec changes — no source code, no test changes, and no implementation changes bundled in the same PR or commit range. This applies regardless of whether the change originated from an agent's escalation or a human's own initiative.
 
 Agents **SHALL NOT** open a spec-change PR on their own initiative. A spec PR may only be opened after a human has reviewed and confirmed a flagged spec error per the escalation process above.
+
+### What Qualifies for an EARS item? **CRITICAL**
+
+An EARS requirement **SHALL** describe the system's behavior in its intended target configuration, independent of the system's construction timeline. While authoring or reviewing a requirement, the agent shall check whether the truth of any clause depends on the codebase's current progress toward that target (e.g., "once implemented," "after the migration," "while partially built"). If it does, the agent shall remove that dependency from the requirement; if the removed information has tracking value, the agent SHALL relocate it to an issue, PBI, or migration plan, not the spec.
