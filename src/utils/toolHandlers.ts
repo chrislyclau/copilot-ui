@@ -1,7 +1,5 @@
-import { truncateOutput } from './formatters';
-import { sanitizeSensitives } from './sanitizers';
 import { getExecCommand } from '../workspace';
-import { LogLevel, checkActiveOrchestrationSession } from '../orchestrator/sessionState';
+import { LogLevel } from '../orchestrator/sessionState';
 
 
 export function makeDockerToolHandler(
@@ -14,51 +12,15 @@ export function makeDockerToolHandler(
   getAutoApproveAll?: () => boolean
 ) {
   return async (args: unknown) => {
-    const gate = checkActiveOrchestrationSession(getAutoApproveAll ? getAutoApproveAll() : false, 'run_terminal_docker');
-    if (!gate.ok) {
-      writeLog(`[run_terminal_docker] Blocked: ${gate.message}`, LogLevel.WARN);
-      return {
-        stdout: '',
-        stderr: `Error: ${gate.message}`,
-        exitCode: 1,
-      };
-    }
-
-    const wd = ((args as Record<string, unknown>).workingDir as string) || '';
-    if (wd.includes('..')) {
-      writeLog(`[run_terminal_docker] Traversal path attempt blocked: ${wd}`, LogLevel.WARN);
-      return {
-        stdout: "",
-        stderr: "Error: Directory path traversal detected. Access denied outside workspace boundaries.",
-        exitCode: 1
-      };
-    }
-
     writeLog(`[run_terminal_docker] Running command: "${((args as Record<string, unknown>).command as string)}" inside ${((args as Record<string, unknown>).workingDir as string) || '/workspace'}`, LogLevel.DEBUG);
     const execCommand = getExecCommand();
     const result = await execCommand(((args as Record<string, unknown>).command as string), abortSignal);
 
     writeLog(`[run_terminal_docker] Completed with exit code ${result.exitCode}. Stdout length: ${result.stdout.length}, Stderr length: ${result.stderr.length}`, LogLevel.DEBUG);
-    
-    // Use the passed sensitivity cache
-    const cleanStdout = truncateOutput(sanitizeSensitives(result.stdout, sensitiveValuesCache || new Set<string>()));
-    const cleanStderr = truncateOutput(sanitizeSensitives(result.stderr, sensitiveValuesCache || new Set<string>()));
-
-    // Stream standard tool output events back into the active SSE stream
-    const streamEvent = {
-      type: 'tool.result',
-      data: {
-        toolName: 'run_terminal_docker',
-        stdout: cleanStdout,
-        stderr: cleanStderr,
-        exitCode: result.exitCode
-      }
-    };
-    await secureWrite(res, `data: ${JSON.stringify(streamEvent)}\n\n`);
 
     return {
-      stdout: cleanStdout,
-      stderr: cleanStderr,
+      stdout: result.stdout,
+      stderr: result.stderr,
       exitCode: result.exitCode
     };
   };
