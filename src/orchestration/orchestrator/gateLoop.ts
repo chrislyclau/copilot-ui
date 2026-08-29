@@ -2818,6 +2818,20 @@ export const handleGateLoop = async (
                 failedGateName = gateName;
                 failedGateFeedback = gateResult.feedback;
 
+                // TODO(#425): gateResult.feedback is raw, unbounded gate-command
+                // output -- truncateOutput was deleted in the agentCore reorg and
+                // never restored here. It's fed straight into the next retry's
+                // prompt (formatContextNarrowingPrompt/formatEscalationPrompt) and
+                // into the SSE payload above, so a pathological gate command can
+                // blow out the context window or produce an oversized SSE event.
+                // Not fixed here (the SDK doesn't protect this path the way it
+                // does elsewhere) -- flagging loudly until it's addressed properly.
+                if (failedGateFeedback && failedGateFeedback.length > 20000) {
+                  console.error(
+                    `[GateLoop] Unbounded gate feedback for ${gateName}: ${failedGateFeedback.length} chars (no truncation applied).`,
+                  );
+                }
+
                 // T2: Fallback Upgrades for Distressed Pipelines
                 if (failedGateName === lastFailedGate) {
                   consecutiveFailures++;
@@ -2957,6 +2971,17 @@ export const handleGateLoop = async (
                 allGatesPassedInThisCycle = false;
                 failedGateName = "runSpecAudit";
                 failedGateFeedback = specResult.feedback;
+
+                // TODO(#425): specResult.feedback is the raw auditor findings
+                // string (auditResult.findings) -- same unbounded-size gap as
+                // gateResult.feedback above (truncateOutput deleted in the
+                // agentCore reorg, never restored). Also fed into the retry
+                // prompt and SSE payload; the SDK doesn't guard this path.
+                if (failedGateFeedback && failedGateFeedback.length > 20000) {
+                  console.error(
+                    `[GateLoop] Unbounded spec-audit feedback: ${failedGateFeedback.length} chars (no truncation applied).`,
+                  );
+                }
               }
             }
           }
