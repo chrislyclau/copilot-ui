@@ -718,16 +718,35 @@ export const handleGateLoop = async (
       }
       try {
         if (session) {
-          // If the session is part of the persistent activeSessions, do NOT disconnect here.
-          // Disconnecting would break context retention for future turns using getOrCreateSession/getOrCreateSessionWrapper.
-          // The global GC interval handles pruning inactive persistent sessions.
-          const isPersistent = Array.from(activeSessions.values()).some(
-            (s) =>
-              s.copilotSession === session ||
-              s.sessionWrapper?.session === session,
-          );
-          if (!isPersistent) {
-            await session.disconnect();
+          // Previously this skipped disconnecting "persistent" sessions
+          // (present in activeSessions) and relied on a separate GC sweep
+          // to prune them later. That GC has been removed (see #425/#426):
+          // we only ever run one session at a time, so there's no reason to
+          // keep its live CopilotSession/subprocess open past the end of
+          // this run waiting for a timer to clean it up. Disconnect it here
+          // unconditionally instead.
+          //
+          // This doesn't lose context for a later turn: getOrCreateSession
+          // already handles `!existing.copilotSession` by resuming via the
+          // persisted `copilotSessionId` (see its "Context mismatch or
+          // missing copilotSession" branch, originally built for the #154
+          // idle-timeout-reconnect case) or, if resume fails, falling back
+          // to createSession with the retained conversationHistory folded
+          // in. So null out the record's copilotSession/sessionWrapper
+          // rather than deleting the record itself -- the bookkeeping
+          // (conversationHistory, turns, stateSnapshot) needs to survive
+          // for that resume path and for `gate-resume` after an
+          // awaitingHuman pause.
+          await session.disconnect();
+          if (currentSessionId) {
+            const sessionRec = activeSessions.get(currentSessionId);
+            if (sessionRec && (sessionRec.copilotSession === session || sessionRec.sessionWrapper?.session === session)) {
+              activeSessions.set(sessionRec.sessionId, {
+                ...sessionRec,
+                copilotSession: null as unknown as CopilotSession,
+                sessionWrapper: undefined,
+              });
+            }
           }
           session = null;
         }

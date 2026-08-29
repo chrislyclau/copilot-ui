@@ -109,11 +109,6 @@ export function checkActiveOrchestrationSession(
 }
 export const activeLocks = new Map<string, AbortController>();
 
-export let sensitiveValuesCache: Set<string> | null = null;
-export function setSensitiveValuesCache(val: Set<string> | null) {
-  sensitiveValuesCache = val;
-}
-
 export function resetSessionForNewRun(sessionId: string) {
   if (sessionId && activeSessions.has(sessionId)) {
     const currentRec = activeSessions.get(sessionId)!;

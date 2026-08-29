@@ -17,8 +17,6 @@ import {
   activeLocks,
   DEFAULT_WORKSPACE_DIR,
   DIAGNOSTIC_SCENARIOS,
-  sensitiveValuesCache,
-  setSensitiveValuesCache,
   resetSessionForNewRun,
   updateStateSnapshot,
   getOrCreateSession,
@@ -48,7 +46,6 @@ export {
   activeLocks,
   DEFAULT_WORKSPACE_DIR,
   DIAGNOSTIC_SCENARIOS,
-  sensitiveValuesCache,
   resetSessionForNewRun,
   updateStateSnapshot,
   getOrCreateSession,
@@ -137,83 +134,7 @@ async function runCommand(command: string, signal?: AbortSignal) {
   return await execCommand(command, signal);
 }
 
-// runLlmAudit and sensitiveValuesCache are now managed inside './orchestrator/sessionState'
-let envWatcher: fs.FSWatcher | null = null;
-const envPath = path.join(process.cwd(), '.env');
-
-function rebuildSensitiveValuesCache() {
-  const newValues = new Set<string>();
-  const SECRET_ENV_WHITELIST = ['GEMINI_API_KEY', 'COPILOT_JWT', 'COPILOT_CLIENT_SECRET', 'GITHUB_OAUTH_CLIENT_SECRET', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY'] as const;
-
-  // Process env keys from the whitelist only
-  for (const envKey of SECRET_ENV_WHITELIST) {
-    const val = process.env[envKey];
-    if (val && typeof val === 'string' && val.trim().length > 4 && val !== 'MY_GEMINI_API_KEY') {
-      newValues.add(val.trim());
-    }
-  }
-
-  // Process file but only keys present in our whitelist
-  try {
-    if (fs.existsSync(envPath)) {
-      const content = fs.readFileSync(envPath, 'utf8');
-      const lines = content.split('\n');
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
-          const parts = trimmed.split('=');
-          if (parts.length >= 2) {
-            const key = parts[0]?.trim();
-            if (key && (SECRET_ENV_WHITELIST as readonly string[]).includes(key)) {
-              const val = parts.slice(1).join('=').trim().replace(/^["']|["']$/g, '');
-              if (val && val.length > 4 && val !== 'MY_GEMINI_API_KEY') {
-                newValues.add(val);
-              }
-            }
-          }
-        }
-      }
-    }
-  } catch (e) {}
-
-  setSensitiveValuesCache(newValues);
-  writeLog(`[Sanitizer] Cache rebuilt/updated with ${newValues.size} secrets.`, LogLevel.INFO);
-}
-
-// Build at startup and setup watcher
-rebuildSensitiveValuesCache();
-
-function setupEnvWatcherWithBackoff(delay: number = 1000) {
-  try {
-    if (fs.existsSync(envPath)) {
-      if (envWatcher) {
-        try { envWatcher.close(); } catch (_) {}
-      }
-      envWatcher = fs.watch(envPath, (eventType) => {
-        if (eventType === 'change') {
-          rebuildSensitiveValuesCache();
-        }
-      });
-      envWatcher.on('error', (err: Error) => {
-        writeLog(`[Watcher] Env watcher encountered error: ${err?.message || String(err)}. Reconnecting with backoff...`, LogLevel.WARN);
-        try { if (envWatcher) { envWatcher.close(); } } catch (_) {}
-        envWatcher = null;
-        const nextDelay = Math.min(delay * 2, 30000);
-        setTimeout(() => setupEnvWatcherWithBackoff(nextDelay), delay);
-      });
-    } else {
-      // Delay re-establishing watcher if file is missing (ENOENT) during deep cleaning
-      const nextDelay = Math.min(delay * 2, 30000);
-      setTimeout(() => setupEnvWatcherWithBackoff(nextDelay), delay);
-    }
-  } catch (err: unknown) {
-    writeLog(`[Watcher] Exception establishing env watcher: ${err instanceof Error ? err.message : String(err)}. Retry in ${delay}ms`);
-    const nextDelay = Math.min(delay * 2, 30000);
-    setTimeout(() => setupEnvWatcherWithBackoff(nextDelay), delay);
-  }
-}
-
-setupEnvWatcherWithBackoff();
+// runLlmAudit is now managed inside './orchestrator/sessionState'
 
 /**
  * Prunes conversation history to prevent context window saturation while 
