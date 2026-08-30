@@ -506,7 +506,9 @@ drift this spec exists to close off. See "Migration plan" section at the end.
 
 ## Migration plan (hotswap)
 
-1. **Build in isolation.** New file (e.g. `src/agentCore/copilotSdk/sessionWrapper.ts`),
+1. **Build in isolation.** New file (e.g. `src/copilotSdk/sessionWrapper.ts` —
+   this cutover predates the later `src/agentCore/` reorg; the file now lives
+   at `src/agentCore/copilotSdk/sessionWrapper.ts`),
    zero imports from or into `hardenedSession.ts`, zero production call sites
    wired to it yet.
 2. **Satisfy every SYS-REQ-027* item and its associated tests** (invariant,
