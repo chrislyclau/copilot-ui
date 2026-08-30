@@ -48,8 +48,11 @@ container-down detection, or it will silently report green when gates never ran.
 `type-discipline-guide.md` bans `any`/`as any` outright; the codebase still carries
 legacy instances (concentrated in `serverRuntime.ts`). `eslint.config.js` enforces
 `@typescript-eslint/no-explicit-any` as an **error** in `src/orchestration/orchestrator/**` and
-`src/agentCore/copilotSdk/boundary.ts`, with `scripts/check-explicit-any.ts` as a secondary check
-against `eslint-disable` escape hatches. Enforce the guide on new/touched code. Don't
+`src/agentCore/copilotSdk/boundary.ts`. `scripts/check-explicit-any.ts` was intended as a
+secondary check against `eslint-disable` escape hatches, but it still scans the pre-reorg
+`src/orchestrator`/`src/copilotSdk` paths and currently no-ops silently since neither
+exists anymore — treat it as not providing coverage until its scan paths are fixed in a
+code change (out of scope for this docs-only PR). Enforce the guide on new/touched code. Don't
 ignore the guide because old code doesn't follow it, and don't do an unrequested cleanup
 pass on unrelated `any`s while working on something else.
 

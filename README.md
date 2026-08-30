@@ -317,9 +317,11 @@ Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git manag
 (Sole SDK Session Entry Point)") contains SYS-REQ-026/026a/026b/026c, now
 pointed at `src/agentCore/copilotSdk/sessionWrapper.ts` as the sanctioned entry point.
 At the time this section was drafted, that entry point was still
-`src/agentCore/copilotSdk/hardenedSession.ts` (function module keyed by
+`src/copilotSdk/hardenedSession.ts` (the `src/` tree has since been
+reorganized under `src/agentCore/`; this path reflects the layout at
+draft time, not the current one) — a function module keyed by
 `sessionId` against two separate `Map`s — `policyBySessionId` and `sessionBySessionId`
-— correlated only by matching keys). `SessionWrapper` **replaced** that module outright,
+— correlated only by matching keys. `SessionWrapper` **replaced** that module outright,
 rather than wrapping it — see the "Migration plan (hotswap)" section for how the
 cutover happened. Reasons `SessionWrapper` replaced rather than wrapped
 `hardenedSession.ts`, found on inspection of the pre-migration code:
