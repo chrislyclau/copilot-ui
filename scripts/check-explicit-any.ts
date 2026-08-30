@@ -123,7 +123,7 @@ function main() {
   }
 
   if (violations.length > 0) {
-    console.error('\n❌ ERROR: Type discipline violations found in src/orchestrator or src/copilotSdk paths:\n');
+    console.error('\n❌ ERROR: Type discipline violations found in src/orchestration/orchestrator or src/agentCore/copilotSdk paths:\n');
     for (const violation of violations) {
       const relPath = path.relative(process.cwd(), violation.file);
       console.error(`  File: ${relPath}`);
