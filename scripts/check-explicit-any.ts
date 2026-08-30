@@ -81,23 +81,38 @@ function walkDir(dir: string): string[] {
 }
 
 function main() {
-  console.log('=== Checking for explicit "any", @ts-ignore, or @ts-expect-error in src/orchestrator or src/copilotSdk ===');
+  console.log('=== Checking for explicit "any", @ts-ignore, or @ts-expect-error in src/orchestration/orchestrator or src/agentCore/copilotSdk ===');
 
   const targetDirs = [
-    path.join(process.cwd(), 'src', 'orchestrator'),
-    path.join(process.cwd(), 'src', 'copilotSdk')
+    path.join(process.cwd(), 'src', 'orchestration', 'orchestrator'),
+    path.join(process.cwd(), 'src', 'agentCore', 'copilotSdk')
   ];
+
+  const missingDirs = targetDirs.filter((dir) => !fs.existsSync(dir));
+  if (missingDirs.length > 0) {
+    console.error('\n❌ ERROR: Expected target directory does not exist:\n');
+    for (const dir of missingDirs) {
+      console.error(`  ${path.relative(process.cwd(), dir)}`);
+    }
+    console.error(
+      '\nThis usually means the source tree has been reorganized and this script\'s ' +
+      'targetDirs are stale. Update scripts/check-explicit-any.ts to match, ' +
+      'rather than letting this check silently no-op.\n'
+    );
+    process.exit(1);
+  }
 
   const filesToCheck: string[] = [];
   for (const dir of targetDirs) {
-    if (fs.existsSync(dir)) {
-      filesToCheck.push(...walkDir(dir));
-    }
+    filesToCheck.push(...walkDir(dir));
   }
 
   if (filesToCheck.length === 0) {
-    console.log('✅ No target files found.');
-    process.exit(0);
+    console.error(
+      '\n❌ ERROR: Target directories exist but contain no .ts/.tsx files to check. ' +
+      'Refusing to silently pass.\n'
+    );
+    process.exit(1);
   }
 
   const violations: Violation[] = [];
