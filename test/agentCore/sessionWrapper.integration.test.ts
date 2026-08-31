@@ -12,7 +12,7 @@ import {
 
 // Exercises SessionWrapper (src/copilotSdk/sessionWrapper.ts) against a REAL
 // CopilotClient/CopilotSession talking to the CapiProxy harness described in
-// copilot-sdk-record-replay.md, per issue #332. The proxy (ReplayingCapiProxy)
+// docs/copilot-sdk-record-replay.md, per issue #332. The proxy (ReplayingCapiProxy)
 // only mocks the LLM completions boundary (CopilotClient -> CAPI) -- session
 // create/resume, tool-permission enforcement, and config re-derivation all
 // run for real against the SDK. Nothing here asserts against an assumed SDK

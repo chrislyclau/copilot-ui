@@ -7,7 +7,7 @@ import { executeAuditSession, getAuditorExecutionConfig, ToolDefinition } from '
 
 // Exercises executeAuditSession's retry path (runForcedToolTurn -> resumeSession)
 // against a real CopilotClient talking to the CapiProxy harness described in
-// copilot-sdk-record-replay.md, rather than a hand-mocked session/client. The
+// docs/copilot-sdk-record-replay.md, rather than a hand-mocked session/client. The
 // snapshot below is built so the first turn ends with plain assistant text
 // (no tool call), forcing exactly one resumeSession retry before the tool is
 // finally called on the second turn.

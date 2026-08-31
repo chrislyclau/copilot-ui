@@ -6,7 +6,7 @@
  * real `CopilotClient`/`SessionWrapper` session. The ONLY faked boundary is
  * the LLM completion itself (via `CapiProxy`, replaying
  * `src/test/snapshots/run_terminal_docker/verify_exec.yaml`) -- see
- * copilot-sdk-record-replay.md. There is no vitest gate-loop/retry logic in
+ * docs/copilot-sdk-record-replay.md. There is no vitest gate-loop/retry logic in
  * this path to silently absorb a failed `docker exec`; a broken container
  * mount fails this script loudly and exits non-zero.
  *

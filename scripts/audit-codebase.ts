@@ -75,9 +75,9 @@ function stopProviderProxy(server: Server): Promise<void> {
  * Resolves which spec doc(s) to audit against. Prefers an explicit
  * AUDIT_SPEC_PATHS env var (comma-separated paths, relative to the repo
  * root) so a caller can target a specific doc; otherwise auto-discovers any
- * `*-spec.md` file at the repo root or under `scripts/` (this repo's
- * existing naming convention -- see `roadmap-spec.md`,
- * `scripts/review-agent-spec.md`).
+ * `*-spec.md` file at the repo root or under `docs/` (this repo's
+ * existing naming convention -- see `docs/roadmap-spec.md`,
+ * `docs/review-agent-spec.md`).
  */
 function discoverSpecDocs(): string[] {
   const explicit = process.env.AUDIT_SPEC_PATHS;
@@ -85,7 +85,7 @@ function discoverSpecDocs(): string[] {
     return explicit.split(',').map((p) => p.trim()).filter(Boolean);
   }
   const candidates: string[] = [];
-  for (const dir of ['.', 'scripts']) {
+  for (const dir of ['.', 'docs']) {
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir)) {
       if (entry.endsWith('-spec.md')) {
@@ -97,7 +97,7 @@ function discoverSpecDocs(): string[] {
 }
 
 /**
- * File-first context delivery (review-agent-spec.md §2's pattern, reused
+ * File-first context delivery (docs/review-agent-spec.md §2's pattern, reused
  * here): rather than concatenating spec content into the prompt, spec docs
  * are copied into a scratch directory the agent can read via its own tools,
  * alongside a manifest describing what's available. AGENTS.md/README.md are

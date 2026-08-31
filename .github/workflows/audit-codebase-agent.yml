@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       spec_paths:
-        description: 'Optional comma-separated spec doc path(s) to audit against (e.g. roadmap-spec.md,scripts/review-agent-spec.md). Leave blank to auto-discover *-spec.md files.'
+        description: 'Optional comma-separated spec doc path(s) to audit against (e.g. docs/roadmap-spec.md,docs/review-agent-spec.md). Leave blank to auto-discover *-spec.md files.'
         required: false
         type: string
       prompt:

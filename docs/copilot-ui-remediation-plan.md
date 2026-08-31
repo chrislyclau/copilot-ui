@@ -4,7 +4,7 @@ All phases below have landed in the codebase. This document is kept as a histori
 record of what was done and why, and as a pointer to where each change now lives — not
 as a forward-looking task list. If you're looking for current architectural rules, see
 `AGENTS.md` and `README.md` (SYS-REQ-022 through SYS-REQ-025); if you're looking for
-upcoming work, see `roadmap-spec.md`.
+upcoming work, see `docs/roadmap-spec.md`.
 
 Original status legend: **confirmed** (traced/verified), **suspected** (static trace
 only, needed a repro), or **structural** (no bug, just a seam to add). All items below
@@ -83,6 +83,6 @@ boundary module, the orchestrator extraction, and the path-space rule as impleme
 architecture, not aspiration.
 
 One documentation debt called out during this work remains open and is now tracked in
-`roadmap-spec.md` (RM-REQ-050's note) instead of here: the `/api/copilot/spec-patch`
+`docs/roadmap-spec.md` (RM-REQ-050's note) instead of here: the `/api/copilot/spec-patch`
 route in `serverRuntime.ts` is still commented `SYS-REQ-015/016`, which should read
 `ORCH-REQ-015/016` to match `README.md`'s actual numbering.

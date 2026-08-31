@@ -26,7 +26,7 @@ now coinciding in value, keep using the semantically correct function at each ca
 execution), and using the wrong one is still a latent bug even when it happens to work
 today.
 
-**Resolved** (see `copilot-ui-remediation-plan.md` Phase 0-A/2-A): gate execution cwd
+**Resolved** (see `docs/copilot-ui-remediation-plan.md` Phase 0-A/2-A): gate execution cwd
 now sources from `getWorkspaceRoot()` throughout `src/orchestration/orchestrator/gateLoop.ts` and
 `src/orchestration/serverRuntime.ts`; `DEFAULT_WORKSPACE_DIR` (`getWorkspaceHostLocation()`) is
 reserved for the SDK client's `workingDirectory` only. This distinction is now codified
@@ -45,7 +45,7 @@ container-down detection, or it will silently report green when gates never ran.
 
 ## `any` is a ratchet, not a rewrite
 
-`type-discipline-guide.md` bans `any`/`as any` outright; the codebase still carries
+`docs/type-discipline-guide.md` bans `any`/`as any` outright; the codebase still carries
 legacy instances (concentrated in `serverRuntime.ts`). `eslint.config.js` enforces
 `@typescript-eslint/no-explicit-any` as an **error** in `src/orchestration/orchestrator/**` and
 `src/agentCore/copilotSdk/boundary.ts`. `scripts/check-explicit-any.ts` is a secondary check

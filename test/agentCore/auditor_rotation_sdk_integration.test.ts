@@ -9,7 +9,7 @@ import { selectRotatingAuditorConfig } from '../../src/agentCore/auditorHelper';
 // Exercises the Issue 79 auditor rotation pool AND the Issue #180 diagnostic
 // logging (sendAndWaitWithAbort's tool.execution_start / usage-telemetry
 // logs) against a REAL CopilotClient/CopilotSession talking to the CapiProxy
-// harness described in copilot-sdk-record-replay.md, rather than the
+// harness described in docs/copilot-sdk-record-replay.md, rather than the
 // hand-mocked session.on()/sendAndWait() doubles used elsewhere in this
 // suite. Nothing here asserts against an assumed SDK event shape -- the
 // events are whatever the real SDK actually emits when it processes a real

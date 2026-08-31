@@ -354,7 +354,7 @@ pattern already used for model selection (`auditorHelper.ts`).
 - **Provider → SQLite reconciliation** (RM-REQ-083) — two-way issue sync is blocked on
   this; one-way sync (RM-REQ-081) is not.
 - A code-tracked, deterministic finding-status mechanism, mirroring `O-6.9` in
-  `review-agent-spec.md` — still deferred pending enough runs of the model-judged
+  `docs/review-agent-spec.md` — still deferred pending enough runs of the model-judged
   approach (Section 6 above) to show whether its false-negative rate is acceptable.
 - Content-quality checks on forced-tool-call output (distinguishing a genuine
   zero-findings result from a hollow/rubber-stamped one) — flagged as a real gap but
