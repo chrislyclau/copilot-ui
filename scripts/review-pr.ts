@@ -194,8 +194,10 @@ async function main() {
   }
   const diff = getFilteredDiff(range);
   if (!diff.trim()) {
+    // An empty diff is a no-op outcome, same as the nothingToReview case
+    // above -- exit 0 so CI doesn't flag it as a failure.
     console.log(`No diff to review for range ${range}, skipping.`);
-    process.exit(1);
+    process.exit(0);
   }
 
   const contextDir = join(process.cwd(), '.review-context');
