@@ -1,6 +1,6 @@
 import { assert, describe, it, vi, afterEach } from "vitest";
 
-const DEFAULT_WORKSPACE_HOST_LOCATION = "/tmp/applet_workspace";
+const DEFAULT_WORKSPACE_HOST_LOCATION = "/workspace/applet_workspace";
 
 afterEach(() => {
   vi.resetModules();

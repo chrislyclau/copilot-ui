@@ -2,7 +2,13 @@ import { spawn } from "child_process";
 import * as crypto from "crypto";
 import { killProcessGroup } from "./processGroup";
 
-const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "/tmp/applet_workspace";
+// Must NOT live under /tmp: docker-compose.yml mounts a separate `tmpfs` at
+// /tmp for the container's writable scratch space, and that tmpfs mount
+// shadows any bind-mounted subpath underneath it (e.g. the previous default
+// of /tmp/applet_workspace), making the workspace root not exist inside the
+// container even though the bind mount itself is configured correctly. See
+// issue #445.
+const WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "/workspace/applet_workspace";
 // The compose mount now binds the host workspace to the identical absolute
 // path inside the container (see docker-compose.yml), so the container-side
 // root is just the host location, not a separately-remapped constant.
