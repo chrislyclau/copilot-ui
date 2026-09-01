@@ -63,6 +63,7 @@ jobs:
           REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
           AGENT_PROMPT: ${{ inputs.prompt }}
           CONTAINER_NAME: applet-${{ github.run_id }}
+          WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
           AI_STUDIO: "false"
         run: npm run agent:code-change
 

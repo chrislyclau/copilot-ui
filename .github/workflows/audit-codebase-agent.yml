@@ -45,6 +45,7 @@ jobs:
           AUDIT_SPEC_PATHS: ${{ inputs.spec_paths }}
           AUDIT_PROMPT: ${{ inputs.prompt }}
           CONTAINER_NAME: applet-${{ github.run_id }}
+          WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
           AI_STUDIO: "false"
         run: npm run agent:audit
 
