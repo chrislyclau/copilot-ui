@@ -28,10 +28,10 @@ today.
 
 **Resolved** (see `docs/copilot-ui-remediation-plan.md` Phase 0-A/2-A): gate execution cwd
 now sources from `getWorkspaceRoot()` throughout `src/orchestration/orchestrator/gateLoop.ts` and
-`src/orchestration/serverRuntime.ts`; `DEFAULT_WORKSPACE_DIR` (`getWorkspaceHostLocation()`) is
+`src/orchestration/serverRuntime.ts`; `getDefaultWorkspaceDir()` (`getWorkspaceHostLocation()`) is
 reserved for the SDK client's `workingDirectory` only. This distinction is now codified
 as SYS-REQ-022/023 in `README.md`. If a new callsite falls back to
-`DEFAULT_WORKSPACE_DIR` or `process.cwd()` for gate/exec purposes, treat that as a
+`getDefaultWorkspaceDir()` or `process.cwd()` for gate/exec purposes, treat that as a
 regression of this fix, not a pre-existing known issue.
 
 ## Diagnostics gate fallback can mask real failures
@@ -69,7 +69,7 @@ not add a fresh `@github/copilot-sdk` import.
 `src/orchestration/orchestrator/gateLoop.ts`, with session lifecycle helpers in
 `src/orchestration/orchestrator/sessionState.ts` (SYS-REQ-025). `serverRuntime.ts` retains route
 registration and cross-cutting state (`activeSessions`, `sseResToSessionId`,
-`activeLocks`, `getGlobalClient`, `writeLog`, `DEFAULT_WORKSPACE_DIR`). Don't add new
+`activeLocks`, `getGlobalClient`, `writeLog`, `getDefaultWorkspaceDir`). Don't add new
 orchestration logic inline in route handlers — put it in `src/orchestration/orchestrator/`.
 
 ## Orphan processes on abort — resolved via detached process groups
