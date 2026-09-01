@@ -113,4 +113,29 @@ describe("docker-compose.yml mount configuration", () => {
     );
     assert.strictEqual(match![1], match![2], "Mount source and target must use the identical WORKSPACE_HOST_LOCATION expression");
   });
+
+  it("requires WORKSPACE_HOST_LOCATION rather than defaulting it (#446)", () => {
+    // A compose-side default (even a working one) is a second place for the
+    // path to drift from what dockerRunner.ts expects — the same class of
+    // bug #446 is about, just one layer up. `${VAR:?msg}` makes `docker
+    // compose up` fail loudly instead of silently mounting a guessed path.
+    const composePath = path.join(__dirname, "..", "..", "docker-compose.yml");
+    const compose = fs.readFileSync(composePath, "utf-8");
+
+    const mountLine = compose
+      .split("\n")
+      .find((line) => line.trim().startsWith("- ${WORKSPACE_HOST_LOCATION"));
+
+    assert.isDefined(mountLine, "Expected a WORKSPACE_HOST_LOCATION volume mount line in docker-compose.yml");
+    assert.match(
+      mountLine!,
+      /\$\{WORKSPACE_HOST_LOCATION:\?[^}]+\}/,
+      "Expected the required-variable form ${WORKSPACE_HOST_LOCATION:?...}, not a ${VAR:-default} fallback",
+    );
+    assert.notInclude(
+      mountLine!,
+      ":-",
+      "Mount line should not contain a ${VAR:-default} fallback for WORKSPACE_HOST_LOCATION",
+    );
+  });
 });
