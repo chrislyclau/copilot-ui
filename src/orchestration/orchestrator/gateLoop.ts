@@ -118,7 +118,6 @@ import {
   writeLog,
   LogLevel,
   DIAGNOSTIC_SCENARIOS,
-  DEFAULT_WORKSPACE_DIR,
   CopilotCreateSessionOptions,
   getCodeState,
   runLlmAudit,

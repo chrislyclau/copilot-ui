@@ -9,7 +9,12 @@ services:
       # Mounts the workspace at the same absolute path inside the container as
       # on the host, so paths reported by container-exec tools and host-side
       # tools (e.g. the SDK's `view`) are identical and cross-resolvable.
-      - ${WORKSPACE_HOST_LOCATION:-/tmp/applet_workspace}:${WORKSPACE_HOST_LOCATION:-/tmp/applet_workspace}
+      #
+      # The default must live outside /tmp: the tmpfs mount below is mounted
+      # at /tmp and shadows any bind-mounted subpath underneath it, which
+      # made the previous default (/tmp/applet_workspace) not exist inside
+      # the container. See issue #445.
+      - ${WORKSPACE_HOST_LOCATION:-/workspace/applet_workspace}:${WORKSPACE_HOST_LOCATION:-/workspace/applet_workspace}
     environment:
       - NODE_ENV=development
     # Hardening: the orchestrator auto-executes LLM-generated commands in this

@@ -31,10 +31,7 @@ describe("dockerRunner path resolution off WORKSPACE_HOST_LOCATION", () => {
   // vi.resetModules() calls, since workspace.ts closes over dockerRunner via
   // a static import at its own module top. Importing dockerRunner.ts
   // directly avoids that indirection and reliably reflects the current env.
-  it("throws instead of defaulting when WORKSPACE_HOST_LOCATION is unset (#446)", async () => {
-    // Regression guard for #446: a silent fallback to a fixed path (e.g.
-    // "/tmp/applet_workspace") is what let a step omitting the var reproduce
-    // #403 invisibly. getWorkspaceRoot()/getGitDir() must fail fast instead.
+  it("throws a clear config error when WORKSPACE_HOST_LOCATION is unset, instead of silently defaulting", async () => {
     clearRunnerEnv();
     vi.resetModules();
 
@@ -42,11 +39,11 @@ describe("dockerRunner path resolution off WORKSPACE_HOST_LOCATION", () => {
 
     assert.throws(
       () => docker.getWorkspaceRoot(),
-      /WORKSPACE_HOST_LOCATION environment variable is not set/,
+      /WORKSPACE_HOST_LOCATION environment variable is not set/
     );
     assert.throws(
       () => docker.getGitDir(),
-      /WORKSPACE_HOST_LOCATION environment variable is not set/,
+      /WORKSPACE_HOST_LOCATION environment variable is not set/
     );
   });
 

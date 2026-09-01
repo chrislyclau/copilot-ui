@@ -6,12 +6,10 @@ afterEach(() => {
 });
 
 describe("Docker workspace host location", () => {
-  it("throws a clear error instead of silently falling back when unset (#446)", async () => {
-    // A silent "/tmp/applet_workspace" default is exactly what let this
-    // failure mode (#403/#446) reproduce itself invisibly: a step that
-    // forgets to set WORKSPACE_HOST_LOCATION should fail loudly at the point
-    // of misconfiguration, not fall back to a path the container was never
-    // mounted at.
+  it("throws a clear config error instead of silently defaulting when unset", async () => {
+    // No hidden default: issue #446 -- a silent default (previously
+    // /tmp/applet_workspace) reproduces a misconfiguration invisibly
+    // instead of failing at the point it happens.
     delete process.env.WORKSPACE_HOST_LOCATION;
     vi.resetModules();
 
@@ -19,7 +17,7 @@ describe("Docker workspace host location", () => {
 
     assert.throws(
       () => getWorkspaceHostLocation(),
-      /WORKSPACE_HOST_LOCATION environment variable is not set/,
+      /WORKSPACE_HOST_LOCATION environment variable is not set/
     );
   });
 

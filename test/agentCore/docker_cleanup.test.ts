@@ -20,7 +20,7 @@ describe("Docker Cleanup & Orphan Handling", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     process.env.CONTAINER_NAME = "test-container";
-    process.env.WORKSPACE_HOST_LOCATION = "/tmp/applet_workspace";
+    process.env.WORKSPACE_HOST_LOCATION = "/workspace/applet_workspace";
     vi.mocked(cp.spawnSync).mockReturnValue({ status: 0, error: undefined } as any);
   });
 

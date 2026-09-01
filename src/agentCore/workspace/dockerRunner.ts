@@ -2,17 +2,12 @@ import { spawn, spawnSync } from "child_process";
 import * as crypto from "crypto";
 import { killProcessGroup } from "./processGroup";
 
-// The compose mount now binds the host workspace to the identical absolute
-// path inside the container (see docker-compose.yml), so the container-side
-// root is just the host location, not a separately-remapped constant.
-//
-// Resolved lazily (and cached) rather than at module load, mirroring
-// getContainerName() below: throwing eagerly at import time would break call
-// sites that merely re-export this module before the env is configured,
-// whereas throwing on first real use surfaces the misconfiguration exactly
-// where it matters, with a clear message naming the missing var. There must
-// be no fallback default here — a silent default is what let this failure
-// mode (#403/#446) reproduce itself invisibly across CI workflows.
+// Deliberately no fallback default here. WORKSPACE_HOST_LOCATION must match
+// wherever `docker compose up` actually mounted the workspace (see
+// docker-compose.yml); silently defaulting to a guessed path (previously
+// /tmp/applet_workspace, which is shadowed by the container's /tmp tmpfs
+// mount) just reproduces a misconfiguration invisibly instead of failing at
+// the point it happens. See issue #446.
 let WORKSPACE_HOST_LOCATION = "";
 
 function getWorkspaceHostLocationOrThrow(): string {
@@ -20,7 +15,8 @@ function getWorkspaceHostLocationOrThrow(): string {
     WORKSPACE_HOST_LOCATION = process.env.WORKSPACE_HOST_LOCATION || "";
     if (!WORKSPACE_HOST_LOCATION) {
       throw new Error(
-        "WORKSPACE_HOST_LOCATION environment variable is not set. Please ensure it is set to the same path used to start the container (see docker-compose.yml).",
+        "WORKSPACE_HOST_LOCATION environment variable is not set. It must match the " +
+          "path docker-compose.yml mounted the workspace at (see docker compose up).",
       );
     }
   }
@@ -291,6 +287,10 @@ export async function execCommand(
   return runDockerProcess(command, signal ?? AbortSignal.timeout(EXEC_TIMEOUT_MS));
 }
 export function getWorkspaceRoot(): string {
+  // The compose mount binds the host workspace to the identical absolute
+  // path inside the container (see docker-compose.yml), so the
+  // container-side root is just the host location, not a separately
+  // -remapped constant.
   return getWorkspaceHostLocationOrThrow();
 }
 export function getWorkspaceHostLocation(): string {
