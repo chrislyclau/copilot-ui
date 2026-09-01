@@ -37,8 +37,8 @@ describe("dockerRunner path resolution off WORKSPACE_HOST_LOCATION", () => {
 
     const docker = await import("../../src/agentCore/workspace/dockerRunner.js");
 
-    assert.strictEqual(docker.getWorkspaceRoot(), "/tmp/applet_workspace");
-    assert.strictEqual(docker.getGitDir(), "/tmp/applet_workspace/snapshots/.git");
+    assert.strictEqual(docker.getWorkspaceRoot(), "/workspace/applet_workspace");
+    assert.strictEqual(docker.getGitDir(), "/workspace/applet_workspace/snapshots/.git");
   });
 
   it("resolves getWorkspaceRoot()/getGitDir() off a custom host-mirrored WORKSPACE_HOST_LOCATION, not a fixed in-container path", async () => {

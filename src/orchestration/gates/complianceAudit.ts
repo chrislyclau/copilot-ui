@@ -137,6 +137,15 @@ export async function runComplianceAudit(
   const specRecord = getSpec(pbi.specId);
   if (specRecord) {
     try {
+      // specRecord.filePath is DB-sourced; validate its charset before shell
+      // interpolation (mirrors the pathGuard.validateCwd discipline used
+      // elsewhere for cwd values) so a malformed/tampered record can't break
+      // out of the quoted argument.
+      if (!/^[a-zA-Z0-9_\-.\/]+$/.test(specRecord.filePath)) {
+        throw new Error(
+          `Security Exception: Spec file path contains unsafe characters: ${specRecord.filePath}`
+        );
+      }
       const execResult = await getExecCommand()(
         `cd '${getWorkspaceRoot()}' && cat '${specRecord.filePath}'`,
         abortSignal
