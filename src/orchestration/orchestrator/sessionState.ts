@@ -37,9 +37,24 @@ export function setLogLevels(current: LogLevel, file: LogLevel = LogLevel.DEBUG)
 }
 export const lastRunLog: string[] = [];
 
-export const DEFAULT_WORKSPACE_DIR = getWorkspaceHostLocation();
-if (!fs.existsSync(DEFAULT_WORKSPACE_DIR)) {
-  fs.mkdirSync(DEFAULT_WORKSPACE_DIR, { recursive: true });
+// Lazy on purpose: resolving/creating this touches WORKSPACE_HOST_LOCATION
+// (which, for the Docker runner, now throws if unset rather than silently
+// defaulting -- see issue #446) and does a host-side mkdir. Many consumers
+// of this module (e.g. the PR-review script) never actually need a
+// workspace dir, so eagerly resolving this at import time meant importing
+// sessionState.ts at all could crash unrelated code paths. Resolving lazily,
+// only when a caller actually asks for it, confines any failure to the
+// caller that needed it.
+let _defaultWorkspaceDir: string | null = null;
+export function getDefaultWorkspaceDir(): string {
+  if (_defaultWorkspaceDir === null) {
+    const dir = getWorkspaceHostLocation();
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    _defaultWorkspaceDir = dir;
+  }
+  return _defaultWorkspaceDir;
 }
 
 export class SessionMap extends Map<string, SessionRecord> {
@@ -579,7 +594,7 @@ export async function getGlobalClient(cwd?: string): Promise<CopilotClient> {
     try {
       writeLog('[SDK] Instantiating and starting global CopilotClient...');
       
-      let finalCwd = DEFAULT_WORKSPACE_DIR;
+      let finalCwd = getDefaultWorkspaceDir();
       if (cwd) {
         try {
           const makeDirResult = await getExecCommand()(`mkdir -p '${cwd}'`);
@@ -596,8 +611,8 @@ export async function getGlobalClient(cwd?: string): Promise<CopilotClient> {
           }
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          writeLog(`[SDK] Working directory ${cwd} does not exist and could not be created, falling back to ${DEFAULT_WORKSPACE_DIR}. Error: ${msg}`);
-          finalCwd = DEFAULT_WORKSPACE_DIR;
+          writeLog(`[SDK] Working directory ${cwd} does not exist and could not be created, falling back to ${getDefaultWorkspaceDir()}. Error: ${msg}`);
+          finalCwd = getDefaultWorkspaceDir();
         }
       }
 
@@ -739,7 +754,7 @@ You MUST submit structured verification feedback, logic checks, and compiler gat
 
   try {
     const auditResult = await executeAuditSession<AuditResult>(
-      DEFAULT_WORKSPACE_DIR,
+      getDefaultWorkspaceDir(),
       executionConfig,
       systemPrompt,
       submitAuditFindingsTool,

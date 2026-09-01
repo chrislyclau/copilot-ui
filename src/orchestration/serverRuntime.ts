@@ -15,7 +15,7 @@ import {
   sseResToSessionId,
   sessionWritePromises,
   activeLocks,
-  DEFAULT_WORKSPACE_DIR,
+  getDefaultWorkspaceDir,
   DIAGNOSTIC_SCENARIOS,
   resetSessionForNewRun,
   updateStateSnapshot,
@@ -44,7 +44,7 @@ export {
   sseResToSessionId,
   sessionWritePromises,
   activeLocks,
-  DEFAULT_WORKSPACE_DIR,
+  getDefaultWorkspaceDir,
   DIAGNOSTIC_SCENARIOS,
   resetSessionForNewRun,
   updateStateSnapshot,
@@ -361,7 +361,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       addLine("Initializing CopilotClient...");
 
       testClient = new CopilotClient({
-        workingDirectory: DEFAULT_WORKSPACE_DIR,
+        workingDirectory: getDefaultWorkspaceDir(),
         logLevel: "none",
         useLoggedInUser: false,
       });

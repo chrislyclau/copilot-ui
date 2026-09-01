@@ -1,20 +1,24 @@
 import { assert, describe, it, vi, afterEach } from "vitest";
 
-const DEFAULT_WORKSPACE_HOST_LOCATION = "/workspace/applet_workspace";
-
 afterEach(() => {
   vi.resetModules();
   delete process.env.WORKSPACE_HOST_LOCATION;
 });
 
 describe("Docker workspace host location", () => {
-  it("defaults to the compose mount path", async () => {
+  it("throws a clear config error instead of silently defaulting when unset", async () => {
+    // No hidden default: issue #446 -- a silent default (previously
+    // /tmp/applet_workspace) reproduces a misconfiguration invisibly
+    // instead of failing at the point it happens.
     delete process.env.WORKSPACE_HOST_LOCATION;
     vi.resetModules();
 
     const { getWorkspaceHostLocation } = await import("../../src/agentCore/workspace/dockerRunner.js");
 
-    assert.strictEqual(getWorkspaceHostLocation(), DEFAULT_WORKSPACE_HOST_LOCATION);
+    assert.throws(
+      () => getWorkspaceHostLocation(),
+      /WORKSPACE_HOST_LOCATION environment variable is not set/
+    );
   });
 
   it("respects an explicit workspace host override", async () => {
