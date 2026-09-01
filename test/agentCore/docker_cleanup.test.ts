@@ -15,6 +15,7 @@ describe("Docker Cleanup & Orphan Handling", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     process.env.CONTAINER_NAME = "test-container";
+    process.env.WORKSPACE_HOST_LOCATION = "/workspace/applet_workspace";
   });
 
   it("should spawn a container-side kill process on abort", async () => {

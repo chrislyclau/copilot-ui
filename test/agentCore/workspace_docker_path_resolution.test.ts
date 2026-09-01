@@ -31,14 +31,16 @@ describe("dockerRunner path resolution off WORKSPACE_HOST_LOCATION", () => {
   // vi.resetModules() calls, since workspace.ts closes over dockerRunner via
   // a static import at its own module top. Importing dockerRunner.ts
   // directly avoids that indirection and reliably reflects the current env.
-  it("defaults to the compose mount path when WORKSPACE_HOST_LOCATION is unset", async () => {
+  it("throws a clear config error when WORKSPACE_HOST_LOCATION is unset, instead of silently defaulting", async () => {
     clearRunnerEnv();
     vi.resetModules();
 
     const docker = await import("../../src/agentCore/workspace/dockerRunner.js");
 
-    assert.strictEqual(docker.getWorkspaceRoot(), "/workspace/applet_workspace");
-    assert.strictEqual(docker.getGitDir(), "/workspace/applet_workspace/snapshots/.git");
+    assert.throws(
+      () => docker.getWorkspaceRoot(),
+      /WORKSPACE_HOST_LOCATION environment variable is not set/
+    );
   });
 
   it("resolves getWorkspaceRoot()/getGitDir() off a custom host-mirrored WORKSPACE_HOST_LOCATION, not a fixed in-container path", async () => {
