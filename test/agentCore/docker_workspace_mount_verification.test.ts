@@ -43,14 +43,27 @@ describe("Docker workspace mount verification (#446)", () => {
 
   it("reports a timed-out probe distinctly, not as a missing directory", async () => {
     const cp = await import("child_process");
-    // spawnSync sets `signal` (and no `status`) when the child was killed
-    // for exceeding the `timeout` option.
-    vi.mocked(cp.spawnSync).mockReturnValue({ status: null, signal: "SIGKILL", error: undefined } as any);
+    // Real Node spawnSync sets BOTH `signal` and `error` (code "ETIMEDOUT",
+    // message "spawnSync docker ETIMEDOUT") when the child is killed for
+    // exceeding `timeout` -- unlike the previous mock shape here, which set
+    // only `signal` and doesn't occur in practice.
+    const timeoutError = Object.assign(new Error("spawnSync docker ETIMEDOUT"), { code: "ETIMEDOUT" });
+    vi.mocked(cp.spawnSync).mockReturnValue({ status: null, signal: "SIGKILL", error: timeoutError } as any);
 
     const { runDockerProcess } = await import("../../src/agentCore/workspace/dockerRunner.js");
 
     await expect(runDockerProcess("echo hi")).rejects.toThrow(/Timed out.*verifying WORKSPACE_HOST_LOCATION/s);
     assert.strictEqual(vi.mocked(cp.spawn).mock.calls.length, 0);
+  });
+
+  it("also catches a timeout signaled via error.code alone, without a top-level signal", async () => {
+    const cp = await import("child_process");
+    const timeoutError = Object.assign(new Error("spawnSync docker ETIMEDOUT"), { code: "ETIMEDOUT" });
+    vi.mocked(cp.spawnSync).mockReturnValue({ status: null, signal: null, error: timeoutError } as any);
+
+    const { runDockerProcess } = await import("../../src/agentCore/workspace/dockerRunner.js");
+
+    await expect(runDockerProcess("echo hi")).rejects.toThrow(/Timed out.*verifying WORKSPACE_HOST_LOCATION/s);
   });
 
   it("attributes a dead/missing container to the container, not to a WORKSPACE_HOST_LOCATION mismatch", async () => {
