@@ -17,6 +17,63 @@ describe("Docker workspace mount verification (#446)", () => {
     process.env.WORKSPACE_HOST_LOCATION = "/tmp/applet_workspace";
   });
 
+  it("passes a bounded timeout to spawnSync so a wedged docker daemon can't hang the event loop", async () => {
+    const cp = await import("child_process");
+    vi.mocked(cp.spawnSync).mockReturnValue({ status: 0, error: undefined } as any);
+    vi.mocked(cp.spawn).mockReturnValue({
+      pid: 1,
+      kill: vi.fn(),
+      on: vi.fn(),
+      stdout: { on: vi.fn() },
+      stderr: { on: vi.fn() },
+      stdin: { writable: true, write: vi.fn(), end: vi.fn() },
+      once: vi.fn(),
+      removeAllListeners: vi.fn(),
+    } as any);
+
+    const { runDockerProcess } = await import("../../src/agentCore/workspace/dockerRunner.js");
+    void runDockerProcess("echo hi");
+    await new Promise((r) => setTimeout(r, 10));
+
+    const call = vi.mocked(cp.spawnSync).mock.calls[0]!;
+    const options = call[2];
+    assert.isNumber((options as any)?.timeout, "expected spawnSync to be called with a numeric timeout");
+    assert.isAbove((options as any).timeout, 0);
+  });
+
+  it("reports a timed-out probe distinctly, not as a missing directory", async () => {
+    const cp = await import("child_process");
+    // spawnSync sets `signal` (and no `status`) when the child was killed
+    // for exceeding the `timeout` option.
+    vi.mocked(cp.spawnSync).mockReturnValue({ status: null, signal: "SIGKILL", error: undefined } as any);
+
+    const { runDockerProcess } = await import("../../src/agentCore/workspace/dockerRunner.js");
+
+    await expect(runDockerProcess("echo hi")).rejects.toThrow(/Timed out.*verifying WORKSPACE_HOST_LOCATION/s);
+    assert.strictEqual(vi.mocked(cp.spawn).mock.calls.length, 0);
+  });
+
+  it("attributes a dead/missing container to the container, not to a WORKSPACE_HOST_LOCATION mismatch", async () => {
+    const cp = await import("child_process");
+    // `docker exec` itself exits non-zero with a CLI-level stderr message
+    // when the container isn't running -- `test` inside it never even ran.
+    vi.mocked(cp.spawnSync).mockReturnValue({
+      status: 1,
+      error: undefined,
+      stderr: 'Error response from daemon: Container "test-container" is not running',
+    } as any);
+
+    const { runDockerProcess } = await import("../../src/agentCore/workspace/dockerRunner.js");
+
+    await expect(runDockerProcess("echo hi")).rejects.toThrow(
+      /docker exec failed before it could check the path/,
+    );
+    // Should not be misdiagnosed as a WORKSPACE_HOST_LOCATION mismatch.
+    await expect(runDockerProcess("echo hi").catch((e) => e.message)).resolves.not.toMatch(
+      /does not exist inside container/,
+    );
+  });
+
   it("rejects runDockerProcess with a clear error when the mounted path doesn't exist in the container", async () => {
     const cp = await import("child_process");
     // `docker exec <container> test -d <path>` exits non-zero when the
