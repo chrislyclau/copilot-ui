@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import * as crypto from "crypto";
 import { killProcessGroup } from "./processGroup";
 
@@ -22,6 +22,7 @@ function getWorkspaceHostLocationOrThrow(): string {
   }
   return WORKSPACE_HOST_LOCATION;
 }
+
 // Default timeout for user-supplied commands. Callers can override by passing
 // their own AbortSignal; this deadline applies only when none is provided.
 const EXEC_TIMEOUT_MS = 60_000;
@@ -43,6 +44,38 @@ function getContainerName(): string {
   return CONTAINER_NAME;
 }
 
+// Whether we've already confirmed WORKSPACE_HOST_LOCATION actually exists
+// inside the target container. Verified (and cached) once per process
+// lifetime rather than on every exec: cheap enough to be worth doing before
+// any real command runs, but not worth a `docker exec test -d` round-trip on
+// every single invocation. A present-but-wrong var (e.g. a stale value from
+// a previous job, or a step exporting a path different from the one
+// `docker compose up` mounted) is exactly the drift #446 calls out as
+// undetected by the missing-var check alone.
+let workspaceMountVerified = false;
+
+function verifyWorkspaceMount(): void {
+  if (workspaceMountVerified) return;
+  const location = getWorkspaceHostLocationOrThrow();
+  const containerName = getContainerName();
+  const result = spawnSync("docker", ["exec", containerName, "test", "-d", location]);
+  if (result.error) {
+    throw new Error(
+      `Failed to verify WORKSPACE_HOST_LOCATION ("${location}") inside container "${containerName}": ${result.error.message}`,
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `WORKSPACE_HOST_LOCATION ("${location}") does not exist inside container "${containerName}". ` +
+        "This usually means the container was mounted with a different WORKSPACE_HOST_LOCATION than the one " +
+        "currently set (e.g. a stale value from a previous job, or a step exporting a path different from the " +
+        "one `docker compose up` used). Ensure every step that sets CONTAINER_NAME/WORKSPACE_HOST_LOCATION uses " +
+        "the exact same value the container was started with.",
+    );
+  }
+  workspaceMountVerified = true;
+}
+
 /**
  * Executes a command inside the persistent Docker container via `docker exec`.
  * The container is started once by initializeWorkspace and remains running
@@ -56,6 +89,11 @@ export async function runDockerProcess(
   // Needs to run docker exec -i container_name bash -s <<< "command"
   // No need to sanitize. The container is already an isolated environment.
   return new Promise((resolve) => {
+    // Throws synchronously (rejecting this promise, same as a missing
+    // CONTAINER_NAME already did) if the var is unset or doesn't match
+    // reality, before we ever spawn the real command.
+    verifyWorkspaceMount();
+
     const runId = crypto.randomUUID();
     const child = spawn("docker", [
       "exec",

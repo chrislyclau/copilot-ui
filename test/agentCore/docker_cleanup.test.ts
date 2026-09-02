@@ -5,6 +5,11 @@ import * as crypto from "crypto";
 
 vi.mock("child_process", () => ({
   spawn: vi.fn(),
+  // dockerRunner uses spawnSync once (cached thereafter) to confirm
+  // WORKSPACE_HOST_LOCATION actually exists inside the container before
+  // running the real command; stub it to succeed so these tests can focus
+  // on the spawn()-based exec/kill behavior they're actually exercising.
+  spawnSync: vi.fn(() => ({ status: 0, error: undefined })),
 }));
 
 vi.mock("crypto", () => ({
@@ -16,6 +21,7 @@ describe("Docker Cleanup & Orphan Handling", () => {
     vi.resetAllMocks();
     process.env.CONTAINER_NAME = "test-container";
     process.env.WORKSPACE_HOST_LOCATION = "/workspace/applet_workspace";
+    vi.mocked(cp.spawnSync).mockReturnValue({ status: 0, error: undefined } as any);
   });
 
   it("should spawn a container-side kill process on abort", async () => {
