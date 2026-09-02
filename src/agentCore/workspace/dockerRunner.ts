@@ -54,19 +54,56 @@ function getContainerName(): string {
 // undetected by the missing-var check alone.
 let workspaceMountVerified = false;
 
+// Bound the mount-verification probe the same way exec/kill work elsewhere
+// in this file (EXEC_TIMEOUT_MS, CONTAINER_KILL_GRACE_MS): spawnSync is
+// fully synchronous and blocks the entire Node event loop until it
+// resolves, so an unbounded call here would let a wedged docker daemon
+// freeze the whole process (HTTP/SSE server, abort timers, every concurrent
+// session) on the very first runDockerProcess call after startup.
+const VERIFY_MOUNT_TIMEOUT_MS = 5_000;
+
 function verifyWorkspaceMount(): void {
   if (workspaceMountVerified) return;
   const location = getWorkspaceHostLocationOrThrow();
   const containerName = getContainerName();
-  const result = spawnSync("docker", ["exec", containerName, "test", "-d", location]);
+  const result = spawnSync("docker", ["exec", containerName, "test", "-d", location], {
+    timeout: VERIFY_MOUNT_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    encoding: "utf-8",
+  });
   if (result.error) {
     throw new Error(
       `Failed to verify WORKSPACE_HOST_LOCATION ("${location}") inside container "${containerName}": ${result.error.message}`,
     );
   }
-  if (result.status !== 0) {
+  if (result.signal) {
     throw new Error(
-      `WORKSPACE_HOST_LOCATION ("${location}") does not exist inside container "${containerName}". ` +
+      `Timed out after ${VERIFY_MOUNT_TIMEOUT_MS}ms verifying WORKSPACE_HOST_LOCATION ("${location}") inside ` +
+        `container "${containerName}" (docker exec was killed with ${result.signal}). The docker daemon or ` +
+        "container may be unresponsive.",
+    );
+  }
+  if (result.status !== 0) {
+    const stderr = (result.stderr || "").trim();
+    // `docker exec ... test -d <path>` exits non-zero both when the path is
+    // genuinely missing inside an otherwise-healthy container (test's own
+    // exit code, no stderr) and when docker itself couldn't run the command
+    // at all -- container stopped, container missing, daemon unreachable --
+    // which surfaces as docker CLI stderr rather than a plain `test`
+    // failure. Distinguish them so a dead container doesn't get misdiagnosed
+    // as a WORKSPACE_HOST_LOCATION mismatch.
+    const looksLikeDockerCliFailure =
+      /No such container|is not running|Cannot connect to the Docker daemon/i.test(stderr);
+    if (looksLikeDockerCliFailure) {
+      throw new Error(
+        `Could not verify WORKSPACE_HOST_LOCATION inside container "${containerName}": docker exec failed before ` +
+          `it could check the path (${stderr || `exit code ${result.status}`}). Ensure the container is running ` +
+          "before executing commands.",
+      );
+    }
+    throw new Error(
+      `WORKSPACE_HOST_LOCATION ("${location}") does not exist inside container "${containerName}"` +
+        `${stderr ? `: ${stderr}` : ""}. ` +
         "This usually means the container was mounted with a different WORKSPACE_HOST_LOCATION than the one " +
         "currently set (e.g. a stale value from a previous job, or a step exporting a path different from the " +
         "one `docker compose up` used). Ensure every step that sets CONTAINER_NAME/WORKSPACE_HOST_LOCATION uses " +
