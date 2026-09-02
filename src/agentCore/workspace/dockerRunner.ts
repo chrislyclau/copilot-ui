@@ -71,16 +71,20 @@ function verifyWorkspaceMount(): void {
     killSignal: "SIGKILL",
     encoding: "utf-8",
   });
+  // Node sets BOTH `error` (code "ETIMEDOUT") and `signal` on a spawnSync
+  // timeout, so this must be checked before the generic `result.error`
+  // branch below, or the timeout always gets misreported as a generic
+  // "failed to verify" error instead of the more actionable diagnosis here.
+  if (result.signal || (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    throw new Error(
+      `Timed out after ${VERIFY_MOUNT_TIMEOUT_MS}ms verifying WORKSPACE_HOST_LOCATION ("${location}") inside ` +
+        `container "${containerName}"${result.signal ? ` (docker exec was killed with ${result.signal})` : ""}. ` +
+        "The docker daemon or container may be unresponsive.",
+    );
+  }
   if (result.error) {
     throw new Error(
       `Failed to verify WORKSPACE_HOST_LOCATION ("${location}") inside container "${containerName}": ${result.error.message}`,
-    );
-  }
-  if (result.signal) {
-    throw new Error(
-      `Timed out after ${VERIFY_MOUNT_TIMEOUT_MS}ms verifying WORKSPACE_HOST_LOCATION ("${location}") inside ` +
-        `container "${containerName}" (docker exec was killed with ${result.signal}). The docker daemon or ` +
-        "container may be unresponsive.",
     );
   }
   if (result.status !== 0) {
