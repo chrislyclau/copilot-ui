@@ -691,7 +691,7 @@ export const handleGateLoop = async (
         if (activeLocks.get(currentSessionId) === abortController) {
           activeLocks.delete(currentSessionId);
         }
-        // T2: Memory guardrails - trim history on completion if too large to prevent memory bloat
+        // GATE-STAGE-C: Memory guardrails - trim history on completion if too large to prevent memory bloat
         const sessionRec = activeSessions.get(currentSessionId);
         if (sessionRec) {
           const history = sessionRec.conversationHistory || [];
@@ -1170,7 +1170,7 @@ export const handleGateLoop = async (
 
       let currentPrompt = promptStr;
 
-      // T0: Ambiguity Checker (SYS-REQ-016/017)
+      // GATE-STAGE-A: Ambiguity Checker (SYS-REQ-016/017)
       if (!isDiagnostic && !isResume) {
         writeLog(`[Ambiguity] Running pre-flight clarity check...`);
         try {
@@ -1314,7 +1314,7 @@ export const handleGateLoop = async (
         }
       }
 
-      // T1: Composer Router Classification (Structured Tool Choice)
+      // GATE-STAGE-B: Composer Router Classification (Structured Tool Choice)
       let activeStepGates = normalizeGates(gates || []);
       let classifiedType = "";
       if (!isDiagnostic && !isResume) {
@@ -1412,7 +1412,7 @@ export const handleGateLoop = async (
               `[Composer] Structured classification: ${classifiedType}, Gates: ${activeStepGates.join(", ")}`,
             );
 
-            // T2: Emit Explicit composer.plan Stream Events
+            // GATE-STAGE-C: Emit Explicit composer.plan Stream Events
             const planEvent = {
               type: "composer.plan",
               data: {
@@ -2831,7 +2831,7 @@ export const handleGateLoop = async (
                   );
                 }
 
-                // T2: Fallback Upgrades for Distressed Pipelines
+                // GATE-STAGE-C: Fallback Upgrades for Distressed Pipelines
                 if (failedGateName === lastFailedGate) {
                   consecutiveFailures++;
                 } else {
@@ -2872,7 +2872,7 @@ export const handleGateLoop = async (
           }
 
           if (!isRequestClosed && allGatesPassedInThisCycle) {
-            // T1: Spec-Gate Auditor Isolation Sandbox
+            // GATE-STAGE-B: Spec-Gate Auditor Isolation Sandbox
             const specStart = Date.now();
             let skipSpecAudit = false;
             if (sessionId && activeSessions.has(sessionId)) {
