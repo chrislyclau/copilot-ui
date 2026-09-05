@@ -268,8 +268,9 @@ Rationale: This enforces SYS-REQ-020's intent (centralized workspace & Git manag
 > pre-028 mutator names and predate the rename.
 
 **Status:** draft, replaces SYS-REQ-026 family (decision made — see below)
-**Relationship to existing spec:** `README.md` §5.5 ("SessionWrapper
-(Sole SDK Session Entry Point)") contains SYS-REQ-026/026a/026b/026c, now
+**Relationship to existing spec:** §5.5 above ("SessionWrapper
+(Sole SDK Session Entry Point)", moved here from README.md's §5.5 as of the
+doc split) contains SYS-REQ-026/026a/026b/026c, now
 pointed at `src/agentCore/copilotSdk/sessionWrapper.ts` as the sanctioned entry point.
 At the time this section was drafted, that entry point was still
 `src/copilotSdk/hardenedSession.ts` (the `src/` tree has since been
