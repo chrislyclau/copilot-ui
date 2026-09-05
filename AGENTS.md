@@ -184,6 +184,8 @@ Auditor agents **SHALL NEVER** propose changing the spec to match the implementa
 
 Any change to a spec document **SHALL** be made in its own pull request containing only spec changes — no source code, no test changes, and no implementation changes bundled in the same PR or commit range. This applies regardless of whether the change originated from an agent's escalation or a human's own initiative.
 
+**Exception — comment-only source changes:** A source file edit that touches only comments (no executable code, no test assertions, no behavior change) **MAY** be bundled into a spec-change PR when it exists solely to keep an in-code label from colliding with or contradicting spec-document terminology introduced or renamed by that same PR (e.g. renaming an ad hoc in-code tier/stage label that a new spec section's own numbering scheme would otherwise be confused with). The PR description **SHALL** call out any such comment-only change explicitly and explain the collision it resolves. This exception does not extend to renaming identifiers, docstrings that describe behavior, or any change a linter/type-checker would need to re-validate.
+
 Agents **SHALL NOT** open a spec-change PR on their own initiative. A spec PR may only be opened after a human has reviewed and confirmed a flagged spec error per the escalation process above.
 
 ### What Qualifies for an EARS item? **CRITICAL**
