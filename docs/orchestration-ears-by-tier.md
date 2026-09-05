@@ -1,10 +1,19 @@
 # Orchestration EARS Requirements — Reorganized by MVP Tier
 
-Source of truth for IDs and requirement text remains `README.md` and
-`docs/roadmap-spec.md`. **No requirement here is renumbered, renamed, or reworded** —
-this document only regroups existing IDs under a priority axis (MVP vs. built-but-
-deferrable vs. speculative) and tags each with its current implementation status as
-verified against the codebase (not just against the spec prose).
+Source of truth for IDs and requirement text is `docs/system-requirements.md`
+(moved from README.md as of the doc split; README.md now holds only project
+orientation plus a pointer) and `docs/roadmap-spec.md`. **No requirement ID
+here is renumbered or renamed**, and full requirement text is reproduced
+verbatim wherever practical — this document only regroups existing IDs under
+a priority axis (MVP vs. built-but-deferrable vs. speculative) and tags each
+with its current implementation status as verified against the codebase (not
+just against the spec prose). **Exception:** a small number of entries are
+abridged for length rather than quoted in full — e.g. the §7.6 multi-provider
+item below drops the source's `(copilot-native, Anthropic, Gemini, or local)`
+enumeration, and SYS-REQ-017's "Implementation Gap" sub-bullet is condensed
+into a parenthetical. Abridged entries are not flagged individually; treat
+this document as a routing/status layer and check `docs/system-requirements.md`
+directly before relying on exact wording.
 
 Status tags:
 - **[BUILT]** — verified present in `src/`, generally with test coverage.
@@ -22,16 +31,26 @@ informal `// T0:` / `// T1:` / `// T2:` comment tags (e.g. `T0: Ambiguity Checke
 Pipelines`). **These do not correspond to this document's Tier 0–3 scheme** — e.g.
 code's `T0`/`T1` land in this doc's Tier 3, and one `T1` lands in Tier 2. Treat the
 in-code labels as a separate, stale numbering scheme, not a cross-reference to the
-tiers below. A follow-up task should rename those comments to something that can't
-be confused with this doc's tiers (e.g. `GATE-STAGE-A/B/C` or similar) — tracked as
-its own cleanup item, not done in this pass.
+tiers below. **Update:** these comments have since been renamed in
+`gateLoop.ts` to `GATE-STAGE-A/B/C` (comment-only change, no behavior change)
+to remove the collision described above. Bundling that comment-only rename
+into a spec-document PR required an explicit exception to AGENTS.md's
+spec-change PR-isolation rule; that exception was added, with human
+confirmation, on its own PR (`docs/agents-exempt-comment-only-changes`) per
+the escalation process AGENTS.md itself requires for spec changes.
 
 ---
 
 ## Tier 0 — agentCore / SessionWrapper (Done — out of scope for this pass)
 
 Listed for completeness only; this is the foundation you already said is settled.
-Full text lives in README §5.5 / §7.5.5 and `docs/SessionWrapper-spec.md`.
+Full text lives in `docs/system-requirements.md` §5.5 and its "SessionWrapper —
+Spec Draft (EARS)" section (moved there from README.md's §5.5 / standalone
+SessionWrapper section as of the doc split — see below), plus
+`docs/SessionWrapper-spec.md` for the current SYS-REQ-028 family. (The
+original "§7.5.5" cross-reference here was already inaccurate before this
+doc split — §7.5 never had a numbered `.5` subsection — corrected rather
+than carried forward.)
 
 - SYS-REQ-024, SYS-REQ-026, SYS-REQ-026a, SYS-REQ-026b, SYS-REQ-026c, SYS-REQ-027
   (+ sub-items), SYS-REQ-028 — **[BUILT]**
@@ -382,10 +401,10 @@ that makes "just don't use it" harder than it should be.
 
 ### Named as shipped, not actually built
 
-- **Committer** (README §2.3) — "Lightweight, single-shot, conventional commit
+- **Committer** (`docs/system-requirements.md` §2.3, moved from README §2.3) — "Lightweight, single-shot, conventional commit
   message generator... Added alongside Planner, Executor, and Auditor roles."
   — **[UNBUILT]**. No reference anywhere in `src/`.
-- **Groomer** (README §2.3) — "Spec reconciliation agent... triggered immediately
+- **Groomer** (`docs/system-requirements.md` §2.3, moved from README §2.3) — "Spec reconciliation agent... triggered immediately
   upon detection of a specification version change." — **[UNBUILT]**. Roadmap's own
   "Open Items Deliberately Deferred" section independently flags this as
   aspirational, so this isn't a surprise — just flagging that README's phrasing
@@ -417,7 +436,7 @@ that makes "just don't use it" harder than it should be.
   containing the updated specification text directly into the next prompt layout.
   — **[BUILT]**
 
-### Cockpit UI (README §6 / §7.2–7.4) — pure presentation layer, zero effect on loop correctness
+### Cockpit UI (README §6 / `docs/system-requirements.md` §7.2–7.4, moved from README §7.2–7.4) — pure presentation layer, zero effect on loop correctness
 
 - SYS-REQ-006, 007, 008 (Verification Frame / View Turn Diff)
 - SYS-REQ-009, 009a, 010, 011 (Turn History & Interaction Models)
