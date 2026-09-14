@@ -1,0 +1,76 @@
+name: Code Change Agent (Open)
+
+# Less-restrictive variant of code-change-agent.yml: grants the job direct
+# `contents: write` / `pull-requests: write` permissions and persists a
+# write-scoped git credential, so the agent can commit/push/open its own PR
+# via plain `git`/`gh` commands instead of going through isolated
+# make_commit/create_pr tools. Only wire this up to a trusted trigger --
+# there is no isolated write-only credential boundary here (see
+# scripts/code-change-agent-open.ts).
+
+on:
+    workflow_dispatch:
+        inputs:
+            prompt:
+                description: 'Free-text task for the agent to investigate and implement, e.g. "Fix the off-by-one in scripts/foo.ts".'
+                required: true
+                type: string
+
+permissions:
+    contents: write
+    pull-requests: write
+
+jobs:
+    code-change-agent-open:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  token: ${{ secrets.CODE_CHANGE_AGENT_WRITE_TOKEN }}
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "24"
+                  cache: "npm"
+
+            - run: npm ci
+
+            - name: Create placeholder branch
+              run: |
+                  git config user.name "code-change-agent"
+                  git config user.email "code-change-agent@users.noreply.github.com"
+                  git checkout -b "agent/run-${{ github.run_id }}"
+
+            - name: Start sandbox container
+              env:
+                  CONTAINER_NAME: applet-${{ github.run_id }}
+                  WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
+              run: docker compose up -d
+
+            - name: Run code-change agent
+              env:
+                  GH_TOKEN: ${{ secrets.CODE_CHANGE_AGENT_WRITE_TOKEN }}
+                  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+                  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+                  REVIEWER_PROVIDER: ${{ vars.REVIEWER_PROVIDER }}
+                  REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
+                  AGENT_PROMPT: ${{ inputs.prompt }}
+                  CONTAINER_NAME: applet-${{ github.run_id }}
+                  WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
+                  AI_STUDIO: "false"
+              run: npm run agent:code-change-open
+
+            - name: Stop sandbox container
+              if: always()
+              env:
+                  CONTAINER_NAME: applet-${{ github.run_id }}
+                  WORKSPACE_HOST_LOCATION: ${{ github.workspace }}
+              run: docker compose down
+
+            - name: Warn on uncommitted changes
+              if: always()
+              run: |
+                  if [ -n "$(git status --porcelain)" ]; then
+                    echo "::warning::The agent left uncommitted changes in the working tree."
+                    git status --porcelain
+                  fi
