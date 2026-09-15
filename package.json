@@ -45,7 +45,7 @@
         "@types/react-dom": "^18.3.7",
         "@typescript-eslint/eslint-plugin": "^8.70.0",
         "@typescript-eslint/parser": "^8.70.0",
-        "@vitest/coverage-v8": "^4.1.9",
+        "@vitest/coverage-v8": "^5.0.1",
         "adm-zip": "^0.6.1",
         "autoprefixer": "^10.6.1",
         "esbuild": "^0.25.12",
@@ -55,7 +55,7 @@
         "tsx": "^4.23.13",
         "typescript": "^5.9.3",
         "vite": "^6.4.3",
-        "vitest": "^4.1.9",
+        "vitest": "^5.0.1",
         "yaml": "^2.9.1"
     }
 }
