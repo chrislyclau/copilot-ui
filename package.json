@@ -36,6 +36,7 @@
         "vite": "^6.4.3"
     },
     "devDependencies": {
+        "@github/copilot": "^1.0.83",
         "@types/adm-zip": "^0.5.8",
         "@types/better-sqlite3": "^7.6.13",
         "@types/cors": "^2.8.19",
