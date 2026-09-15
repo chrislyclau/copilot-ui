@@ -91,7 +91,7 @@ This task is pending and should be picked up after Step 1 gets blocked.
     let finalData = '';
     if (stream) {
       for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
-        finalData += Buffer.from(chunk as ArrayBuffer).toString('utf-8');
+        finalData += Buffer.from(chunk).toString('utf-8');
       }
     }
 
