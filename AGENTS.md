@@ -191,3 +191,29 @@ Agents **SHALL NOT** open a spec-change PR on their own initiative. A spec PR ma
 ### What Qualifies for an EARS item? **CRITICAL**
 
 An EARS requirement **SHALL** describe the system's behavior in its intended target configuration, independent of the system's construction timeline. While authoring or reviewing a requirement, the agent shall check whether the truth of any clause depends on the codebase's current progress toward that target (e.g., "once implemented," "after the migration," "while partially built"). If it does, the agent shall remove that dependency from the requirement; if the removed information has tracking value, the agent SHALL relocate it to an issue, PBI, or migration plan, not the spec.
+
+## run_terminal_docker — one shared arg/truncation boundary
+
+`run_terminal_docker` args (`workingDir`, `timeoutSeconds`) are parsed, clamped, and
+resolved in exactly two shared places: `src/agentCore/execTool.ts` (parse + clamp +
+output truncation) and `src/agentCore/workspace/execHelpers.ts` (`resolveWorkDir` +
+timeout annotation). Both exec handlers (`makeDockerToolHandler` in `toolHandlers.ts`
+and `makeAuditorExecToolHandler` in `auditorHelper.ts`) funnel through them. Don't
+re-roll arg parsing in a new call site — the handlers previously read `workingDir`
+only to log it (and the auditor one to check `..`) while silently running everything
+at the workspace root, because `cd` doesn't persist across the per-call `bash -s`
+process. workingDir is applied as a `cd <dir> || exit 91` guard inside the command
+stream (exit 91 = "requested directory missing", traversal = rejected before any
+spawn). A genuine deadline kill is annotated: exit 124 (GNU timeout convention) plus
+an explicit stderr note — callers that pass their own AbortSignal still own the
+deadline; only `opts.timeoutMs` or the default 60s compose one.
+
+## scripts/verify-run-terminal-docker.ts is the real-container check — keep it runnable
+
+It replays `test/snapshots/run_terminal_docker/verify_exec.yaml` (note: under
+`test/`, not `src/test/` — a stale path made CapiProxy 404 and the script could
+never drive a tool call). It uses the production `makeAuditorExecToolHandler` and
+ground-truths canary visibility, pwd/workspace-root, and the workingDir/traversal
+contract against the live container (run via the `docker-tool-verify.yml`
+workflow). If you change the exec path, update/extend this script rather than
+trusting vitest mocks alone.

@@ -4,7 +4,8 @@ import { SessionWrapper } from './copilotSdk/sessionWrapper';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig, selectFromAuditorPool, ModelProviderConfig } from '../config/models';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../config/tools';
-import { getExecCommand } from './workspace';
+import { getExecCommand, getWorkspaceRoot, resolveWorkDir } from './workspace';
+import { buildExecOptions, parseExecToolArgs, truncateExecResult } from './execTool';
 
 
 /**
@@ -236,22 +237,16 @@ export function getReviewerExecutionConfig(apiKey?: string): ExecutionConfig {
  */
 export function makeAuditorExecToolHandler(abortSignal?: AbortSignal) {
   return async (args: unknown) => {
-    const record = args as Record<string, unknown>;
-    const wd = (record.workingDir as string) || '';
-    if (wd.includes('..')) {
-      return {
-        stdout: '',
-        stderr: 'Error: Directory path traversal detected. Access denied outside workspace boundaries.',
-        exitCode: 1,
-      };
+    const parsed = parseExecToolArgs(args);
+    const resolved = resolveWorkDir(parsed.workDir, getWorkspaceRoot());
+    if (!resolved.ok) {
+      // Cheap synchronous rejection: no exec process is ever spawned, and
+      // getExecCommand() is deliberately not even consulted for this case.
+      return { stdout: '', stderr: resolved.error, exitCode: 1 };
     }
     const execCommand = getExecCommand();
-    const result = await execCommand((record.command as string) || '', abortSignal);
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    };
+    const result = await execCommand(parsed.command, abortSignal, buildExecOptions(parsed, resolved.dir));
+    return truncateExecResult(result);
   };
 }
 

@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { killProcessGroup } from "./processGroup";
+import { ExecOptions, execWithDefaults, prependWorkDir, resolveWorkDir } from "./execHelpers";
 
 // fs.mkdtempSync atomically creates a uniquely-named directory under the
 // OS temp root (respects TMPDIR/TEMP/TMP) and returns its path — avoiding
@@ -25,12 +26,28 @@ const EXEC_TIMEOUT_MS = 60_000;
  * Executes a command natively on the host (AI Studio mode).
  * Commands run inside the workspace root with only git-specific environment
  * variables set — no host environment is leaked.
+ *
+ * `workDir` (already resolved and traversal-checked by the shared wrapper)
+ * selects the directory the command runs in, applied via the same `cd`
+ * guard as the docker runner so both runners behave identically.
  */
 export async function runNativeProcess(
   command: string,
   signal?: AbortSignal,
+  workDir?: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve) => {
+    const workspaceRoot = getWorkspaceRoot();
+
+    if (workDir !== undefined) {
+      const resolved = resolveWorkDir(workDir, workspaceRoot);
+      if (!resolved.ok) {
+        resolve({ stdout: "", stderr: resolved.error, exitCode: 1 });
+        return;
+      }
+      command = prependWorkDir(command, resolved.dir, workspaceRoot);
+    }
+
     const child = spawn("bash", ["-s"], {
       cwd: getWorkspaceRoot(),
       env: process.env.NODE_ENV === "test" || process.env.VITEST === "true" ? process.env : { PATH: FIXED_PATH },
@@ -124,12 +141,15 @@ export async function runNativeProcess(
  *
  * If no AbortSignal is supplied, a default timeout of EXEC_TIMEOUT_MS is
  * applied to prevent LLM-generated commands from hanging indefinitely.
+ * `opts.timeoutMs` overrides that default (composed with any caller
+ * signal); `opts.workDir` selects the directory the command runs in.
  */
 export async function execCommand(
   command: string,
   signal?: AbortSignal,
+  opts?: ExecOptions,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
-  return runNativeProcess(command, signal ?? AbortSignal.timeout(EXEC_TIMEOUT_MS));
+  return execWithDefaults(runNativeProcess, command, signal, opts, EXEC_TIMEOUT_MS);
 }
 
 export function getWorkspaceRoot(): string {

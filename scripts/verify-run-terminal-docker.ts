@@ -5,7 +5,7 @@
  * `getExecCommand()` -> `dockerRunner.ts` -> real `docker exec`) through a
  * real `CopilotClient`/`SessionWrapper` session. The ONLY faked boundary is
  * the LLM completion itself (via `CapiProxy`, replaying
- * `src/test/snapshots/run_terminal_docker/verify_exec.yaml`) -- see
+ * `test/snapshots/run_terminal_docker/verify_exec.yaml`) -- see
  * docs/copilot-sdk-record-replay.md. There is no vitest gate-loop/retry logic in
  * this path to silently absorb a failed `docker exec`; a broken container
  * mount fails this script loudly and exits non-zero.
@@ -34,12 +34,16 @@ import { CapiProxy } from '../test/harness/CapiProxy';
 import { CopilotClient, defineTool } from '../src/agentCore/copilotSdk/boundary';
 import { SessionWrapper } from '../src/agentCore/copilotSdk/sessionWrapper';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../src/config/tools';
-import { getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from '../src/agentCore/workspace';
+import { getWorkspaceHostLocation, getWorkspaceRoot } from '../src/agentCore/workspace';
+import { makeAuditorExecToolHandler } from '../src/agentCore/auditorHelper';
 
 const execFileAsync = promisify(execFile);
 
 const MARKER = 'VERIFY_RUN_TERMINAL_DOCKER_OK';
-const SNAPSHOT_PATH = path.resolve(process.cwd(), 'src/test/snapshots/run_terminal_docker/verify_exec.yaml');
+// The snapshot YAML lives under test/ (not src/test/) -- a stale path here
+// makes CapiProxy 404 every completion and the tool call never happens, so
+// the script fails loudly below rather than passing vacuously.
+const SNAPSHOT_PATH = path.resolve(process.cwd(), 'test/snapshots/run_terminal_docker/verify_exec.yaml');
 // Random per run so a stale/leftover file from a previous run (or a
 // coincidentally similar-looking image filesystem) can't produce a false
 // pass. Planted in /tmp -- the container's root filesystem is read-only
@@ -78,17 +82,39 @@ async function removeCanary(containerName: string): Promise<void> {
 /**
  * The exact production handler, minus only the abortSignal wiring (this
  * script has no request-scoped signal to thread through). Deliberately NOT
- * reimplemented -- if this handler's contract or dockerRunner routing ever
- * changes, this check should change with it rather than drift from what
- * production actually calls.
+ * reimplemented -- this is the same `makeAuditorExecToolHandler` production
+ * wires into every auditor/reviewer/script session, so if its contract or
+ * dockerRunner routing ever changes, this check changes with it rather than
+ * drifting from what production actually calls.
  */
 function makeExecToolHandler() {
-  return async (args: unknown) => {
-    const record = args as Record<string, unknown>;
-    const execCommand = getExecCommand();
-    const result = await execCommand((record.command as string) || '');
-    return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
-  };
+  return makeAuditorExecToolHandler();
+}
+
+/**
+ * Direct ground-truth probe of the workingDir contract against the real
+ * container (bypassing the LLM/session entirely): a relative workingDir
+ * must resolve against the workspace root, and traversal must be rejected
+ * without spawning anything.
+ */
+async function verifyWorkingDirContract(): Promise<void> {
+  const handler = makeExecToolHandler();
+
+  const inDocs = await handler({ command: 'pwd', workingDir: 'docs' });
+  if (inDocs.exitCode !== 0 || !inDocs.stdout.trim().endsWith('/docs')) {
+    fail(
+      `workingDir "docs" was not honored. Expected pwd to end in /docs, got exit ` +
+        `code ${inDocs.exitCode}, stdout:\n${inDocs.stdout}\nstderr:\n${inDocs.stderr}`,
+    );
+  }
+
+  const traversal = await handler({ command: 'pwd', workingDir: '../../etc' });
+  if (traversal.exitCode === 0 || !/traversal/i.test(traversal.stderr)) {
+    fail(
+      `workingDir path traversal ("../../etc") was not rejected. Got exit code ` +
+        `${traversal.exitCode}, stderr:\n${traversal.stderr}`,
+    );
+  }
 }
 
 async function main(): Promise<void> {
@@ -100,6 +126,11 @@ async function main(): Promise<void> {
   const expectedWorkspaceRoot = getWorkspaceRoot();
 
   await plantCanary(containerName);
+
+  // Ground-truth the workingDir/traversal contract directly against the
+  // real container before the LLM-driven session runs (no snapshot
+  // dependency; failure here is a hard fail).
+  await verifyWorkingDirContract();
 
   let capturedResult: { stdout: string; stderr: string; exitCode: number | null } | null = null;
 

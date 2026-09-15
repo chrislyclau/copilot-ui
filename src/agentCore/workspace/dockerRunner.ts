@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "child_process";
 import * as crypto from "crypto";
 import { killProcessGroup } from "./processGroup";
+import { ExecOptions, execWithDefaults, prependWorkDir, resolveWorkDir } from "./execHelpers";
 
 // Deliberately no fallback default here. WORKSPACE_HOST_LOCATION must match
 // wherever `docker compose up` actually mounted the workspace (see
@@ -122,14 +123,32 @@ function verifyWorkspaceMount(): void {
  * The container is started once by initializeWorkspace and remains running
  * for the lifetime of the app instance. Mount points and container configuration
  * are owned by docker-compose; this function only handles process lifecycle and I/O.
+ *
+ * `workDir` (already resolved and traversal-checked by the shared wrapper)
+ * selects the directory the command runs in; it is applied by prepending a
+ * `cd` guard to the command stream rather than via `docker exec -w`, so a
+ * missing directory surfaces as a readable bash diagnostic (exit 91) instead
+ * of an opaque OCI runtime error.
  */
 export async function runDockerProcess(
   command: string,
   signal?: AbortSignal,
+  workDir?: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   // Needs to run docker exec -i container_name bash -s <<< "command"
   // No need to sanitize. The container is already an isolated environment.
   return new Promise((resolve) => {
+    const workspaceRoot = getWorkspaceHostLocationOrThrow();
+
+    if (workDir !== undefined) {
+      const resolved = resolveWorkDir(workDir, workspaceRoot);
+      if (!resolved.ok) {
+        resolve({ stdout: "", stderr: resolved.error, exitCode: 1 });
+        return;
+      }
+      command = prependWorkDir(command, resolved.dir, workspaceRoot);
+    }
+
     // Throws synchronously (rejecting this promise, same as a missing
     // CONTAINER_NAME already did) if the var is unset or doesn't match
     // reality, before we ever spawn the real command.
@@ -142,7 +161,7 @@ export async function runDockerProcess(
       "-e",
       `EXEC_RUN_ID=${runId}`,
       "-w",
-      getWorkspaceHostLocationOrThrow(),
+      workspaceRoot,
       getContainerName(),
       "bash",
       "-s",
@@ -320,12 +339,15 @@ export async function runDockerProcess(
  *
  * If no AbortSignal is supplied, a default timeout of EXEC_TIMEOUT_MS is
  * applied to prevent LLM-generated commands from hanging indefinitely.
+ * `opts.timeoutMs` overrides that default (composed with any caller
+ * signal); `opts.workDir` selects the directory the command runs in.
  */
 export async function execCommand(
   command: string,
   signal?: AbortSignal,
+  opts?: ExecOptions,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
-  return runDockerProcess(command, signal ?? AbortSignal.timeout(EXEC_TIMEOUT_MS));
+  return execWithDefaults(runDockerProcess, command, signal, opts, EXEC_TIMEOUT_MS);
 }
 export function getWorkspaceRoot(): string {
   // The compose mount binds the host workspace to the identical absolute

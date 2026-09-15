@@ -14,9 +14,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockExecCommand = vi.fn(async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }));
 
-vi.mock('../../src/agentCore/workspace', () => ({
-  getExecCommand: () => mockExecCommand,
-}));
+const MOCK_WORKSPACE_ROOT = '/mock-workspace-root';
+
+vi.mock('../../src/agentCore/workspace', async () => {
+  // Keep the real module (getWorkspaceRoot/resolveWorkDir semantics) and
+  // stub only the exec boundary the handler routes through.
+  const actual = await vi.importActual<typeof import('../../src/agentCore/workspace')>(
+    '../../src/agentCore/workspace',
+  );
+  return {
+    ...actual,
+    getExecCommand: () => mockExecCommand,
+    getWorkspaceRoot: () => MOCK_WORKSPACE_ROOT,
+  };
+});
 
 import { buildAuditorSessionSettings } from '../../src/agentCore/auditorHelper';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../../src/config/tools';
@@ -63,7 +74,7 @@ describe('buildAuditorSessionSettings default toolset (issue #299)', () => {
     expect(execTool).toBeDefined();
 
     const result = await execTool!.handler({ command: 'echo hi' });
-    expect(mockExecCommand).toHaveBeenCalledWith('echo hi', undefined);
+    expect(mockExecCommand).toHaveBeenCalledWith('echo hi', undefined, { workDir: MOCK_WORKSPACE_ROOT });
     expect(result).toMatchObject({ stdout: 'ok', stderr: '', exitCode: 0 });
   });
 
