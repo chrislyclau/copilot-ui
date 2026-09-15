@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseExecToolArgs, truncateExecResult, MAX_TOOL_OUTPUT_CHARS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS } from '../../../src/agentCore/execTool';
+import { parseExecToolArgs, buildExecOptions, truncateExecResult, MAX_TOOL_OUTPUT_CHARS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS } from '../../../src/agentCore/execTool';
 import { resolveWorkDir, TRAVERSAL_ERROR } from '../../../src/agentCore/workspace/execHelpers';
 
 describe('parseExecToolArgs', () => {
@@ -11,16 +11,40 @@ describe('parseExecToolArgs', () => {
     });
   });
 
-  it('defaults to root workDir and no timeout override', () => {
-    expect(parseExecToolArgs({ command: 'pwd' })).toEqual({ command: 'pwd', workDir: undefined, timeoutMs: undefined });
-    expect(parseExecToolArgs(undefined)).toEqual({ command: '', workDir: undefined, timeoutMs: undefined });
+  it('defaults to root workDir and the default timeout when timeoutSeconds is omitted', () => {
+    expect(parseExecToolArgs({ command: 'pwd' })).toEqual({
+      command: 'pwd',
+      workDir: undefined,
+      timeoutMs: DEFAULT_TIMEOUT_SECONDS * 1000,
+    });
+    expect(parseExecToolArgs(undefined)).toEqual({
+      command: '',
+      workDir: undefined,
+      timeoutMs: DEFAULT_TIMEOUT_SECONDS * 1000,
+    });
   });
 
-  it('clamps timeoutSeconds into the 30..600 window (bash-tool parity)', () => {
+  it('clamps timeoutSeconds into the 30..600 window (bash-tool parity), falling back to the default on invalid input', () => {
     expect(parseExecToolArgs({ command: 'x', timeoutSeconds: 5 }).timeoutMs).toBe(MIN_TIMEOUT_SECONDS * 1000);
     expect(parseExecToolArgs({ command: 'x', timeoutSeconds: 100_000 }).timeoutMs).toBe(MAX_TIMEOUT_SECONDS * 1000);
-    expect(parseExecToolArgs({ command: 'x', timeoutSeconds: Number.NaN }).timeoutMs).toBeUndefined();
-    expect(parseExecToolArgs({ command: 'x', timeoutSeconds: '120' }).timeoutMs).toBeUndefined();
+    expect(parseExecToolArgs({ command: 'x', timeoutSeconds: Number.NaN }).timeoutMs).toBe(DEFAULT_TIMEOUT_SECONDS * 1000);
+    expect(parseExecToolArgs({ command: 'x', timeoutSeconds: '120' }).timeoutMs).toBe(DEFAULT_TIMEOUT_SECONDS * 1000);
+  });
+
+  // Regression test for the PR #465 review finding: the schema promises
+  // "Commands are killed after 60s unless timeoutSeconds is given," but both
+  // production handlers (makeDockerToolHandler, makeAuditorExecToolHandler)
+  // always pass their own session-scoped AbortSignal (fires on session abort
+  // only, never on a timer). Before this fix, an omitted timeoutSeconds left
+  // opts.timeoutMs undefined, so execWithDefaults took the
+  // "caller-signal-alone, no deadline" branch and the promised 60s kill never
+  // happened. buildExecOptions must always carry a real timeoutMs so that
+  // branch is never reachable from the tool boundary, regardless of which
+  // signal the handler composes it with.
+  it('always yields a defined opts.timeoutMs from buildExecOptions, even with no signal-independent override requested', () => {
+    const parsed = parseExecToolArgs({ command: 'sleep 100000' });
+    const opts = buildExecOptions(parsed, undefined);
+    expect(opts.timeoutMs).toBe(DEFAULT_TIMEOUT_SECONDS * 1000);
   });
 });
 
