@@ -32,6 +32,9 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
 
   beforeEach(async () => {
     await initializeWorkspace();
+    // sessions rows (e.g. left by server-harness suites sharing /tmp/app-test.db)
+    // reference tasks, so they must go first or this FK fails on file ordering.
+    db.prepare('DELETE FROM sessions').run();
     db.prepare('DELETE FROM tasks').run();
     db.prepare('DELETE FROM pbis').run();
     db.prepare('DELETE FROM specs').run();

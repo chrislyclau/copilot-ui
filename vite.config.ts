@@ -27,10 +27,11 @@ export default defineConfig(async () => {
             globals: true,
             environment: "node",
             setupFiles: ["./test/vitest.setup.ts"],
-            // Single thread pool: all test files share one worker process, eliminating
-            // the N sequential server lifecycle problem.
+            // Single worker pool: test files run through one worker process
+            // (maxWorkers replaces `singleThread`, which Vitest 5 removed),
+            // eliminating the N sequential server lifecycle problem.
             pool: "threads",
-            singleThread: true,
+            maxWorkers: 1,
             // Run files sequentially so the shared server isn't hit concurrently by
             // unrelated suites that manipulate global state (activeLocks, sessions).
             fileParallelism: false,
