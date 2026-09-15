@@ -13,6 +13,22 @@ import type { ExecOptions } from "./workspace";
 export const MIN_TIMEOUT_SECONDS = 30;
 export const MAX_TIMEOUT_SECONDS = 600;
 
+// Deadline applied when the model omits timeoutSeconds. This MUST always be
+// threaded into `opts.timeoutMs` (never left undefined) so it composes with
+// whatever AbortSignal the call site passes in, instead of being silently
+// skipped by execWithDefaults' "caller signal alone, no default" branch.
+// See: PR #465 review — production tool calls (gateLoop's makeDockerToolHandler,
+// the auditor's makeAuditorExecToolHandler) always pass a session-scoped
+// abortController.signal, which only fires on session teardown, not on a
+// timer. Before this constant existed, that meant the "commands are killed
+// after 60s" line in RUN_TERMINAL_DOCKER_TOOL's schema description was false
+// for every real tool call — a hanging command (`sleep 100000`, `tail -f`)
+// ran until session end instead of being killed at 60s. Internal callers
+// that invoke the runners' `execCommand` directly (bypassing this module —
+// e.g. gates) are unaffected and keep owning their own deadline via their
+// own signal, per execHelpers.ts's documented contract.
+export const DEFAULT_TIMEOUT_SECONDS = 60;
+
 // Cap on what a single exec tool result will feed back into the model
 // context. Without it, a chatty command (a test run with no pipe, a
 // runaway loop) streams megabytes straight into the conversation — the SDK
@@ -25,7 +41,7 @@ const TRUNCATE_TAIL_CHARS = 13_000;
 export interface ParsedExecToolArgs {
   command: string;
   workDir?: string;
-  timeoutMs?: number;
+  timeoutMs: number;
 }
 
 export function parseExecToolArgs(args: unknown): ParsedExecToolArgs {
@@ -33,12 +49,12 @@ export function parseExecToolArgs(args: unknown): ParsedExecToolArgs {
   const command = typeof record.command === "string" ? record.command : "";
   const workDir = typeof record.workingDir === "string" ? record.workingDir : undefined;
 
-  let timeoutMs: number | undefined;
   const rawTimeout = record.timeoutSeconds;
-  if (typeof rawTimeout === "number" && Number.isFinite(rawTimeout)) {
-    timeoutMs =
-      Math.min(MAX_TIMEOUT_SECONDS, Math.max(MIN_TIMEOUT_SECONDS, rawTimeout)) * 1000;
-  }
+  const timeoutSeconds =
+    typeof rawTimeout === "number" && Number.isFinite(rawTimeout)
+      ? Math.min(MAX_TIMEOUT_SECONDS, Math.max(MIN_TIMEOUT_SECONDS, rawTimeout))
+      : DEFAULT_TIMEOUT_SECONDS;
+  const timeoutMs = timeoutSeconds * 1000;
 
   return { command, workDir, timeoutMs };
 }
@@ -66,8 +82,7 @@ export function truncateExecResult(result: { stdout: string; stderr: string; exi
 }
 
 export function buildExecOptions(parsed: ParsedExecToolArgs, workDir: string | undefined): ExecOptions {
-  const opts: ExecOptions = {};
+  const opts: ExecOptions = { timeoutMs: parsed.timeoutMs };
   if (workDir !== undefined) opts.workDir = workDir;
-  if (parsed.timeoutMs !== undefined) opts.timeoutMs = parsed.timeoutMs;
   return opts;
 }

@@ -75,6 +75,35 @@ describe('execCommand timeout handling (native runner)', () => {
   });
 });
 
+describe('makeAuditorExecToolHandler deadline enforcement (PR #465 regression)', () => {
+  // Reproduces the production call shape: gateLoop always passes a
+  // session-scoped AbortController.signal that only fires on session
+  // teardown, never on a timer (see gateLoop.ts:994, :1819). Before the
+  // execTool.ts fix, an omitted timeoutSeconds left opts.timeoutMs
+  // undefined, so execWithDefaults took the "signal alone, no deadline"
+  // branch and a hanging command was never killed — contradicting the
+  // tool schema's "commands are killed after 60s" promise. This uses an
+  // explicit short timeoutSeconds (rather than waiting out the real 60s
+  // default) to keep the test fast while proving the same composition
+  // path: a long-lived non-timer signal must not suppress the deadline.
+  it('still enforces a deadline when composed with a long-lived, non-timer session signal', async () => {
+    const sessionAbort = new AbortController(); // never fires — models session lifetime
+    const handler = makeAuditorExecToolHandler(sessionAbort.signal);
+
+    const started = Date.now();
+    // timeoutSeconds clamps to a 30s floor (MIN_TIMEOUT_SECONDS), so the
+    // sleep must exceed that floor or it would complete before the
+    // deadline and this test would pass for the wrong reason.
+    const result = await handler({ command: 'sleep 40 && echo done', timeoutSeconds: 30 });
+    const elapsed = Date.now() - started;
+
+    expect(elapsed).toBeLessThan(45_000);
+    expect(result.exitCode).toBe(124);
+    expect(String(result.stderr)).toContain('timed out');
+    expect(String(result.stdout)).not.toContain('done');
+  }, 50_000);
+});
+
 describe('makeAuditorExecToolHandler end-to-end (native runner)', () => {
   it('honors workingDir, timeoutSeconds, and truncation through the production handler', async () => {
     const handler = makeAuditorExecToolHandler();
