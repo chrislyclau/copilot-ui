@@ -15,18 +15,11 @@ export const MAX_TIMEOUT_SECONDS = 600;
 
 // Deadline applied when the model omits timeoutSeconds. This MUST always be
 // threaded into `opts.timeoutMs` (never left undefined) so it composes with
-// whatever AbortSignal the call site passes in, instead of being silently
-// skipped by execWithDefaults' "caller signal alone, no default" branch.
-// See: PR #465 review — production tool calls (gateLoop's makeDockerToolHandler,
-// the auditor's makeAuditorExecToolHandler) always pass a session-scoped
-// abortController.signal, which only fires on session teardown, not on a
-// timer. Before this constant existed, that meant the "commands are killed
-// after 60s" line in RUN_TERMINAL_DOCKER_TOOL's schema description was false
-// for every real tool call — a hanging command (`sleep 100000`, `tail -f`)
-// ran until session end instead of being killed at 60s. Internal callers
-// that invoke the runners' `execCommand` directly (bypassing this module —
-// e.g. gates) are unaffected and keep owning their own deadline via their
-// own signal, per execHelpers.ts's documented contract.
+// whatever AbortSignal the call site passes in — production handlers pass a
+// session-scoped signal that only fires on teardown, not on a timer, so an
+// undefined timeoutMs here means execWithDefaults enforces no deadline at
+// all. Internal callers that invoke `execCommand` directly (bypassing this
+// module, e.g. gates) are unaffected and keep owning their own deadline.
 export const DEFAULT_TIMEOUT_SECONDS = 60;
 
 // Cap on what a single exec tool result will feed back into the model

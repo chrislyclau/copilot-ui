@@ -210,19 +210,13 @@ an explicit stderr note.
 `execWithDefaults` (execHelpers.ts) only enforces a deadline when `opts.timeoutMs`
 is set — a caller that passes just an AbortSignal and no `opts.timeoutMs` owns the
 deadline itself and gets no automatic kill. That's fine for internal callers that
-invoke the runners' `execCommand` directly (e.g. gates own their timing). It is
-NOT fine for the `run_terminal_docker` tool boundary: `makeDockerToolHandler` and
-`makeAuditorExecToolHandler` always pass a session-scoped `abortController.signal`
-(fires on session teardown only, never on a timer), so if `parseExecToolArgs` left
-`timeoutMs` undefined whenever the model omitted `timeoutSeconds`, the tool's own
-schema promise ("commands are killed after 60s") was false for every real call —
-a hanging command ran until session end instead of being killed at 60s (caught in
-PR #465 review). Fix: `parseExecToolArgs` always returns a populated `timeoutMs`
-(the clamped model-supplied value, or `DEFAULT_TIMEOUT_SECONDS` = 60s), so the tool
-boundary always takes the `opts.timeoutMs` composition path in `execWithDefaults`
-regardless of which signal the handler passes. Don't reintroduce an
-`timeoutMs?: number` optional field on `ParsedExecToolArgs` / skip defaulting it —
-that's the exact regression this note exists to prevent.
+invoke the runners' `execCommand` directly (e.g. gates own their timing). It is NOT
+fine for the `run_terminal_docker` tool boundary: both handlers always pass a
+session-scoped `abortController.signal` that only fires on session teardown, never
+on a timer, so `parseExecToolArgs` must always return a populated `timeoutMs` (the
+clamped model-supplied value, or `DEFAULT_TIMEOUT_SECONDS` = 60s) — never leave it
+`undefined` when `timeoutSeconds` is omitted, or the tool's schema promise of a
+default kill silently stops applying.
 
 ## scripts/verify-run-terminal-docker.ts is the real-container check — keep it runnable
 
