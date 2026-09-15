@@ -1,7 +1,7 @@
 /**
  * Frozen, hand-captured copy of the Copilot SDK's own system-prompt
- * baseline (captured 2026-08-13 against copilot-sdk 1.0.63, zero tools,
- * zero caller content -- see src/test/scripts/capture-system-message-baseline.ts).
+ * baseline (last re-captured 2026-09-15 against copilot 1.0.83; zero
+ * tools, zero caller content -- see test/scripts/capture-system-message-baseline.ts).
  *
  * Per issue #345, SessionWrapper now drives `systemMessage` in `replace`
  * mode exclusively (never `append`/`customize`): those modes still splice

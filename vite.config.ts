@@ -27,9 +27,12 @@ export default defineConfig(async () => {
             globals: true,
             environment: "node",
             setupFiles: ["./test/vitest.setup.ts"],
-            // Single worker pool: test files run through one worker process
-            // (maxWorkers replaces `singleThread`, which Vitest 5 removed),
-            // eliminating the N sequential server lifecycle problem.
+            // One worker at a time (maxWorkers replaces `singleThread`,
+            // which Vitest 5 removed). Combined with fileParallelism: false
+            // below, files run strictly one at a time -- but state is NOT
+            // shared across files: with isolate: true each file still gets
+            // its own fresh worker (module-level singletons like serverHarness
+            // restart per file).
             pool: "threads",
             maxWorkers: 1,
             // Run files sequentially so the shared server isn't hit concurrently by
