@@ -49,7 +49,7 @@ jobs:
 
             - name: Run code-change agent
               env:
-                  GH_TOKEN: ${{ secrets.CODE_CHANGE_AGENT_WRITE_TOKEN }}
+                  GH_TOKEN: ${{ secrets.CODE_CHANGE_AGENT }}
                   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
                   OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
                   REVIEWER_PROVIDER: ${{ vars.REVIEWER_PROVIDER }}
