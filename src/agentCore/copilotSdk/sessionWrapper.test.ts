@@ -638,6 +638,32 @@ describe('SessionWrapper.adopt (issue #358: transitional caller-owned-session pa
   });
 });
 
+describe('SessionWrapper.sendAndWait: largeOutput lockdown (SYS-REQ-028m, issue #467)', () => {
+  it('sends the locked-down largeOutput config on create', async () => {
+    const { client, createCalls } = fakeClient();
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] }).setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+
+    expect(createCalls[0]?.largeOutput).toEqual({ enabled: true, maxSizeBytes: 51200 });
+  });
+
+  it('cannot be overridden by _baseConfig, even if _baseConfig tries to disable it', async () => {
+    const { client, createCalls } = fakeClient();
+    // Simulates a future caller adding largeOutput to _baseConfig, whether
+    // by mistake or to intentionally (and incorrectly) disable it -- SYS-
+    // REQ-028m requires the literal in the createSession call to win
+    // regardless, since it's spread last.
+    const wrapper = new SessionWrapper(client, { builtins: ['bash'] }, {
+      largeOutput: { enabled: false },
+    }).setModelName('claude-sonnet-4.5');
+
+    await wrapper.sendAndWait('turn one');
+
+    expect(createCalls[0]?.largeOutput).toEqual({ enabled: true, maxSizeBytes: 51200 });
+  });
+});
+
 describe('SessionWrapper side-door surface (SYS-REQ-028e/028j)', () => {
   it('exposes no method that could bind policy/config to a session it did not create, and no post-construction tool-adding method', () => {
     const allowedPublicMethods = new Set([
