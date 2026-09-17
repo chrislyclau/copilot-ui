@@ -635,7 +635,18 @@ export class SessionWrapper {
       // "the same value" by `_createConfig()`.
       const config = this._createConfig();
       this._frozenSystemMessage = config.systemMessage;
-      this._session = await this._client.createSession({ ...this._baseConfig, ...config });
+      this._session = await this._client.createSession({
+        ...this._baseConfig,
+        ...config,
+        // SYS-REQ-028m: literal key, placed after every spread source above,
+        // so neither _baseConfig nor config (nor anything added to either
+        // later) can silently omit or disable large-output handling by
+        // winning the spread. Values match the SDK's own documented default
+        // (LargeToolOutputConfig) -- set explicitly rather than left
+        // implicit, since the SDK's default is exactly what this app was
+        // already relying on without stating it (issue #467).
+        largeOutput: { enabled: true, maxSizeBytes: 51200 },
+      });
     } else {
       // Resuming: `onPermissionRequest` is the only field this spec requires
       // (SYS-REQ-028g) to differ in *purpose* across resume, but SYS-REQ-028g
