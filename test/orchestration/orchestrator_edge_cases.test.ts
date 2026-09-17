@@ -165,7 +165,12 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
     assert.ok(errorEmitted, 'Should encounter mismatch error from the updated proxy matching logic');
   });
 
-  it('Test 5: Loop Retry Disconnect Validation (Gap 5)', async () => {
+  // Explicit timeout well above the describe default: this scenario walks the
+  // full escalation ladder (3 model tiers x (maxRetries + 1) attempts = 9 loop
+  // cycles, each with clarity/blueprint/main turns plus simulated tool and
+  // proxy delays). That is ~9s on a fast local machine but can exceed the
+  // 30s describe default on 2-core CI runners (observed flake in CI).
+  it('Test 5: Loop Retry Disconnect Validation (Gap 5)', { timeout: 120000 }, async () => {
     // 1. Point the proxy configuration to a snapshot built to trip a gate rule
     const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/single_retry.yaml');
     await proxy.updateConfig({ filePath: snapshotPath, workDir: mockProxyWorkDir });
@@ -195,8 +200,11 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
       }
     };
     
-    // Guard the stream reading with a generous 15-second timeout to handle container test environments safely
-    await awaitWithTimeout(readStreamToCompletion(), 30000, "Exhausting Retry Loop Stream Response");
+    // Guard the stream reading with a deadlock-detection timeout. It must stay
+    // below the test's own timeout so a genuinely hung stream (e.g. an SSE
+    // write that never drains) surfaces as an explicit deadlock diagnostic
+    // instead of vitest's generic test-timeout error.
+    await awaitWithTimeout(readStreamToCompletion(), 100000, "Exhausting Retry Loop Stream Response");
 
     // Verify Gap 5 parameters: underlying transport handshake must stay cached (singleton count <= 1)
     // while the SDK engine spins up 3 distinct loop evaluation frames over the sequence tracking historical records.
