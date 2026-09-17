@@ -149,18 +149,20 @@ governed by subset membership evaluated at the permission layer (SYS-REQ-028d).
   existing `buildSessionUpdateNotice` pattern (append-only, never rewrites
   prior turns). Resolves former Open Question 1.
 
-- **SYS-REQ-028m:** In the object literal passed to `client.createSession()`,
-  the `largeOutput` field **shall** be set as a literal key positioned after
-  every spread source in that literal (`_baseConfig`, `config`, or any future
-  addition), e.g. `{ ...this._baseConfig, ...config, largeOutput: { enabled:
-  true, maxSizeBytes: ... } }`. Object spread resolves left-to-right, so a
-  key set by a later spread source silently wins over one set by an earlier
-  one; placing `largeOutput` last, as a literal rather than as a spread-borne
-  key, makes it structurally impossible for any current or future spread
-  source in that call to omit or override it into a disabled state. This
-  guards the SDK's own `LargeToolOutputConfig` default-truncation behavior
-  (see issue #467) — `enabled: true` here means large-output handling
-  (truncate-and-reference) is active, not that large output is permitted.
+- **SYS-REQ-028m:** `largeOutput` **shall** be the last key in the object
+  literal passed to `client.createSession()`, such that no spread-borne value
+  can override or disable it. Object spread resolves left-to-right, so a key
+  contributed by an earlier spread source in that literal (today,
+  `this._baseConfig` then `config`) can be silently overridden by a later
+  one, or omitted from all of them; placing `largeOutput` last, as a literal
+  rather than as a spread-borne key, makes it structurally impossible for any
+  current or future spread source in that call to override it into an
+  unwanted shape (e.g. an explicit `enabled: false`). This is not a defense
+  against plain omission: the SDK's own `LargeToolOutputConfig.enabled`
+  defaults to `true`, so an omitted `largeOutput` field already leaves
+  large-output handling (truncate-and-reference) active (see issue #467).
+  The hazard this item closes is a spread source that supplies `largeOutput`
+  explicitly and unexpectedly wins.
 
 ---
 
