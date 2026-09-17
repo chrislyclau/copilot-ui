@@ -5,7 +5,7 @@ import { AddressInfo } from 'node:net';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { app, activeSessions } from '../../server';
+import { app, activeSessions, activeLocks } from '../../server';
 import { CapiProxy } from '../harness/CapiProxy';
 
 // Mock CapiProxy config only ever reads `workDir` for bookkeeping in these
@@ -165,52 +165,72 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
     assert.ok(errorEmitted, 'Should encounter mismatch error from the updated proxy matching logic');
   });
 
-  // Explicit timeout well above the describe default: this scenario walks the
-  // full escalation ladder (3 model tiers x (maxRetries + 1) attempts = 9 loop
-  // cycles, each with clarity/blueprint/main turns plus simulated tool and
-  // proxy delays). That is ~9s on a fast local machine but can exceed the
-  // 30s describe default on 2-core CI runners (observed flake in CI).
-  it('Test 5: Loop Retry Disconnect Validation (Gap 5)', { timeout: 120000 }, async () => {
+  it('Test 5: Loop Retry Disconnect Validation (Gap 5)', async () => {
     // 1. Point the proxy configuration to a snapshot built to trip a gate rule
     const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/single_retry.yaml');
     await proxy.updateConfig({ filePath: snapshotPath, workDir: mockProxyWorkDir });
-    
+
     proxy.tokenFetchCount = 0;
     proxy.requestHistory = [];
 
     const response = await fetch(`http://127.0.0.1:${serverPort}/api/copilot/gate-run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        sessionId: 'retry-validation-session', 
-        prompt: 'always fail lint', 
-        model: 'gemini-3.1-flash-lite', 
-        maxRetries: 2 
+      body: JSON.stringify({
+        sessionId: 'retry-validation-session',
+        prompt: 'always fail lint',
+        model: 'gemini-3.1-flash-lite',
+        maxRetries: 2
       })
     });
 
     assert.strictEqual(response.status, 200);
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
-    
-    const readStreamToCompletion = async () => {
+
+    // Read only until the loop's retry machinery fires once (failing gate ->
+    // `loop.retry`), then disconnect. The full escalation ladder (3 model tiers
+    // x (maxRetries + 1) attempts = 9 loop cycles) takes 20s+ even locally and
+    // 30s+ on 2-core CI runners, but neither assertion below needs it: by the
+    // time the first `loop.retry` is emitted, the gate has already failed after
+    // >= 3 proxied completions on the first cycle. Waiting for the whole ladder
+    // was pure deadlock-bait -- it caused the CI timeout flake that a previous
+    // commit papered over with an inflated per-test timeout.
+    const readUntilFirstRetry = async () => {
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done) return false;
+        if (decoder.decode(value).includes('loop.retry')) {
+          await reader.cancel(); // Actively close connection (the "disconnect" under validation)
+          return true;
+        }
       }
     };
-    
-    // Guard the stream reading with a deadlock-detection timeout. It must stay
-    // below the test's own timeout so a genuinely hung stream (e.g. an SSE
-    // write that never drains) surfaces as an explicit deadlock diagnostic
-    // instead of vitest's generic test-timeout error.
-    await awaitWithTimeout(readStreamToCompletion(), 100000, "Exhausting Retry Loop Stream Response");
+
+    await awaitWithTimeout(readUntilFirstRetry(), 15000, "First loop.retry event (gate-failure retry)");
 
     // Verify Gap 5 parameters: underlying transport handshake must stay cached (singleton count <= 1)
-    // while the SDK engine spins up 3 distinct loop evaluation frames over the sequence tracking historical records.
+    // across the retry step, while the SDK engine logs the consecutive completions that led to the failure.
     assert.ok(proxy.tokenFetchCount <= 1, 'Should reuse the underlying token transport across retry steps');
-    
+
     const completionRequests = proxy.requestHistory.filter(r => r.messages);
     assert.ok(completionRequests.length >= 3, 'Should log at least 3 distinct consecutive completions before failing');
+
+    // The loop keeps running server-side after the client disconnects (by
+    // design). Abort it via the panic endpoint and wait for it to unwind so
+    // afterAll's proxy/server teardown never races a live ladder.
+    await fetch(`http://127.0.0.1:${serverPort}/api/copilot/panic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'retry-validation-session' })
+    });
+    const unwindDeadline = Date.now() + 10000;
+    while (activeLocks.get('retry-validation-session') && Date.now() < unwindDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(
+      !activeLocks.get('retry-validation-session'),
+      'Background loop should unwind after the panic abort'
+    );
   });
 });
