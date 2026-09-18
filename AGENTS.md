@@ -63,6 +63,35 @@ update when the SDK's shape changes, instead of chasing it across files. The bou
 module already exists; new code needing an SDK type should import it from the boundary,
 not add a fresh `@github/copilot-sdk` import.
 
+## Builtin tool allowlists are hand-maintained but CI-diffed against the live SDK
+
+The builtin tool names an agent session may call live in
+`src/agentCore/copilotSdk/builtinToolSets.ts` (`STANDARD_AGENT_BUILTINS`,
+`READONLY_AGENT_BUILTINS`) and are hand-maintained **on purpose**: a new SDK
+builtin is granted only by a deliberate human edit, never silently
+(SYS-REQ-028a-1 — omitting a builtin from the construction-time list excludes
+it for the session's lifetime). The cost — drift on SDK bumps — is closed by
+`test/agentCore/builtinToolsSnapshot.test.ts` (issue #478), which diffs the
+LIVE builtin set the installed SDK declares to the model against the
+checked-in snapshot `test/snapshots/builtin-tools.json`, and also asserts
+every allowlist entry is a real, currently-live builtin (catches SDK
+renames leaving a dead name that silently disables the tool everywhere).
+
+When that test fails after an SDK bump: review each +added/-removed tool,
+make the allow (edit `builtinToolSets.ts`) or exclude (omit) decision
+explicitly, then refresh the snapshot with `npm run capture:builtin-tools`
+(`test/scripts/capture-builtin-tools.ts`). The capture basis is a DEFAULT
+session (no `availableTools`/`excludedTools`) against the offline CapiProxy
+harness — tools that only materialize under runtime context a default
+offline session lacks (e.g. GitHub-auth-dependent MCP materializations) are
+outside the snapshot's basis by design. Related hand-maintained list NOT
+covered by the snapshot: `BUILTIN_TOOL_PERMISSION_KIND` in sessionWrapper.ts
+(wire name → permission-request kind); its keys are currently a subset of
+the allowlist names, so the allowlist check guards it transitively, but a
+new SDK builtin whose kind collides with an existing entry (e.g. another
+`'read'` tool) would change `_kindSiblings` semantics without any snapshot
+signal.
+
 ## Orchestration lives under src/orchestration/orchestrator/, not inline in serverRuntime.ts
 
 `handleGateLoop` (formerly ~1300 lines inline in `serverRuntime.ts`) now lives in

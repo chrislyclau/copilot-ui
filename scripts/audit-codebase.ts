@@ -14,6 +14,7 @@ import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction, makeA
 import { runForcedToolTurnUntilTimeout } from '../src/agentCore/toolCallEnforcement';
 import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/agentCore/copilotSdk/boundary';
 import { SessionWrapper } from '../src/agentCore/copilotSdk/sessionWrapper';
+import { READONLY_AGENT_BUILTINS } from '../src/agentCore/copilotSdk/builtinToolSets';
 import { createRunGhCommandTool, RUN_GH_COMMAND_TOOL_NAME, type RunGhCommandArgs } from './tools/agentGhTool';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../src/config/tools';
 
@@ -259,11 +260,13 @@ async function main() {
     // sessions. Without this, every SDK built-in tool call (bash/view/
     // grep/glob) is rejected. `view`/`grep`/`glob` share permission-request
     // kind `'read'` (see `_kindSiblings`), so all three must be listed
-    // together or none of them will be approved.
+    // together or none of them will be approved. The list itself is shared
+    // with the other agent call sites and CI-diffed against the live SDK's
+    // builtin set (issue #478) -- see builtinToolSets.ts.
     const wrapper = new SessionWrapper(
       client,
       {
-        builtins: ['bash', 'view', 'grep', 'glob'],
+        builtins: READONLY_AGENT_BUILTINS,
         // `Tool<RunGhCommandArgs>` isn't structurally assignable to
         // `SessionWrapperToolsConfig.custom`'s `Tool<unknown>` (contravariant
         // handler param) -- adapt at this boundary rather than widening the

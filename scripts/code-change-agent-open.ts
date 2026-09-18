@@ -19,6 +19,7 @@ import {
     SessionWrapper,
     type SessionListenerEntry,
 } from "../src/agentCore/copilotSdk/sessionWrapper";
+import { STANDARD_AGENT_BUILTINS } from "../src/agentCore/copilotSdk/builtinToolSets";
 import { RUN_TERMINAL_DOCKER_TOOL } from "../src/config/tools";
 import {
     app,
@@ -132,7 +133,7 @@ async function main() {
         const wrapper = new SessionWrapper(
             client,
             {
-                builtins: ["bash", "view", "edit", "grep", "glob"],
+                builtins: STANDARD_AGENT_BUILTINS,
                 custom: [
                     {
                         name: RUN_TERMINAL_DOCKER_TOOL.function.name,

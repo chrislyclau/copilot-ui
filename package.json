@@ -9,6 +9,7 @@
         "start": "node dist/server.cjs",
         "lint": "tsc --noEmit -p tsconfig.json && eslint . && tsx scripts/check-explicit-any.ts",
         "diagnose:gates": "tsx scripts/diagnose-gates.ts",
+        "capture:builtin-tools": "tsx test/scripts/capture-builtin-tools.ts",
         "review:pr": "tsx scripts/review-pr.ts",
         "agent:issue": "tsx scripts/run-issue-task.ts",
         "agent:audit": "tsx scripts/audit-codebase.ts",
