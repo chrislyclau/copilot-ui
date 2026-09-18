@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { app, activeSessions } from '../../server';
+import { activeBackgroundRuns } from '../../src/orchestration/orchestrator/gateLoop';
 import { CapiProxy } from '../harness/CapiProxy';
 
 // Mock CapiProxy config only ever reads `workDir` for bookkeeping in these
@@ -169,40 +170,84 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
     // 1. Point the proxy configuration to a snapshot built to trip a gate rule
     const snapshotPath = path.resolve(process.cwd(), 'test/snapshots/gate_loop/single_retry.yaml');
     await proxy.updateConfig({ filePath: snapshotPath, workDir: mockProxyWorkDir });
-    
+
     proxy.tokenFetchCount = 0;
     proxy.requestHistory = [];
 
     const response = await fetch(`http://127.0.0.1:${serverPort}/api/copilot/gate-run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        sessionId: 'retry-validation-session', 
-        prompt: 'always fail lint', 
-        model: 'gemini-3.1-flash-lite', 
-        maxRetries: 2 
+      body: JSON.stringify({
+        sessionId: 'retry-validation-session',
+        prompt: 'always fail lint',
+        model: 'gemini-3.1-flash-lite',
+        maxRetries: 2
       })
     });
 
     assert.strictEqual(response.status, 200);
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
-    
-    const readStreamToCompletion = async () => {
+
+    // Read only until the loop's retry machinery fires once (failing gate ->
+    // `loop.retry`), then disconnect. The full escalation ladder (3 model tiers
+    // x (maxRetries + 1) attempts = 9 loop cycles) takes 20s+ even locally and
+    // 30s+ on 2-core CI runners, but neither assertion below needs it: by the
+    // time the first `loop.retry` is emitted, the gate has already failed after
+    // >= 3 proxied completions on the first cycle. Waiting for the whole ladder
+    // was pure deadlock-bait -- it caused the CI timeout flake that a previous
+    // commit papered over with an inflated per-test timeout.
+    // The scan matches against accumulated decoded text (not per-chunk) so a
+    // `loop.retry` marker split across two SSE chunks is still found, and the
+    // accumulated text is asserted on below so a stream that ends without the
+    // marker fails the test instead of passing vacuously.
+    const readUntilFirstRetry = async () => {
+      let accumulated = '';
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done) return accumulated;
+        accumulated += decoder.decode(value, { stream: true });
+        if (accumulated.includes('loop.retry')) {
+          await reader.cancel(); // Actively close connection (the "disconnect" under validation)
+          return accumulated;
+        }
       }
     };
-    
-    // Guard the stream reading with a generous 15-second timeout to handle container test environments safely
-    await awaitWithTimeout(readStreamToCompletion(), 30000, "Exhausting Retry Loop Stream Response");
+
+    const streamText = await awaitWithTimeout(readUntilFirstRetry(), 15000, "First loop.retry event (gate-failure retry)");
+    assert.ok(
+      streamText.includes('loop.retry'),
+      `Stream ended without emitting loop.retry (gate-failure retry machinery never fired). Stream tail: ${streamText.slice(-300)}`
+    );
 
     // Verify Gap 5 parameters: underlying transport handshake must stay cached (singleton count <= 1)
-    // while the SDK engine spins up 3 distinct loop evaluation frames over the sequence tracking historical records.
+    // across the retry step, while the SDK engine logs the consecutive completions that led to the failure.
     assert.ok(proxy.tokenFetchCount <= 1, 'Should reuse the underlying token transport across retry steps');
-    
+
     const completionRequests = proxy.requestHistory.filter(r => r.messages);
     assert.ok(completionRequests.length >= 3, 'Should log at least 3 distinct consecutive completions before failing');
+
+    // The loop keeps running server-side after the client disconnects (by
+    // design). Abort it via the panic endpoint and wait for it to unwind so
+    // afterAll's proxy/server teardown never races a live ladder.
+    //
+    // Poll `activeBackgroundRuns`, not `activeLocks`: the panic handler deletes
+    // the activeLocks entry itself before responding, so a lock-map poll can
+    // never fail. The activeBackgroundRuns entry is only deleted in the run
+    // promise's finally (gateLoop.ts), i.e. after the loop has actually
+    // unwound -- a real unwind signal.
+    await fetch(`http://127.0.0.1:${serverPort}/api/copilot/panic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'retry-validation-session' })
+    });
+    const unwindDeadline = Date.now() + 10000;
+    while (activeBackgroundRuns.has('retry-validation-session') && Date.now() < unwindDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(
+      !activeBackgroundRuns.has('retry-validation-session'),
+      'Background loop should unwind after the panic abort (activeBackgroundRuns entry must be cleared by the run promise finally)'
+    );
   });
 });
