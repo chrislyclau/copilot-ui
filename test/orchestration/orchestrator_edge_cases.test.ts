@@ -5,7 +5,8 @@ import { AddressInfo } from 'node:net';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { app, activeSessions, activeLocks } from '../../server';
+import { app, activeSessions } from '../../server';
+import { activeBackgroundRuns } from '../../src/orchestration/orchestrator/gateLoop';
 import { CapiProxy } from '../harness/CapiProxy';
 
 // Mock CapiProxy config only ever reads `workDir` for bookkeeping in these
@@ -196,18 +197,28 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
     // >= 3 proxied completions on the first cycle. Waiting for the whole ladder
     // was pure deadlock-bait -- it caused the CI timeout flake that a previous
     // commit papered over with an inflated per-test timeout.
+    // The scan matches against accumulated decoded text (not per-chunk) so a
+    // `loop.retry` marker split across two SSE chunks is still found, and the
+    // accumulated text is asserted on below so a stream that ends without the
+    // marker fails the test instead of passing vacuously.
     const readUntilFirstRetry = async () => {
+      let accumulated = '';
       while (true) {
         const { value, done } = await reader.read();
-        if (done) return false;
-        if (decoder.decode(value).includes('loop.retry')) {
+        if (done) return accumulated;
+        accumulated += decoder.decode(value, { stream: true });
+        if (accumulated.includes('loop.retry')) {
           await reader.cancel(); // Actively close connection (the "disconnect" under validation)
-          return true;
+          return accumulated;
         }
       }
     };
 
-    await awaitWithTimeout(readUntilFirstRetry(), 15000, "First loop.retry event (gate-failure retry)");
+    const streamText = await awaitWithTimeout(readUntilFirstRetry(), 15000, "First loop.retry event (gate-failure retry)");
+    assert.ok(
+      streamText.includes('loop.retry'),
+      `Stream ended without emitting loop.retry (gate-failure retry machinery never fired). Stream tail: ${streamText.slice(-300)}`
+    );
 
     // Verify Gap 5 parameters: underlying transport handshake must stay cached (singleton count <= 1)
     // across the retry step, while the SDK engine logs the consecutive completions that led to the failure.
@@ -219,18 +230,24 @@ describe('Orchestrator Edge Case Integration Tests (In-Process)', { timeout: 300
     // The loop keeps running server-side after the client disconnects (by
     // design). Abort it via the panic endpoint and wait for it to unwind so
     // afterAll's proxy/server teardown never races a live ladder.
+    //
+    // Poll `activeBackgroundRuns`, not `activeLocks`: the panic handler deletes
+    // the activeLocks entry itself before responding, so a lock-map poll can
+    // never fail. The activeBackgroundRuns entry is only deleted in the run
+    // promise's finally (gateLoop.ts), i.e. after the loop has actually
+    // unwound -- a real unwind signal.
     await fetch(`http://127.0.0.1:${serverPort}/api/copilot/panic`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: 'retry-validation-session' })
     });
     const unwindDeadline = Date.now() + 10000;
-    while (activeLocks.get('retry-validation-session') && Date.now() < unwindDeadline) {
+    while (activeBackgroundRuns.has('retry-validation-session') && Date.now() < unwindDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     assert.ok(
-      !activeLocks.get('retry-validation-session'),
-      'Background loop should unwind after the panic abort'
+      !activeBackgroundRuns.has('retry-validation-session'),
+      'Background loop should unwind after the panic abort (activeBackgroundRuns entry must be cleared by the run promise finally)'
     );
   });
 });
