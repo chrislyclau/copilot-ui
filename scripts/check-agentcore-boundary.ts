@@ -68,8 +68,6 @@ const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
     { file: 'src/agentCore/auditorHelper.ts', spec: '../config/tools', backEdge: 3 },
     // Back-edge 4: express types (type-only; becomes an optional peer dep).
     { file: 'src/agentCore/providerProxy.ts', spec: 'express', backEdge: 4 },
-    // Back-edge 5: dynamic import() of orchestration/db/taskStore (x3).
-    { file: 'src/agentCore/workspace/git.ts', spec: '../../orchestration/db/taskStore', backEdge: 5 },
 ];
 
 type ViolationKind =

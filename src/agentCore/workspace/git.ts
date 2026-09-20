@@ -4,12 +4,24 @@ export type ExecCommand = (
     command: string,
     signal?: AbortSignal
 ) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>;
-
 // Tighter deadline than the runner's default user-command timeout — git
 // operations on local disk should never take long. If they do, something
 // is wrong (stale lock file, credential prompt) and we want to fail loudly.
 const GIT_TIMEOUT_MS = 30_000;
 
+/**
+ * Generic git sandbox over the workspace runner: init, base-branch detection,
+ * diffs, snapshot commits, HEAD SHA, checkout, and checkpoint restore.
+ *
+ * This is the package-side (agentCore) half of the sandbox. Task/PBI branch
+ * orchestration — `task/<id>` and `pbi/<id>` naming, park/resume/merge, and
+ * persisting branch names on task records — is app policy and lives in the
+ * app-side subclass `TaskGitSandbox` (src/orchestration/taskGitSandbox.ts),
+ * which composes this class through the protected `withLock`/`git`/`sh`/
+ * `checkoutBaseBranch` hooks rather than reaching into private state.
+ * (Extraction plan phase 2a: this split removed agentCore's dynamic imports
+ * of orchestration/db/taskStore.)
+ */
 export class GitSandbox {
     private readonly workTree: string;
     private readonly gitDir: string;
@@ -33,8 +45,11 @@ export class GitSandbox {
     // -------------------------------------------------------------------------
     // Lock helper — wraps any async operation so the busy flag is held for the
     // entire duration of the public method, not just each individual git() call.
+    // Protected (not private) so the app-side subclass
+    // (src/orchestration/taskGitSandbox.ts) can wrap its own multi-step
+    // operations in the same lock.
     // -------------------------------------------------------------------------
-    private async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    protected async withLock<T>(fn: () => Promise<T>): Promise<T> {
         if (this.busy) {
             throw new Error(
                 "GitSandbox is busy — concurrent git operations are not permitted."
@@ -53,8 +68,9 @@ export class GitSandbox {
     // runs in the same environment as the workspace (host or container).
     // Uses a dedicated GIT_TIMEOUT_MS deadline — tighter than the runner's
     // default user-command timeout — so hung git ops fail loudly and fast.
+    // Protected so the app-side subclass can compose raw git sequences.
     // -------------------------------------------------------------------------
-    private async git(args: string[]): Promise<string> {
+    protected async git(args: string[]): Promise<string> {
         // Build env prefix so git uses the correct work tree and git dir
         // regardless of the shell's working directory inside the runner.
         const env = [
@@ -80,8 +96,9 @@ export class GitSandbox {
     // -------------------------------------------------------------------------
     // Shell helper — runs a non-git command in the workspace environment.
     // Used for mkdir, tee, etc. during initialisation.
+    // Protected so the app-side subclass can compose shell commands too.
     // -------------------------------------------------------------------------
-    private async sh(command: string): Promise<void> {
+    protected async sh(command: string): Promise<void> {
         const result = await this.execCommand(command);
         if (result.exitCode !== 0) {
             const message = result.stderr ? result.stderr.trim() : "(no stderr)";
@@ -92,8 +109,12 @@ export class GitSandbox {
     /**
      * Safely checks out the primary base branch, falling back in order of preference.
      * Deduplicates candidates to avoid redundant CLI invocations.
+     *
+     * Protected (and lock-free): it is a building block for public methods,
+     * which hold the lock across the whole operation. The app-side subclass
+     * calls it inside its own withLock-wrapped implementations.
      */
-    private async checkoutBaseBranch(): Promise<void> {
+    protected async checkoutBaseBranch(): Promise<void> {
         const candidates = Array.from(new Set([this.baseBranch, "main", "master"]));
         for (const branch of candidates) {
             try {
@@ -147,148 +168,13 @@ export class GitSandbox {
     }
 
     /**
-     * Ensures `pbi/<pbiId>` exists, branched off trunk if it doesn't already.
-     * Leaves the sandbox checked out on `pbi/<pbiId>`. Idempotent — safe to
-     * call on every task within a PBI, not just the first.
-     * (RM-REQ-014: PBI-level integration branch, created off trunk when a
-     * PBI's first task begins.)
+     * The trunk/base branch name this sandbox is targeting (e.g. "main").
+     * Detected during initialization; the app-side task-branch layer
+     * (src/orchestration/taskGitSandbox.ts) uses it to compute PBI diffs
+     * against trunk.
      */
-    private async ensurePbiBranchImpl(pbiId: string): Promise<void> {
-        const pbiBranch = `pbi/${pbiId}`;
-        const exists = await this.git(["branch", "--list", pbiBranch]).then(
-            (out) => out.trim().length > 0
-        );
-        if (exists) {
-            await this.git(["checkout", pbiBranch]);
-            return;
-        }
-        await this.checkoutBaseBranch();
-        await this.git(["checkout", "-b", pbiBranch]);
-    }
-
-    public async ensurePbiBranch(pbiId: string): Promise<void> {
-        return this.withLock(() => this.ensurePbiBranchImpl(pbiId));
-    }
-
-    /**
-     * Branches a task off `pbi/<pbiId>` when a PBI context exists, or off
-     * trunk directly when it doesn't (non-PBI tasks keep the original
-     * behavior). (RM-REQ-014.)
-     */
-    public async checkoutTaskBranch(taskId: string, pbiId?: string): Promise<string> {
-        return this.withLock(async () => {
-            // Return to the correct base first so we don't try to delete the active branch.
-            try {
-                if (pbiId) {
-                    await this.ensurePbiBranchImpl(pbiId);
-                } else {
-                    await this.checkoutBaseBranch();
-                }
-            } catch (e) {
-                console.warn(`[GitSandbox] Failed to checkout base for task branch:`, e);
-                // Ignore failure if we can't switch, but try to proceed
-            }
-
-            // Delete branch if it already exists to start fresh off current clean HEAD
-            try {
-                await this.git(["branch", "-D", `task/${taskId}`]);
-            } catch (e) {
-                // Ignore if the branch did not exist
-            }
-            const out = await this.git(["checkout", "-b", `task/${taskId}`]);
-            
-            // Persist the branch name on the task record in SQLite
-            try {
-                const { getTask, saveTask } = await import("../../orchestration/db/taskStore");
-                const task = getTask(taskId);
-                if (task) {
-                    saveTask({
-                        ...task,
-                        branchName: `task/${taskId}`,
-                        updatedAt: Date.now()
-                    });
-                }
-            } catch (err) {
-                // Ignore or log error
-            }
-            return out;
-        });
-    }
-
-    /**
-     * Fast-forward-merges `task/<taskId>` into `pbi/<pbiId>` on task completion.
-     * Throws (no auto three-way merge) if a fast-forward is not possible —
-     * callers are expected to catch this and raise an escalation.
-     * Leaves the sandbox back on the base trunk branch afterward, win or lose,
-     * consistent with `parkTaskBranch`. Trunk itself is never touched here
-     * (RM-REQ-014/RM-REQ-017 — trunk stays untouched until human PR review).
-     */
-    public async mergeTaskIntoPbi(taskId: string, pbiId: string): Promise<void> {
-        return this.withLock(async () => {
-            const pbiBranch = `pbi/${pbiId}`;
-            try {
-                await this.git(["checkout", pbiBranch]);
-                await this.git(["merge", "--ff-only", `task/${taskId}`]);
-            } finally {
-                // Always return to base branch afterward, success or failure —
-                // including if the checkout of pbiBranch itself failed (e.g.
-                // pbi/<pbiId> doesn't exist) — so the sandbox is never left
-                // stuck mid-operation for the next task.
-                try {
-                    await this.checkoutBaseBranch();
-                } catch (e) {
-                    console.warn(`[GitSandbox] Failed to checkout base branch after merge:`, e);
-                }
-            }
-        });
-    }
-
-    public async parkTaskBranch(taskId: string): Promise<void> {
-        return this.withLock(async () => {
-            // Stage and commit all current changes on the task branch
-            await this.git(["add", "-A"]);
-            await this.git(["commit", "--allow-empty", "-m", `Park task ${taskId}`]);
-
-            // Persist the branch name on the task record in SQLite
-            try {
-                const { getTask, saveTask } = await import("../../orchestration/db/taskStore");
-                const task = getTask(taskId);
-                if (task) {
-                    saveTask({
-                        ...task,
-                        branchName: `task/${taskId}`,
-                        updatedAt: Date.now()
-                    });
-                }
-            } catch (err) {
-                // Ignore or log error
-            }
-
-            // Return to base branch
-            await this.checkoutBaseBranch();
-        });
-    }
-
-    public async resumeTaskBranch(taskId: string): Promise<string> {
-        return this.withLock(async () => {
-            const out = await this.git(["checkout", `task/${taskId}`]);
-
-            // Persist the branch name on the task record in SQLite
-            try {
-                const { getTask, saveTask } = await import("../../orchestration/db/taskStore");
-                const task = getTask(taskId);
-                if (task) {
-                    saveTask({
-                        ...task,
-                        branchName: `task/${taskId}`,
-                        updatedAt: Date.now()
-                    });
-                }
-            } catch (err) {
-                // Ignore or log error
-            }
-            return out;
-        });
+    public getBaseBranchName(): string {
+        return this.baseBranch;
     }
 
     // -------------------------------------------------------------------------
@@ -474,26 +360,6 @@ export class GitSandbox {
         await this.git(["clean", "-fd"]);
         await this.git(["add", "-A"]);
         await this.git(["commit", "-m", message]);
-    }
-
-    /**
-     * Returns the diff of `pbi/<pbiId>` against the base trunk branch —
-     * i.e. everything the PBI's tasks have accumulated so far, regardless of
-     * what's currently checked out or staged. Used by the compliance-audit
-     * operation (RM-REQ-010), which audits the PBI's accumulated diff, not
-     * the working tree.
-     */
-    public async getPbiDiffAsync(pbiId: string): Promise<string> {
-        return this.withLock(() =>
-            this.git(["diff", `${this.baseBranch}...pbi/${pbiId}`])
-        );
-    }
-
-    /**
-     * The trunk/base branch name this sandbox is targeting (e.g. "main").
-     */
-    public getBaseBranchName(): string {
-        return this.baseBranch;
     }
 
     /**

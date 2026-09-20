@@ -2,16 +2,17 @@ import { CapiProxy } from './CapiProxy';
 import * as path from 'path';
 import * as fs from 'fs';
 import { initializeWorkspace } from '../../src/agentCore/workspace';
-import { GitSandbox } from '../../src/agentCore/workspace/git';
+import { createTaskGitSandbox, TaskGitSandbox } from '../../src/orchestration/taskGitSandbox';
 import * as native from '../../src/agentCore/workspace/nativeRunner';
 import { __setGitSandboxForTests } from '../vitest.setup';
 
 // Test-only reset helpers. These replace the old resetWorkspaceForTests()/
 // resetNativeWorkspace() exports (removed from workspace.ts/nativeRunner.ts,
 // which no longer have any mutable state of their own to reset). Built
-// entirely from the public surface: GitSandbox, and nativeRunner's exported
-// getWorkspaceRoot/getGitDir/execCommand. The fresh sandbox is installed via
-// the vitest.setup.ts mock's setter so getGitSandbox() picks it up.
+// entirely from the public surface: TaskGitSandbox (the app's GitSandbox
+// subclass), and nativeRunner's exported getWorkspaceRoot/getGitDir/
+// execCommand. The fresh sandbox is installed via the vitest.setup.ts mock's
+// setter so getGitSandbox() picks it up.
 async function resetNativeWorkspace(): Promise<void> {
   const root = native.getWorkspaceRoot();
   for (const entry of fs.readdirSync(root)) {
@@ -23,7 +24,10 @@ async function resetWorkspaceForTests(): Promise<void> {
   // Wipe first, then reinitialize — reinitializing before wiping would
   // delete the fresh .git the new sandbox just created.
   await resetNativeWorkspace();
-  const sandbox = new GitSandbox(
+  // The app's subclass, not the plain agentCore GitSandbox: gate-loop code
+  // running under this harness resolves the sandbox through
+  // getTaskGitSandbox(), which requires the app-side instance.
+  const sandbox = new TaskGitSandbox(
     native.getWorkspaceRoot(),
     native.getGitDir(),
     native.execCommand
@@ -67,7 +71,10 @@ class ServerHarness {
     process.env.NODE_ENV = 'test';
     process.env.GEMINI_API_KEY = 'test-key';
 
-    await initializeWorkspace();
+    // Mirrors the app's startup wiring (server.entry.ts): install the app's
+    // TaskGitSandbox so the in-process server's gate loop can use the
+    // task/PBI branch operations via getTaskGitSandbox().
+    await initializeWorkspace({ createSandbox: createTaskGitSandbox });
 
     try {
       // 3. Dynamic import of server.ts (it exports the Express app)

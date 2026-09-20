@@ -1,7 +1,8 @@
 import { getAuditorExecutionConfig } from '../auditorPolicy';
 import { executeAuditSession } from '../../agentCore/auditorHelper';
 import { submitComplianceAuditTool } from '../../config/tools';
-import { getGitSandbox, getExecCommand, getWorkspaceRoot } from '../../agentCore/workspace';
+import { getExecCommand, getWorkspaceRoot } from '../../agentCore/workspace';
+import { getTaskGitSandbox } from '../taskGitSandbox';
 import { getPbi, savePbi } from '../db/pbiStore';
 import { getTasksForPbi, saveTask, getSpec, TaskRecord } from '../db/taskStore';
 import { getAuditorMaxTierIndex } from '../../config/models';
@@ -106,7 +107,7 @@ export async function runComplianceAudit(
     throw new Error(`No PBI found for pbiId "${pbiId}".`);
   }
 
-  const sandbox = getGitSandbox();
+  const sandbox = getTaskGitSandbox();
   // git diff base...pbi returns exit 0 with empty stdout when there are no
   // commits yet -- that's the legitimate "nothing to audit" case handled
   // below. A thrown error here means something actually went wrong (missing

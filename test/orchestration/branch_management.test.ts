@@ -1,17 +1,18 @@
 import { describe, it, beforeAll, expect } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
-import { initializeWorkspace, getGitSandbox, getWorkspaceRoot } from '../../src/agentCore/workspace';
+import { initializeWorkspace, getWorkspaceRoot } from '../../src/agentCore/workspace';
+import { createTaskGitSandbox, getTaskGitSandbox } from '../../src/orchestration/taskGitSandbox';
 import { db } from '../../src/orchestration/db';
 import { saveTask, getTask, saveSpec } from '../../src/orchestration/db/taskStore';
 
 describe('Git Sandbox Branch Management', () => {
   beforeAll(async () => {
-    await initializeWorkspace();
+    await initializeWorkspace({ createSandbox: createTaskGitSandbox });
   });
 
   it('should support checking out, parking, and resuming task branches', async () => {
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     const taskId = 'test-branch-task-999';
 
     // Register spec to satisfy Foreign Key constraint
