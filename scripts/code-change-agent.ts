@@ -11,6 +11,7 @@ import { app, setActiveOpenRouterSessionId } from '../src/orchestration/serverRu
 import { getReviewerExecutionConfig, makeAuditorExecToolHandler } from '../src/agentCore/auditorHelper';
 import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/agentCore/copilotSdk/boundary';
 import { SessionWrapper, type SessionListenerEntry } from '../src/agentCore/copilotSdk/sessionWrapper';
+import { STANDARD_AGENT_BUILTINS } from '../src/agentCore/copilotSdk/builtinToolSets';
 import {
   createMakeCommitTool,
   createRenameBranchTool,
@@ -160,8 +161,10 @@ async function main() {
         // agent's whole purpose is to change files, not just report on
         // them. `view`/`grep`/`glob` share permission-request kind 'read'
         // (see SessionWrapper's `_kindSiblings`) so all three must be
-        // listed together or none will be approved.
-        builtins: ['bash', 'view', 'edit', 'grep', 'glob'],
+        // listed together or none will be approved. The list itself is
+        // shared with the other agent call sites and CI-diffed against the
+        // live SDK's builtin set (issue #478) -- see builtinToolSets.ts.
+        builtins: STANDARD_AGENT_BUILTINS,
         custom: [makeCommitTool, renameBranchTool, createPrTool].map((tool) => ({
           ...tool,
           // Same `Tool<X>` -> `Tool<unknown>` handler-param adaptation

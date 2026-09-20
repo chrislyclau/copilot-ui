@@ -1,0 +1,22 @@
+{
+  "description": "Builtin tool names the installed @github/copilot-sdk declares to the model for a DEFAULT session (no availableTools/excludedTools/tools), captured offline via test/harness/builtinToolsCapture.ts against the CapiProxy harness. CI (test/agentCore/builtinToolsSnapshot.test.ts) diffs the live set against this file on every PR. On a diff, review each added/removed tool and decide explicitly: allow it by adding it to src/agentCore/copilotSdk/builtinToolSets.ts, or exclude it by omitting it (SYS-REQ-028a-1). Then refresh this file: npm run capture:builtin-tools (issue #478).",
+  "cliVersion": "1.0.83",
+  "toolNames": [
+    "bash",
+    "create",
+    "edit",
+    "glob",
+    "grep",
+    "list_agents",
+    "list_bash",
+    "read_agent",
+    "read_bash",
+    "skill",
+    "sql",
+    "stop_bash",
+    "task",
+    "view",
+    "web_fetch",
+    "write_agent"
+  ]
+}

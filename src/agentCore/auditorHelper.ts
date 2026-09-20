@@ -1,6 +1,7 @@
 import { runForcedToolTurnUntilTimeout } from './toolCallEnforcement';
 import { CopilotClient, SdkProviderConfig, PermissionRequest, PermissionRequestResult } from './copilotSdk/boundary';
 import { SessionWrapper } from './copilotSdk/sessionWrapper';
+import { STANDARD_AGENT_BUILTINS } from './copilotSdk/builtinToolSets';
 import { ProviderRegistry, ExecutionConfig } from './providerRegistry';
 import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig, selectFromAuditorPool, ModelProviderConfig } from '../config/models';
 import { RUN_TERMINAL_DOCKER_TOOL } from '../config/tools';
@@ -422,8 +423,10 @@ export async function executeAuditSession<T>(
       // model's only path -- which requires a Docker container not present
       // in CI. `view`/`grep`/`glob` share permission-request kind `'read'`
       // (see `_kindSiblings`), so all three must be listed together or none
-      // of them will be approved.
-      { builtins: ['bash', 'view', 'edit', 'grep', 'glob'], custom: sessionSettings.tools },
+      // of them will be approved. The list itself is shared with the other
+      // agent call sites and CI-diffed against the live SDK's builtin set
+      // (issue #478) -- see builtinToolSets.ts.
+      { builtins: STANDARD_AGENT_BUILTINS, custom: sessionSettings.tools },
       {
         ...(sessionSettings.provider ? { provider: sessionSettings.provider } : {}),
         reasoningSummary: sessionSettings.reasoningSummary,
