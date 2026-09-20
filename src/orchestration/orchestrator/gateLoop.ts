@@ -66,7 +66,7 @@ import {
   SlidingWindowCircularBuffer,
   clearCleanCache,
 } from "../../agentCore/contextManager";
-import { fetchStubbedTraceResponse } from "../../agentCore/traceRegistry";
+import { fetchStubbedTraceResponse } from "../traceRegistry";
 import {
   appendEscalation,
   updateEscalationStatus,

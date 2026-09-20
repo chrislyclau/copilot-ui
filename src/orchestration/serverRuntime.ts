@@ -76,7 +76,7 @@ import { runSpecAudit } from './gates/specAuditor';
 import { runPbiDerivation } from './gates/pbiDerivation';
 import { initializeWorkspace, getGitSandbox, getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from '../agentCore/workspace';
 import { enforceWorkingMemoryTruncation, SlidingWindowCircularBuffer, clearCleanCache } from '../agentCore/contextManager';
-import { fetchStubbedTraceResponse } from '../agentCore/traceRegistry';
+import { fetchStubbedTraceResponse } from './traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from './escalationStore';
 import { createSseWriter } from './sseWriter';
 import { installConsoleInterceptors } from './interceptors';
