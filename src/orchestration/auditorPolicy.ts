@@ -1,5 +1,5 @@
 import { ProviderRegistry, ExecutionConfig } from '../agentCore/providerRegistry';
-import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig, selectFromAuditorPool, ModelProviderConfig } from '../config/models';
+import { DEFAULT_ROLES_CONFIG, getAuditorTierConfig, selectFromAuditorPool, getProviderRegistryConfig, ModelProviderConfig } from '../config/models';
 
 
 /**
@@ -35,7 +35,7 @@ function resolveExecutionConfig(roleConfig: ModelProviderConfig, roleLabel: stri
       `Missing API key for ${roleLabel} provider "${provider}". Expected ${envVarName} to be set.`,
     );
   }
-  const registry = new ProviderRegistry(keyToUse);
+  const registry = new ProviderRegistry(keyToUse, getProviderRegistryConfig());
   return registry.getExecutionConfig(roleConfig);
 }
 

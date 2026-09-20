@@ -36,12 +36,14 @@ const TARGET_ROOTS: readonly string[] = ['src/agentCore'];
 
 // Third-party packages agentCore may import directly (plan §3: the package's
 // third-party surface is @github/copilot-sdk, plus vitest for the in-tree
-// test file). Node builtins are always allowed. `express` is deliberately
-// absent: it is back-edge 4 and stays in KNOWN_VIOLATIONS until phase 2
-// isolates it behind the ./proxy subpath.
+// test file). Node builtins are always allowed. `express` joined in phase 2c
+// as the future package's optional peer dependency — it is confined to the
+// proxy/ subdirectory (the ./proxy subpath), which is the only agentCore
+// module that touches it.
 const ALLOWED_BARE_SPECS: ReadonlySet<string> = new Set([
     '@github/copilot-sdk',
     'vitest',
+    'express',
 ]);
 
 interface KnownViolation {
@@ -53,24 +55,15 @@ interface KnownViolation {
     backEdge: number;
 }
 
-// Back-edges still present after phase 1 (plan §3; back-edges 1 and the
-// toolHandlers half of 4 were removed by moving toolHandlers.ts into
-// src/orchestration). Keyed by (file, spec) so entries survive line shifts;
-// one entry covers every occurrence of that pair (the three dynamic
-// taskStore imports in git.ts are one entry). Back-edge 2 now spans only
-// providerRegistry.ts (auditorHelper's policy half moved to
-// src/orchestration/auditorPolicy.ts in phase 1), so the remaining
-// back-edges expand to four entries.
-const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
-    // Back-edge 2: config/models data (ModelProviderConfig, MODEL_TIERS, ...).
-    { file: 'src/agentCore/providerRegistry.ts', spec: '../config/models', backEdge: 2 },
-    // Back-edge 3: config/tools (RUN_TERMINAL_DOCKER_TOOL).
-    { file: 'src/agentCore/auditorHelper.ts', spec: '../config/tools', backEdge: 3 },
-    // Back-edge 4: express types (type-only; becomes an optional peer dep).
-    { file: 'src/agentCore/providerProxy.ts', spec: 'express', backEdge: 4 },
-    // Back-edge 5: dynamic import() of orchestration/db/taskStore (x3).
-    { file: 'src/agentCore/workspace/git.ts', spec: '../../orchestration/db/taskStore', backEdge: 5 },
-];
+// Phases 0-2 of the extraction plan are complete: all five plan §3 back-edges
+// are gone (1: toolHandlers moved to orchestration in phase 1; 2+3: config
+// data moved into agentCore/config and injected in phase 2b; 4: express
+// isolated behind the proxy/ subdirectory and allowed as the package's
+// optional peer dependency in phase 2c; 5: the dynamic taskStore imports in
+// workspace/git.ts moved to the app-side TaskGitSandbox in phase 2a). The
+// allowlist is empty — any violation now fails the guard outright. Keyed by
+// (file, spec) so entries survive line shifts.
+const KNOWN_VIOLATIONS: readonly KnownViolation[] = [];
 
 type ViolationKind =
     | 'static-import'

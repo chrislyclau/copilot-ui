@@ -1,22 +1,14 @@
-export const PROVIDERS = [
-  "copilot-native",
-  "openai",
-  "anthropic",
-  "gemini",
-  "local",
-  "openrouter",
-] as const;
-export type ProviderType = (typeof PROVIDERS)[number];
-
-export function isProviderType(p: unknown): p is ProviderType {
-  return typeof p === "string" && (PROVIDERS as readonly string[]).includes(p);
-}
-
-export interface ModelProviderConfig {
-  readonly provider: ProviderType;
-  readonly model: string;
-  readonly tokenRatio?: number;
-}
+/**
+ * Package-side provider vocabulary (moved here from this file in extraction
+ * phase 2b) is re-exported so existing consumers (ui/hooks, types/, scripts)
+ * keep compiling unchanged. Role/tier configuration and the helpers below
+ * remain app-side; ProviderRegistry receives this data via injection
+ * (getProviderRegistryConfig) instead of importing it directly.
+ */
+export { PROVIDERS, isProviderType } from '../agentCore/config/models';
+export type { ProviderType, ModelProviderConfig } from '../agentCore/config/models';
+import { isProviderType, type ModelProviderConfig } from '../agentCore/config/models';
+import type { ProviderRegistryConfig } from '../agentCore/providerRegistry';
 
 export type ModelTier = string;
 
@@ -304,4 +296,26 @@ export function selectFromAuditorPool(rotationIndex: number): ModelProviderConfi
   }
   const normalizedIndex = ((rotationIndex % pool.length) + pool.length) % pool.length;
   return pool[normalizedIndex]!;
+}
+
+/**
+ * Builds the known-models data the package's ProviderRegistry is constructed
+ * with (extraction plan phase 2b). Order-sensitive: roleModels must be
+ * [planner, auditor] to preserve getMappedModel's check order, and
+ * allConfigs must lead with planner/auditor/executorTiers before
+ * KNOWN_MODELS_CONFIG to preserve provider-resolution precedence. Evaluated
+ * per ProviderRegistry construction, so env overrides are picked up the
+ * same way the direct imports did.
+ */
+export function getProviderRegistryConfig(): ProviderRegistryConfig {
+  return {
+    tierModels: MODEL_TIERS,
+    roleModels: [DEFAULT_ROLES_CONFIG.planner, DEFAULT_ROLES_CONFIG.auditor],
+    allConfigs: [
+      DEFAULT_ROLES_CONFIG.planner,
+      DEFAULT_ROLES_CONFIG.auditor,
+      ...DEFAULT_ROLES_CONFIG.executorTiers,
+      ...KNOWN_MODELS_CONFIG,
+    ],
+  };
 }

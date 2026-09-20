@@ -21,6 +21,7 @@ import {
   DEFAULT_ROLES_CONFIG,
   MODEL_TIERS,
   getNextTier,
+  getProviderRegistryConfig,
 } from "../../config/models";
 import { runGate, runTests, runLint, runWithTimeout } from "../gates";
 import {
@@ -61,6 +62,7 @@ import {
   getExecCommand,
   getWorkspaceRoot,
 } from "../../agentCore/workspace";
+import { getTaskGitSandbox } from "../taskGitSandbox";
 import {
   enforceWorkingMemoryTruncation,
   SlidingWindowCircularBuffer,
@@ -773,7 +775,7 @@ export const handleGateLoop = async (
           ? [String(rawGates)]
           : [];
       const keyToUse = apiKey || process.env.GEMINI_API_KEY;
-      const registryInstance = new ProviderRegistry(keyToUse);
+      const registryInstance = new ProviderRegistry(keyToUse, getProviderRegistryConfig());
 
       if (simulateBackpressureDelayMs) {
         (res as ExtendedResponse).simulateBackpressureDelayMs = Number(
@@ -1115,12 +1117,12 @@ export const handleGateLoop = async (
             writeLog(
               `[GateLoop] Task ${activeTaskId} has existing branch ${taskRecord.branchName}. Resuming branch.`,
             );
-            await getGitSandbox().resumeTaskBranch(activeTaskId);
+            await getTaskGitSandbox().resumeTaskBranch(activeTaskId);
           } else {
             writeLog(
               `[GateLoop] Task ${activeTaskId} has no existing branch. Creating new branch.`,
             );
-            await getGitSandbox().checkoutTaskBranch(
+            await getTaskGitSandbox().checkoutTaskBranch(
               activeTaskId,
               taskRecord?.pbiId ?? undefined,
             );
@@ -1484,7 +1486,7 @@ export const handleGateLoop = async (
         // 1. Park the current active task branch (which commits changes, saves branch name, and returns to base)
         if (activeTaskId) {
           try {
-            await getGitSandbox().parkTaskBranch(activeTaskId);
+            await getTaskGitSandbox().parkTaskBranch(activeTaskId);
             writeLog(`[GateLoop] Parked task branch for: ${activeTaskId}`);
           } catch (e) {
             writeLog(
@@ -1541,12 +1543,12 @@ export const handleGateLoop = async (
               writeLog(
                 `[GateLoop] Task ${activeTaskId} has existing branch ${taskRecord.branchName}. Resuming branch.`,
               );
-              await getGitSandbox().resumeTaskBranch(activeTaskId);
+              await getTaskGitSandbox().resumeTaskBranch(activeTaskId);
             } else {
               writeLog(
                 `[GateLoop] Task ${activeTaskId} has no existing branch. Creating new branch.`,
               );
-              await getGitSandbox().checkoutTaskBranch(
+              await getTaskGitSandbox().checkoutTaskBranch(
                 activeTaskId,
                 taskRecord?.pbiId ?? undefined,
               );
@@ -3048,7 +3050,7 @@ export const handleGateLoop = async (
               const doneTask = doneTaskId ? getTask(doneTaskId) : undefined;
               if (doneTask && doneTask.pbiId) {
                 try {
-                  await getGitSandbox().mergeTaskIntoPbi(
+                  await getTaskGitSandbox().mergeTaskIntoPbi(
                     doneTask.taskId,
                     doneTask.pbiId,
                   );

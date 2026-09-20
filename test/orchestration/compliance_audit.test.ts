@@ -4,7 +4,8 @@ import * as fs from 'fs';
 import { db } from '../../src/orchestration/db';
 import { saveSpec, saveTask, getTask, getTasksForPbi } from '../../src/orchestration/db/taskStore';
 import { savePbi, getPbi } from '../../src/orchestration/db/pbiStore';
-import { getGitSandbox, getWorkspaceRoot, initializeWorkspace } from '../../src/agentCore/workspace';
+import { getWorkspaceRoot, initializeWorkspace } from '../../src/agentCore/workspace';
+import { createTaskGitSandbox, getTaskGitSandbox } from '../../src/orchestration/taskGitSandbox';
 
 vi.mock('../../src/agentCore/auditorHelper', async () => {
   const actual = await vi.importActual<typeof import('../../src/agentCore/auditorHelper')>('../../src/agentCore/auditorHelper');
@@ -38,7 +39,7 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
   const specId = 'spec-compliance-test';
 
   beforeEach(async () => {
-    await initializeWorkspace();
+    await initializeWorkspace({ createSandbox: createTaskGitSandbox });
     // sessions rows (e.g. left by server-harness suites sharing /tmp/app-test.db)
     // reference tasks, so they must go first or this FK fails on file ordering.
     db.prepare('DELETE FROM sessions').run();
@@ -83,7 +84,7 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
   it('short-circuits with pass=true and no model call when pbi/<pbiId> has no diff against trunk', async () => {
     const pbiId = 'pbi-empty-diff';
     registerPbi(pbiId);
-    await getGitSandbox().ensurePbiBranch(pbiId);
+    await getTaskGitSandbox().ensurePbiBranch(pbiId);
 
     const result = await runComplianceAudit(getWorkspaceRoot(), pbiId);
 
@@ -106,7 +107,7 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
       blockedReason: null, createdAt: Date.now(), updatedAt: Date.now(), pbiId,
     });
 
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     await sandbox.checkoutTaskBranch(taskId, pbiId);
     fs.writeFileSync(path.join(getWorkspaceRoot(), 'clean-pass-output.txt'), 'work', 'utf8');
     await sandbox.commitAllChangesAsync('Do work');
@@ -136,7 +137,7 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
       blockedReason: null, createdAt: Date.now(), updatedAt: Date.now(), pbiId,
     });
 
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     await sandbox.checkoutTaskBranch(taskId, pbiId);
     fs.writeFileSync(path.join(getWorkspaceRoot(), 'with-findings-output.txt'), 'incomplete work', 'utf8');
     await sandbox.commitAllChangesAsync('Do incomplete work');
@@ -178,7 +179,7 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
       status: 'done', touches: null, dependsOn: null, branchName: `task/${taskId}`,
       blockedReason: null, createdAt: Date.now(), updatedAt: Date.now(), pbiId,
     });
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     await sandbox.checkoutTaskBranch(taskId, pbiId);
     fs.writeFileSync(path.join(getWorkspaceRoot(), 'bad-tool-call-output.txt'), 'work', 'utf8');
     await sandbox.commitAllChangesAsync('Do work');
@@ -196,7 +197,7 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
       // Helper mirroring the other tests' pattern: put a task's diff onto
       // pbi/<pbiId> so runComplianceAudit has something to audit.
       return (async () => {
-        const sandbox = getGitSandbox();
+        const sandbox = getTaskGitSandbox();
         await sandbox.checkoutTaskBranch(taskId, pbiId);
         fs.writeFileSync(path.join(getWorkspaceRoot(), `${taskId}-output.txt`), content, 'utf8');
         await sandbox.commitAllChangesAsync(`Do work for ${taskId}`);
@@ -258,9 +259,9 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
       // premature-escalation bug this guards against).
       const remediationTaskId = first.remediationTaskIds[0]!;
       fs.writeFileSync(path.join(getWorkspaceRoot(), 'remediation-output.txt'), 'still incomplete', 'utf8');
-      await getGitSandbox().checkoutTaskBranch(remediationTaskId, pbiId);
-      await getGitSandbox().commitAllChangesAsync('Remediation attempt');
-      await getGitSandbox().mergeTaskIntoPbi(remediationTaskId, pbiId);
+      await getTaskGitSandbox().checkoutTaskBranch(remediationTaskId, pbiId);
+      await getTaskGitSandbox().commitAllChangesAsync('Remediation attempt');
+      await getTaskGitSandbox().mergeTaskIntoPbi(remediationTaskId, pbiId);
       const remediationTask = getTasksForPbi(pbiId).find((t) => t.taskId === remediationTaskId)!;
       saveTask({ ...remediationTask, status: 'done', updatedAt: Date.now() });
 
@@ -292,9 +293,9 @@ describe('Compliance-audit operation (Issue 82 / RM-REQ-010/011/012/013)', () =>
       // must actually use the escalated tier.
       const secondRemediationTaskId = second.remediationTaskIds[0]!;
       fs.writeFileSync(path.join(getWorkspaceRoot(), 'remediation-2-output.txt'), 'yet another attempt', 'utf8');
-      await getGitSandbox().checkoutTaskBranch(secondRemediationTaskId, pbiId);
-      await getGitSandbox().commitAllChangesAsync('Second remediation attempt');
-      await getGitSandbox().mergeTaskIntoPbi(secondRemediationTaskId, pbiId);
+      await getTaskGitSandbox().checkoutTaskBranch(secondRemediationTaskId, pbiId);
+      await getTaskGitSandbox().commitAllChangesAsync('Second remediation attempt');
+      await getTaskGitSandbox().mergeTaskIntoPbi(secondRemediationTaskId, pbiId);
       const secondRemediationTask = getTasksForPbi(pbiId).find((t) => t.taskId === secondRemediationTaskId)!;
       saveTask({ ...secondRemediationTask, status: 'done', updatedAt: Date.now() });
 

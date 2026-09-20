@@ -1,14 +1,15 @@
 import { describe, it, beforeAll, expect } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
-import { initializeWorkspace, getGitSandbox, getWorkspaceRoot } from '../../src/agentCore/workspace';
+import { initializeWorkspace, getWorkspaceRoot } from '../../src/agentCore/workspace';
+import { createTaskGitSandbox, getTaskGitSandbox } from '../../src/orchestration/taskGitSandbox';
 import { db } from '../../src/orchestration/db';
 import { saveTask, getTask, saveSpec } from '../../src/orchestration/db/taskStore';
 import { savePbi } from '../../src/orchestration/db/pbiStore';
 
 describe('PBI-level integration branch + fast-forward merge (Issue 84 / RM-REQ-014/015/016)', () => {
   beforeAll(async () => {
-    await initializeWorkspace();
+    await initializeWorkspace({ createSandbox: createTaskGitSandbox });
 
     saveSpec({
       specId: 'spec-pbi-test',
@@ -50,7 +51,7 @@ describe('PBI-level integration branch + fast-forward merge (Issue 84 / RM-REQ-0
   }
 
   it('creates pbi/<pbiId> off trunk on first use, and is idempotent on repeat calls', async () => {
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     const pbiId = 'pbi-ensure-001';
     registerPbi(pbiId);
 
@@ -68,7 +69,7 @@ describe('PBI-level integration branch + fast-forward merge (Issue 84 / RM-REQ-0
   });
 
   it('branches a task off pbi/<pbiId> (not trunk) when a PBI context exists', async () => {
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     const pbiId = 'pbi-branch-002';
     const taskId = 'task-branch-002';
     registerPbi(pbiId);
@@ -94,7 +95,7 @@ describe('PBI-level integration branch + fast-forward merge (Issue 84 / RM-REQ-0
   });
 
   it('fast-forward merges a completed task branch into pbi/<pbiId>', async () => {
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     const pbiId = 'pbi-merge-003';
     const taskId = 'task-merge-003';
     registerPbi(pbiId);
@@ -119,7 +120,7 @@ describe('PBI-level integration branch + fast-forward merge (Issue 84 / RM-REQ-0
   });
 
   it('throws (no auto three-way merge) when the task branch has diverged from pbi/<pbiId>, and returns to base', async () => {
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     const pbiId = 'pbi-diverge-004';
     const taskId = 'task-diverge-004';
     registerPbi(pbiId);
@@ -153,7 +154,7 @@ describe('PBI-level integration branch + fast-forward merge (Issue 84 / RM-REQ-0
   });
 
   it('non-PBI tasks (no pbiId) still branch directly off trunk, unaffected by this change', async () => {
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     const taskId = 'task-no-pbi-005';
 
     saveTask({
@@ -181,7 +182,7 @@ describe('PBI-level integration branch + fast-forward merge (Issue 84 / RM-REQ-0
   });
 
   it('returns to base branch even when the pbi/<pbiId> checkout itself fails (e.g. pbi branch never created)', async () => {
-    const sandbox = getGitSandbox();
+    const sandbox = getTaskGitSandbox();
     const pbiId = 'pbi-never-created-006';
     const taskId = 'task-no-pbi-branch-006';
 
