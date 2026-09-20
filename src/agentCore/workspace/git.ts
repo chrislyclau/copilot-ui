@@ -4,6 +4,7 @@ export type ExecCommand = (
     command: string,
     signal?: AbortSignal
 ) => Promise<{ stdout: string; stderr: string; exitCode: number | null }>;
+
 // Tighter deadline than the runner's default user-command timeout — git
 // operations on local disk should never take long. If they do, something
 // is wrong (stale lock file, credential prompt) and we want to fail loudly.
