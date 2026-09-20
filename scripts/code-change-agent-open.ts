@@ -162,7 +162,7 @@ async function main() {
         );
         const result = await wrapper.sendAndWait(
             userPrompt,
-            1800000, // 30 minutes
+            2700000, // 45 minutes
             buildTransparencyListeners(),
             (id) => {
                 sessionId = id;
