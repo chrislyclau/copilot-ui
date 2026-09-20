@@ -36,8 +36,8 @@ import {
   formatEscalationPrompt,
   formatHumanEscalationPrompt,
   formatClarityCheckPrompt,
-} from "../../agentCore/prompt";
-import { makeDockerToolHandler } from "../../agentCore/toolHandlers";
+} from "../prompt";
+import { makeDockerToolHandler } from "../toolHandlers";
 import {
   RUN_TERMINAL_DOCKER_TOOL,
   submitAuditFindingsTool,
@@ -53,7 +53,7 @@ import {
 } from "../../config/gates";
 import { runSpecAudit } from "../gates/specAuditor";
 import { runComplianceAudit, shouldTriggerComplianceAudit } from "../gates/complianceAudit";
-import { selectRotatingAuditorConfig } from "../../agentCore/auditorHelper";
+import { selectRotatingAuditorConfig } from "../auditorPolicy";
 import { validateCwd } from "../security/pathGuard";
 import {
   initializeWorkspace,
@@ -66,7 +66,7 @@ import {
   SlidingWindowCircularBuffer,
   clearCleanCache,
 } from "../../agentCore/contextManager";
-import { fetchStubbedTraceResponse } from "../../agentCore/traceRegistry";
+import { fetchStubbedTraceResponse } from "../traceRegistry";
 import {
   appendEscalation,
   updateEscalationStatus,

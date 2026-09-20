@@ -3,16 +3,17 @@
  * baseline (last re-captured 2026-09-15 against copilot 1.0.83; zero
  * tools, zero caller content -- see test/scripts/capture-system-message-baseline.ts).
  *
- * Per issue #345, SessionWrapper now drives `systemMessage` in `replace`
- * mode exclusively (never `append`/`customize`): those modes still splice
- * in an SDK-managed `tool_instructions` section that's re-derived from the
- * live `availableTools` on every turn, which is exactly the KV-cache-prefix
- * hazard #345 exists to close (see sessionWrapper.integration.test.ts's
- * now-fixed "freezes systemMessage across resume" case). `replace` mode
- * hands us the entire prompt with nothing SDK-injected left to drift --
- * but it also means WE now own reproducing whatever of the SDK's baseline
- * guidance we still want the model to have, since replace mode drops it
- * entirely otherwise.
+ * History: this capture was made while SessionWrapper drove `systemMessage`
+ * in `replace` mode exclusively (issue #345 -- `append`/`customize` modes
+ * splice in an SDK-managed `tool_instructions` section re-derived from the
+ * live `availableTools` on every turn, the KV-cache-prefix hazard #345
+ * closed; see sessionWrapper.integration.test.ts's now-fixed "freezes
+ * systemMessage across resume" case). SessionWrapper has since moved back
+ * to `customize` mode (SYS-REQ-028h), so the SDK injects its own baseline
+ * sections again and this constant is no longer the basis of any live
+ * prompt. It remains the drift-check fixture: the capture script and the
+ * integration test compare a fresh SDK capture against it so an SDK
+ * upgrade that changes its own baseline prompt is caught immediately.
  *
  * Two sections were deliberately dropped from the capture, not just
  * overlooked:

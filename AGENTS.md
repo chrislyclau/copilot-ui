@@ -123,8 +123,9 @@ for the remainder of the session.
 This surfaced as issue #208: `executeAuditSession`'s nudge-retry resume path
 (`runForcedToolTurn`'s `resumeConfig` in `toolCallEnforcement.ts`) wasn't
 carrying `systemMessage` across the resume, even though the field itself
-(`{ mode: "replace", content: ... }`, see `auditorHelper.ts` ~line 251) was
-correct. The fix was to also pass it on resume, not to change the field.
+(the curated content string assembled by `buildAuditorSessionSettings` in
+`auditorHelper.ts`) was correct. The fix was to also pass it on resume, not
+to change the field.
 
 This is a general SDK usage rule, not specific to PR review or to
 `executeAuditSession` -- it applies to **any** future caller that resumes a
@@ -197,7 +198,8 @@ An EARS requirement **SHALL** describe the system's behavior in its intended tar
 `run_terminal_docker` args (`workingDir`, `timeoutSeconds`) are parsed, clamped, and
 resolved in exactly two shared places: `src/agentCore/execTool.ts` (parse + clamp +
 output truncation) and `src/agentCore/workspace/execHelpers.ts` (`resolveWorkDir` +
-timeout annotation). Both exec handlers (`makeDockerToolHandler` in `toolHandlers.ts`
+timeout annotation). Both exec handlers (`makeDockerToolHandler` in
+`src/orchestration/toolHandlers.ts`
 and `makeAuditorExecToolHandler` in `auditorHelper.ts`) funnel through them. Don't
 re-roll arg parsing in a new call site — the handlers previously read `workingDir`
 only to log it (and the auditor one to check `..`) while silently running everything

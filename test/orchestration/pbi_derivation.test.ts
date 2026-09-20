@@ -9,8 +9,15 @@ vi.mock('../../src/agentCore/auditorHelper', async () => {
   const actual = await vi.importActual<typeof import('../../src/agentCore/auditorHelper')>('../../src/agentCore/auditorHelper');
   return {
     ...actual,
-    getAuditorExecutionConfig: () => ({ model: 'mock-model', provider: undefined }),
     executeAuditSession: vi.fn(),
+  };
+});
+
+vi.mock('../../src/orchestration/auditorPolicy', async () => {
+  const actual = await vi.importActual<typeof import('../../src/orchestration/auditorPolicy')>('../../src/orchestration/auditorPolicy');
+  return {
+    ...actual,
+    getAuditorExecutionConfig: () => ({ model: 'mock-model', provider: undefined }),
   };
 });
 

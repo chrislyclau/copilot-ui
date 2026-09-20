@@ -53,22 +53,20 @@ interface KnownViolation {
     backEdge: number;
 }
 
-// The five back-edges the extraction plan starts from (plan §3). Keyed by
-// (file, spec) so entries survive line shifts; one entry covers every
-// occurrence of that pair (the three dynamic taskStore imports in git.ts are
-// one entry, the two type-position express imports in toolHandlers.ts are
-// one entry). Back-edge 2 spans two files and back-edge 4 spans two files,
-// so five back-edges expand to seven entries.
+// Back-edges still present after phase 1 (plan §3; back-edges 1 and the
+// toolHandlers half of 4 were removed by moving toolHandlers.ts into
+// src/orchestration). Keyed by (file, spec) so entries survive line shifts;
+// one entry covers every occurrence of that pair (the three dynamic
+// taskStore imports in git.ts are one entry). Back-edge 2 now spans only
+// providerRegistry.ts (auditorHelper's policy half moved to
+// src/orchestration/auditorPolicy.ts in phase 1), so the remaining
+// back-edges expand to four entries.
 const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
-    // Back-edge 1: LogLevel from orchestration/orchestrator/sessionState.
-    { file: 'src/agentCore/toolHandlers.ts', spec: '../orchestration/orchestrator/sessionState', backEdge: 1 },
     // Back-edge 2: config/models data (ModelProviderConfig, MODEL_TIERS, ...).
-    { file: 'src/agentCore/auditorHelper.ts', spec: '../config/models', backEdge: 2 },
     { file: 'src/agentCore/providerRegistry.ts', spec: '../config/models', backEdge: 2 },
     // Back-edge 3: config/tools (RUN_TERMINAL_DOCKER_TOOL).
     { file: 'src/agentCore/auditorHelper.ts', spec: '../config/tools', backEdge: 3 },
     // Back-edge 4: express types (type-only; becomes an optional peer dep).
-    { file: 'src/agentCore/toolHandlers.ts', spec: 'express', backEdge: 4 },
     { file: 'src/agentCore/providerProxy.ts', spec: 'express', backEdge: 4 },
     // Back-edge 5: dynamic import() of orchestration/db/taskStore (x3).
     { file: 'src/agentCore/workspace/git.ts', spec: '../../orchestration/db/taskStore', backEdge: 5 },

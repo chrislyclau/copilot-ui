@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { CapiProxy } from '../harness/CapiProxy';
 import { executeAuditSession, ToolDefinition } from '../../src/agentCore/auditorHelper';
-import { selectRotatingAuditorConfig } from '../../src/agentCore/auditorHelper';
+import { selectRotatingAuditorConfig } from '../../src/orchestration/auditorPolicy';
 
 // Exercises the Issue 79 auditor rotation pool AND the Issue #180 diagnostic
 // logging (sendAndWaitWithAbort's tool.execution_start / usage-telemetry

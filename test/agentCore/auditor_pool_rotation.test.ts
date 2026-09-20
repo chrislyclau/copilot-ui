@@ -125,7 +125,7 @@ describe('selectRotatingAuditorConfig (Issue 79 / RM-REQ-030/031/032)', () => {
   });
 
   it('flags singleModelPool when only one model is configured (default pool)', async () => {
-    const { selectRotatingAuditorConfig } = await import('../../src/agentCore/auditorHelper');
+    const { selectRotatingAuditorConfig } = await import('../../src/orchestration/auditorPolicy');
     const selection = selectRotatingAuditorConfig(0);
     expect(selection.singleModelPool).toBe(true);
     expect(selection.poolSize).toBe(1);
@@ -135,7 +135,7 @@ describe('selectRotatingAuditorConfig (Issue 79 / RM-REQ-030/031/032)', () => {
   it('does not flag singleModelPool when the pool has multiple models', async () => {
     process.env.AUDITOR_POOL = 'gemini:gemini-3.1-flash-lite,gemini:gemini-3.5-flash';
     vi.resetModules();
-    const { selectRotatingAuditorConfig } = await import('../../src/agentCore/auditorHelper');
+    const { selectRotatingAuditorConfig } = await import('../../src/orchestration/auditorPolicy');
     const first = selectRotatingAuditorConfig(0);
     const second = selectRotatingAuditorConfig(1);
 
@@ -149,7 +149,7 @@ describe('selectRotatingAuditorConfig (Issue 79 / RM-REQ-030/031/032)', () => {
   it('advances rotationIndex by exactly one per call regardless of pool size', async () => {
     process.env.AUDITOR_POOL = 'gemini:gemini-3.1-flash-lite,gemini:gemini-3.5-flash,gemini:gemini-3.1-pro-preview';
     vi.resetModules();
-    const { selectRotatingAuditorConfig } = await import('../../src/agentCore/auditorHelper');
+    const { selectRotatingAuditorConfig } = await import('../../src/orchestration/auditorPolicy');
     for (let i = 0; i < 5; i++) {
       const selection = selectRotatingAuditorConfig(i);
       expect(selection.nextRotationIndex).toBe(i + 1);
@@ -165,7 +165,7 @@ describe('selectRotatingAuditorConfig (Issue 79 / RM-REQ-030/031/032)', () => {
     });
 
     it('does not forward the caller-supplied (Implementor/Gemini) apiKey to a rotated-in non-Gemini pool entry', async () => {
-      const { selectRotatingAuditorConfig } = await import('../../src/agentCore/auditorHelper');
+      const { selectRotatingAuditorConfig } = await import('../../src/orchestration/auditorPolicy');
       // rotationIndex 1 selects the openai:gpt-4o-mini pool entry.
       const selection = selectRotatingAuditorConfig(1, 'implementor-gemini-key');
 
@@ -176,7 +176,7 @@ describe('selectRotatingAuditorConfig (Issue 79 / RM-REQ-030/031/032)', () => {
     });
 
     it('still forwards the caller-supplied apiKey when the rotated-in entry is actually Gemini', async () => {
-      const { selectRotatingAuditorConfig } = await import('../../src/agentCore/auditorHelper');
+      const { selectRotatingAuditorConfig } = await import('../../src/orchestration/auditorPolicy');
       // rotationIndex 0 selects the gemini:gemini-3.1-flash-lite pool entry.
       const selection = selectRotatingAuditorConfig(0, 'implementor-gemini-key');
 

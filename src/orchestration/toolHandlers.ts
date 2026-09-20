@@ -1,6 +1,6 @@
-import { getExecCommand, getWorkspaceRoot, resolveWorkDir } from './workspace';
-import { buildExecOptions, parseExecToolArgs, truncateExecResult } from './execTool';
-import { LogLevel } from '../orchestration/orchestrator/sessionState';
+import { getExecCommand, getWorkspaceRoot, resolveWorkDir } from '../agentCore/workspace';
+import { buildExecOptions, parseExecToolArgs, truncateExecResult } from '../agentCore/execTool';
+import { LogLevel } from './orchestrator/sessionState';
 
 
 export function makeDockerToolHandler(

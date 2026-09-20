@@ -68,15 +68,15 @@ import { runGate, runTests, runLint, runWithTimeout } from './gates';
 import { MODEL_TIERS, getNextTier } from '../config/models';
 import { SessionRecord, StateSnapshot, CopilotEventData, Turn, getSequenceId } from '../types/session';
 import { ExecutionConfig, ProviderConfig } from '../agentCore/providerRegistry';
-import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from '../agentCore/prompt';
-import { makeDockerToolHandler } from '../agentCore/toolHandlers';
+import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from './prompt';
+import { makeDockerToolHandler } from './toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from '../config/tools';
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from '../config/gates';
 import { runSpecAudit } from './gates/specAuditor';
 import { runPbiDerivation } from './gates/pbiDerivation';
 import { initializeWorkspace, getGitSandbox, getExecCommand, getWorkspaceHostLocation, getWorkspaceRoot } from '../agentCore/workspace';
 import { enforceWorkingMemoryTruncation, SlidingWindowCircularBuffer, clearCleanCache } from '../agentCore/contextManager';
-import { fetchStubbedTraceResponse } from '../agentCore/traceRegistry';
+import { fetchStubbedTraceResponse } from './traceRegistry';
 import { appendEscalation, updateEscalationStatus, getEscalations, getPendingEscalation } from './escalationStore';
 import { createSseWriter } from './sseWriter';
 import { installConsoleInterceptors } from './interceptors';
@@ -99,7 +99,8 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 import { ProviderRegistry } from '../agentCore/providerRegistry';
-import { getAuditorExecutionConfig, executeAuditSession } from '../agentCore/auditorHelper';
+import { getAuditorExecutionConfig } from './auditorPolicy';
+import { executeAuditSession } from '../agentCore/auditorHelper';
 
 
 // Ensure the Copilot CLI path is explicitly set to work reliably in both dev and bundled production (CJS) modes

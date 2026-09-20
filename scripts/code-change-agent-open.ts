@@ -7,10 +7,8 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
     }
 }
 import type { Server } from "node:http";
-import {
-    getReviewerExecutionConfig,
-    makeAuditorExecToolHandler,
-} from "../src/agentCore/auditorHelper";
+import { getReviewerExecutionConfig } from "../src/orchestration/auditorPolicy";
+import { makeAuditorExecToolHandler } from "../src/agentCore/auditorHelper";
 import {
     CopilotClient,
     type SdkProviderConfig,

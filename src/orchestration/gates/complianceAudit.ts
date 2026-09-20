@@ -1,4 +1,5 @@
-import { getAuditorExecutionConfig, executeAuditSession } from '../../agentCore/auditorHelper';
+import { getAuditorExecutionConfig } from '../auditorPolicy';
+import { executeAuditSession } from '../../agentCore/auditorHelper';
 import { submitComplianceAuditTool } from '../../config/tools';
 import { getGitSandbox, getExecCommand, getWorkspaceRoot } from '../../agentCore/workspace';
 import { getPbi, savePbi } from '../db/pbiStore';

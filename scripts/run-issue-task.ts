@@ -9,7 +9,7 @@ if (!process.env.REVIEWER_PROVIDER && process.env.REVIEWER_MODEL) {
 import { execFileSync } from 'node:child_process';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/orchestration/serverRuntime';
-import { getReviewerExecutionConfig } from '../src/agentCore/auditorHelper';
+import { getReviewerExecutionConfig } from '../src/orchestration/auditorPolicy';
 import { runForcedToolTurnUntilTimeout } from '../src/agentCore/toolCallEnforcement';
 import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/agentCore/copilotSdk/boundary';
 import { SessionWrapper } from '../src/agentCore/copilotSdk/sessionWrapper';
