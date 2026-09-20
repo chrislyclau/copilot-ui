@@ -7,7 +7,7 @@
         "dev": "tsx server.entry.ts",
         "build": "vite build && esbuild server.entry.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
         "start": "node dist/server.cjs",
-        "lint": "tsc --noEmit -p tsconfig.json && eslint . && tsx scripts/check-explicit-any.ts",
+        "lint": "tsc --noEmit -p tsconfig.json && eslint . && tsx scripts/check-explicit-any.ts && tsx scripts/check-agentcore-boundary.ts",
         "diagnose:gates": "tsx scripts/diagnose-gates.ts",
         "review:pr": "tsx scripts/review-pr.ts",
         "agent:issue": "tsx scripts/run-issue-task.ts",
