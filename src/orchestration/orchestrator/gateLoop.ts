@@ -37,7 +37,7 @@ import {
   formatHumanEscalationPrompt,
   formatClarityCheckPrompt,
 } from "../../agentCore/prompt";
-import { makeDockerToolHandler } from "../../agentCore/toolHandlers";
+import { makeDockerToolHandler } from "../toolHandlers";
 import {
   RUN_TERMINAL_DOCKER_TOOL,
   submitAuditFindingsTool,

@@ -69,7 +69,7 @@ import { MODEL_TIERS, getNextTier } from '../config/models';
 import { SessionRecord, StateSnapshot, CopilotEventData, Turn, getSequenceId } from '../types/session';
 import { ExecutionConfig, ProviderConfig } from '../agentCore/providerRegistry';
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from '../agentCore/prompt';
-import { makeDockerToolHandler } from '../agentCore/toolHandlers';
+import { makeDockerToolHandler } from './toolHandlers';
 import { RUN_TERMINAL_DOCKER_TOOL, submitAuditFindingsTool, COMPOSER_ROUTER_TOOL, AMBIGUITY_CHECK_TOOL } from '../config/tools';
 import { normalizeGates, TASK_TYPE_GATE_MAP, resolvePipeline } from '../config/gates';
 import { runSpecAudit } from './gates/specAuditor';
