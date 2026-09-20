@@ -10,7 +10,8 @@ import { writeFileSync, mkdirSync, existsSync, copyFileSync, readdirSync, rmSync
 import { join, basename } from 'node:path';
 import type { Server } from 'node:http';
 import { app, setActiveOpenRouterSessionId } from '../src/orchestration/serverRuntime';
-import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction, makeAuditorExecToolHandler } from '../src/agentCore/auditorHelper';
+import { getReviewerExecutionConfig, crossArtifactDisagreementInstruction } from '../src/orchestration/auditorPolicy';
+import { makeAuditorExecToolHandler } from '../src/agentCore/auditorHelper';
 import { runForcedToolTurnUntilTimeout } from '../src/agentCore/toolCallEnforcement';
 import { CopilotClient, type SdkProviderConfig, type ToolInvocation } from '../src/agentCore/copilotSdk/boundary';
 import { SessionWrapper } from '../src/agentCore/copilotSdk/sessionWrapper';

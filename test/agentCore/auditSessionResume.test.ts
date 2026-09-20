@@ -3,7 +3,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { CapiProxy } from '../harness/CapiProxy';
-import { executeAuditSession, getAuditorExecutionConfig, ToolDefinition } from '../../src/agentCore/auditorHelper';
+import { executeAuditSession, ToolDefinition } from '../../src/agentCore/auditorHelper';
+import { getAuditorExecutionConfig } from '../../src/orchestration/auditorPolicy';
 
 // Exercises executeAuditSession's retry path (runForcedToolTurn -> resumeSession)
 // against a real CopilotClient talking to the CapiProxy harness described in

@@ -99,7 +99,8 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 import { ProviderRegistry } from '../agentCore/providerRegistry';
-import { getAuditorExecutionConfig, executeAuditSession } from '../agentCore/auditorHelper';
+import { getAuditorExecutionConfig } from './auditorPolicy';
+import { executeAuditSession } from '../agentCore/auditorHelper';
 
 
 // Ensure the Copilot CLI path is explicitly set to work reliably in both dev and bundled production (CJS) modes

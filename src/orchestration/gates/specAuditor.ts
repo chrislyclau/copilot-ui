@@ -1,4 +1,5 @@
-import { getAuditorExecutionConfig, executeAuditSession } from '../../agentCore/auditorHelper';
+import { getAuditorExecutionConfig } from '../auditorPolicy';
+import { executeAuditSession } from '../../agentCore/auditorHelper';
 import { ExecutionConfig } from '../../agentCore/providerRegistry';
 import { submitSpecAuditTool } from '../../config/tools';
 import { getGitSandbox, getExecCommand } from '../../agentCore/workspace';

@@ -53,7 +53,7 @@ import {
 } from "../../config/gates";
 import { runSpecAudit } from "../gates/specAuditor";
 import { runComplianceAudit, shouldTriggerComplianceAudit } from "../gates/complianceAudit";
-import { selectRotatingAuditorConfig } from "../../agentCore/auditorHelper";
+import { selectRotatingAuditorConfig } from "../auditorPolicy";
 import { validateCwd } from "../security/pathGuard";
 import {
   initializeWorkspace,

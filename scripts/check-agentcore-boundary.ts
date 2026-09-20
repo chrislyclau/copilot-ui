@@ -57,11 +57,12 @@ interface KnownViolation {
 // toolHandlers half of 4 were removed by moving toolHandlers.ts into
 // src/orchestration). Keyed by (file, spec) so entries survive line shifts;
 // one entry covers every occurrence of that pair (the three dynamic
-// taskStore imports in git.ts are one entry). Back-edge 2 spans two files,
-// so the remaining back-edges expand to four entries.
+// taskStore imports in git.ts are one entry). Back-edge 2 now spans only
+// providerRegistry.ts (auditorHelper's policy half moved to
+// src/orchestration/auditorPolicy.ts in phase 1), so the remaining
+// back-edges expand to four entries.
 const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
     // Back-edge 2: config/models data (ModelProviderConfig, MODEL_TIERS, ...).
-    { file: 'src/agentCore/auditorHelper.ts', spec: '../config/models', backEdge: 2 },
     { file: 'src/agentCore/providerRegistry.ts', spec: '../config/models', backEdge: 2 },
     // Back-edge 3: config/tools (RUN_TERMINAL_DOCKER_TOOL).
     { file: 'src/agentCore/auditorHelper.ts', spec: '../config/tools', backEdge: 3 },
