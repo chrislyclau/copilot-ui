@@ -10,7 +10,7 @@ import { runForcedToolTurnUntilTimeout } from './toolCallEnforcement';
 import { CopilotClient, SdkProviderConfig, PermissionRequest, PermissionRequestResult } from './copilotSdk/boundary';
 import { SessionWrapper } from './copilotSdk/sessionWrapper';
 import { ExecutionConfig } from './providerRegistry';
-import { RUN_TERMINAL_DOCKER_TOOL } from '../config/tools';
+import { RUN_TERMINAL_DOCKER_TOOL } from './config/tools';
 import { getExecCommand, getWorkspaceRoot, resolveWorkDir } from './workspace';
 import { buildExecOptions, parseExecToolArgs, truncateExecResult } from './execTool';
 

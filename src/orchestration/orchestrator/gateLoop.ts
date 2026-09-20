@@ -21,6 +21,7 @@ import {
   DEFAULT_ROLES_CONFIG,
   MODEL_TIERS,
   getNextTier,
+  getProviderRegistryConfig,
 } from "../../config/models";
 import { runGate, runTests, runLint, runWithTimeout } from "../gates";
 import {
@@ -774,7 +775,7 @@ export const handleGateLoop = async (
           ? [String(rawGates)]
           : [];
       const keyToUse = apiKey || process.env.GEMINI_API_KEY;
-      const registryInstance = new ProviderRegistry(keyToUse);
+      const registryInstance = new ProviderRegistry(keyToUse, getProviderRegistryConfig());
 
       if (simulateBackpressureDelayMs) {
         (res as ExtendedResponse).simulateBackpressureDelayMs = Number(

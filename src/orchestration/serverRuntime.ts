@@ -65,7 +65,7 @@ export {
 export type { CopilotCreateSessionOptions };
 import { DEFAULT_ROLES_CONFIG, ProviderType } from '../config/models';
 import { runGate, runTests, runLint, runWithTimeout } from './gates';
-import { MODEL_TIERS, getNextTier } from '../config/models';
+import { MODEL_TIERS, getNextTier, getProviderRegistryConfig } from '../config/models';
 import { SessionRecord, StateSnapshot, CopilotEventData, Turn, getSequenceId } from '../types/session';
 import { ExecutionConfig, ProviderConfig } from '../agentCore/providerRegistry';
 import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt, formatClarityCheckPrompt } from './prompt';
@@ -325,7 +325,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       const activeModel = (typeof model === "string" ? model : undefined) || "gemini-3.1-flash-lite";
 
       // Resolve the provider first to determine which env var to check for the key
-      const detectionInstance = new ProviderRegistry(undefined);
+      const detectionInstance = new ProviderRegistry(undefined, getProviderRegistryConfig());
       const activeProviderType = detectionInstance.getProviderType(activeModel);
 
       // Map the active provider to its specific env var
@@ -333,7 +333,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         resolveProviderSpecificKey(activeProviderType);
       const keyToUse = (typeof apiKey === "string" ? apiKey : undefined) || providerSpecificKey;
 
-      const registryInstance = new ProviderRegistry(keyToUse);
+      const registryInstance = new ProviderRegistry(keyToUse, getProviderRegistryConfig());
 
       const requiresKey =
         activeProviderType !== "copilot-native" &&
@@ -700,7 +700,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
       const targetModel = (typeof model === "string" ? model : undefined) || "gemini-3.1-flash-lite";
 
       // Resolve the provider first to determine which env var to check for the key
-      const detectionInstance = new ProviderRegistry(undefined);
+      const detectionInstance = new ProviderRegistry(undefined, getProviderRegistryConfig());
       const activeProviderType = detectionInstance.getProviderType(targetModel);
 
       // Map the active provider to its specific env var
@@ -721,7 +721,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
         `[API Request] POST /api/copilot/run: model=${model || "default"}, cwd=${cwd || "default"}, sessionId=${sessionId || "none"}, promptLength=${prompt ? prompt.length : 0}`,
       );
 
-      const registryInstance = new ProviderRegistry(keyToUse);
+      const registryInstance = new ProviderRegistry(keyToUse, getProviderRegistryConfig());
 
       const requiresKey =
         activeProviderType !== "copilot-native" &&
