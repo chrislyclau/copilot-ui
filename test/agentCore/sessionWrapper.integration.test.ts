@@ -127,7 +127,8 @@ describe('SessionWrapper against the live Copilot SDK (Issue #332)', () => {
   // src/test/scripts/capture-system-message-baseline.ts captures by hand --
   // then asserts the first history entry's system message, once the two
   // per-session dynamic sections are stripped, is byte-identical to the
-  // frozen constant SessionWrapper builds `replace`-mode prompts on top of.
+  // frozen constant captured from the SDK's own baseline
+  // (FROZEN_SDK_SYSTEM_MESSAGE_BASELINE).
   // A real `@github/copilot-sdk` upgrade that changes its own baseline
   // prompt fails this test immediately instead of silently drifting until
   // someone re-runs the capture script by hand.

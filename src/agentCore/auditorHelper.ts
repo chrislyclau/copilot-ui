@@ -18,15 +18,22 @@ import { buildExecOptions, parseExecToolArgs, truncateExecResult } from './execT
 /**
  * Tool-usage guidance carried over from the base CLI system prompt.
  *
- * Previously this was supplied implicitly: buildAuditorSessionSettings used
- * systemMessage mode "customize" and left tool_instructions/tool_efficiency
- * unoverridden, so the SDK's own defaults for these sections stayed in the
- * generated system message. Switching to mode "replace" (see issue #146 --
- * customize mode's per-tool section regeneration on resumeSession retries
- * was invalidating prompt/KV cache) means nothing is supplied by the SDK
- * anymore; the auditor sessions still call bash/view/edit/grep/glob while
- * exploring a diff, so that guidance needs to be included explicitly here
- * instead.
+ * History: this was originally supplied implicitly by the SDK's own
+ * defaults. It was made explicit when the session's systemMessage moved to
+ * `replace` mode (issue #146 -- customize mode's per-tool section
+ * regeneration on resumeSession retries was invalidating prompt/KV cache),
+ * which dropped every SDK-supplied section, and auditor sessions still call
+ * bash/view/edit/grep/glob while exploring a diff.
+ *
+ * Since the SessionWrapper migration back to `customize` mode
+ * (SYS-REQ-028h), the SDK injects its own baseline/tool-instructions
+ * sections again, so this boilerplate now overlaps with SDK-supplied
+ * guidance (the SDK baseline carries a "# Tool usage efficiency" section --
+ * see FROZEN_SDK_SYSTEM_MESSAGE_BASELINE in copilotSdk/systemMessageBaseline.ts).
+ * It is kept verbatim for now: dropping it changes the prompt every auditor
+ * session sees, which is a behavior change outside the extraction plan's
+ * no-behavior-changes rule. Deduplicating it against the SDK baseline is a
+ * follow-up.
  *
  * This is a hand-maintained subset of the full base CLI system prompt --
  * not everything the CLI documents applies to an auditor session (no
@@ -160,20 +167,19 @@ export function buildAuditorSessionSettings(
     // heartbeat during long reasoning turns without the token overhead of
     // "detailed". Models that don't support reasoning summaries ignore this.
     reasoningSummary: 'concise' as const,
-    // Explicit `replace` with our curated content -- NOT left unset. An
-    // unset/absent systemMessage makes the SDK fall back to its own full
-    // default `copilot-cli` system prompt (task/sub-agent, sql,
-    // report_intent, submit_code_review docs, etc.), which is exactly what
-    // TOOL_USAGE_BOILERPLATE's doc comment above says this session
-    // deliberately excludes. See issue #208: the original bug was that
-    // resumeSession()'s `resumeConfig` (toolCallEnforcement.ts) didn't
-    // carry this field, not that the field itself was wrong -- so the fix
-    // is to also pass it on resume, not drop it. This is a general SDK
-    // hazard, not specific to this session -- see AGENTS.md ("resumeSession()
-    // drops the system prompt unless you re-pass it") for the rule any
-    // future resumeSession() caller (e.g. run-issue-task.ts) must follow.
+    // Curated content only -- never left unset. executeAuditSession (the
+    // only production consumer of this builder) does not send this object
+    // verbatim: it extracts `content` and hands it to
+    // SessionWrapper.setSystemPrompt(), which folds it into the session's
+    // `customize`-mode systemMessage (SYS-REQ-028h) alongside the SDK's own
+    // baseline sections. The historical `mode: "replace"` marker was
+    // dropped -- nothing consumed it after that migration. See issue #208:
+    // resumeSession()'s `resumeConfig` (toolCallEnforcement.ts) must carry
+    // the system prompt across a resume -- a general SDK hazard, not
+    // specific to this session -- see AGENTS.md ("resumeSession() drops the
+    // system prompt unless you re-pass it") for the rule any future
+    // resumeSession() caller (e.g. run-issue-task.ts) must follow.
     systemMessage: {
-        mode: "replace",
         content: `${TOOL_USAGE_BOILERPLATE}\n\n${systemPrompt}`,
     },
     // Issue #299: session builders here previously only assembled the
