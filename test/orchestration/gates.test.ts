@@ -89,7 +89,7 @@ describe('Gate Parser & Lifecycle Regression Tests', () => {
   });
 
   it('Test Case 5: History-Aware Prompt Generation', async () => {
-    const { formatContextNarrowingPrompt } = await import('../../src/agentCore/prompt');
+    const { formatContextNarrowingPrompt } = await import('../../src/orchestration/prompt');
     const mockHistory: { role: 'user' | 'assistant'; content: string }[] = [
       { role: 'user', content: 'Fix the bug in main.ts' },
       { role: 'assistant', content: 'I have updated the division logic.' }

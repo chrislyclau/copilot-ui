@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import assert from 'node:assert';
-import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt } from '../../src/agentCore/prompt';
+import { formatContextNarrowingPrompt, formatEscalationPrompt, formatHumanEscalationPrompt } from '../../src/orchestration/prompt';
 import { processEvents } from '../utils/eventProcessor';
 import { SIMULATOR_SSE_EVENTS, FAILED_SIMULATOR_SSE_EVENTS } from '../fixtures/mockStreamPayloads';
 
