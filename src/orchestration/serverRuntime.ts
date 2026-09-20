@@ -5,7 +5,7 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { validateCwd } from './security/pathGuard';
-import { mountProviderProxyRoute, setActiveOpenRouterSessionId } from '../agentCore/providerProxy';
+import { mountProviderProxyRoute, setActiveOpenRouterSessionId } from '../agentCore/proxy/providerProxy';
 export { setActiveOpenRouterSessionId };
 import { CopilotClient, CopilotSession, PermissionRequestResult, SessionConfig, SdkProviderConfig, Tool, SessionEvent } from '../agentCore/copilotSdk/boundary';
 import { handleGateLoop, handleGateRunPermission, handleGateStream, globalAutoApproveAll, setGlobalAutoApproveAll } from './orchestrator/gateLoop';
