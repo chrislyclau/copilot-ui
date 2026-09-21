@@ -271,11 +271,39 @@ async function main() {
   const hasDiffStat = existsSync(join(contextDir, 'diff-stat.txt'));
 
   const hasFullDiff = existsSync(join(contextDir, 'full-diff.patch'));
+
+  // The CI workflow (code-review.yml) checks out the PR's base branch for the
+  // reviewer runtime and exposes the PR's own code as a worktree under
+  // .review-context/pr-tree. Detect which situation we're actually in (by
+  // comparing HEAD against the PR head sha) so the manifest note is truthful
+  // under both the new and the legacy checkout layout.
+  const prTreeDir = join(contextDir, 'pr-tree');
+  const hasPrTree = existsSync(prTreeDir);
+  let workingTreeNote = '';
+  try {
+    const localHeadSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    if (localHeadSha !== headSha) {
+      workingTreeNote = [
+        `**Working tree note:** This working directory is NOT the PR head -- it is checked out at the PR's base branch (HEAD \`${localHeadSha.slice(0, 12)}\`, PR head \`${headSha.slice(0, 12)}\`). The reviewer runtime deliberately runs on base-branch code so a broken PR cannot break the review itself.`,
+        `\`diff.patch\` is the authoritative record of the PR's changes.`,
+        hasPrTree
+          ? `The PR's own code is checked out at \`pr-tree/\` (read-only worktree, no node_modules -- run \`npm ci --legacy-peer-deps\` inside it before running tsc/eslint/vitest against the PR code).`
+          : '',
+      ].filter(Boolean).join(' ');
+    }
+  } catch {
+    // git unavailable or not a repo -- omit the note rather than guess.
+  }
+
   const manifest = [
     '# PR Review Context Files',
+    ...(workingTreeNote ? ['', workingTreeNote, ''] : []),
     `- \`diff.patch\`: A standard unified diff of the changes in this PR${incremental ? ' since the last review' : ''}.`,
     hasFullDiff ? '- \`full-diff.patch\`: The full unified diff of all changes in this PR.' : null,
     hasDiffStat ? '- \`diff-stat.txt\`: A summary of the changed files and lines.' : null,
+    hasPrTree
+      ? '- \`pr-tree/\`: The PR head branch checked out as a git worktree -- the PR\'s version of every file, for reading full-file context around diff hunks and for running validation commands against the PR code.'
+      : null,
     '- \`pr-meta.md\`: The PR title and description.',
     '- \`comments.md\`: The full comment history of the PR.',
     linkedIssues.length
