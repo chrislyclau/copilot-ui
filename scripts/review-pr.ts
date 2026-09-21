@@ -20,6 +20,7 @@ import {
   loadPreviousReviewState,
   isCommitReachable,
   isAncestor,
+  buildWorkingTreeNote,
   renderStateMarker,
   fetchComments,
   normalizeBotLogin,
@@ -274,26 +275,16 @@ async function main() {
 
   // The CI workflow (code-review.yml) checks out the PR's base branch for the
   // reviewer runtime and exposes the PR's own code as a worktree under
-  // .review-context/pr-tree. Detect which situation we're actually in (by
-  // comparing HEAD against the PR head sha) so the manifest note is truthful
-  // under both the new and the legacy checkout layout.
+  // .review-context/pr-tree. Detect which situation we're actually in so the
+  // manifest note is truthful under both the new and the legacy checkout
+  // layout. A HEAD sha different from the PR head alone is NOT sufficient:
+  // the legacy workflow checks out refs/pull/N/merge (a merge commit whose
+  // second parent IS the PR head), so the PR's code is in the tree there too.
+  // Only claim "this is the base branch" when the PR head is not an ancestor
+  // of HEAD -- true for a base-branch checkout, false for a merge-commit one.
   const prTreeDir = join(contextDir, 'pr-tree');
   const hasPrTree = existsSync(prTreeDir);
-  let workingTreeNote = '';
-  try {
-    const localHeadSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-    if (localHeadSha !== headSha) {
-      workingTreeNote = [
-        `**Working tree note:** This working directory is NOT the PR head -- it is checked out at the PR's base branch (HEAD \`${localHeadSha.slice(0, 12)}\`, PR head \`${headSha.slice(0, 12)}\`). The reviewer runtime deliberately runs on base-branch code so a broken PR cannot break the review itself.`,
-        `\`diff.patch\` is the authoritative record of the PR's changes.`,
-        hasPrTree
-          ? `The PR's own code is checked out at \`pr-tree/\` (read-only worktree, no node_modules -- run \`npm ci --legacy-peer-deps\` inside it before running tsc/eslint/vitest against the PR code).`
-          : '',
-      ].filter(Boolean).join(' ');
-    }
-  } catch {
-    // git unavailable or not a repo -- omit the note rather than guess.
-  }
+  const workingTreeNote = buildWorkingTreeNote(headSha, hasPrTree);
 
   const manifest = [
     '# PR Review Context Files',
