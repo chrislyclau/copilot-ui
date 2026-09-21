@@ -1,0 +1,80 @@
+name: Code Review Agent
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: code-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # Primary checkout: the PR itself, exactly as this workflow always did.
+      # The reviewer model's working tree stays the PR's code -- the review
+      # agent spec (docs/review-agent-spec.md U-2.1/U-2.3) is written against
+      # that layout: the scratch context dir lives in the agent's working
+      # tree, and AGENTS.md/README.md are read in place from the checkout.
+      # fetch-depth: 0 keeps every base/head sha reachable so review-pr.ts
+      # can compute full and incremental diffs (see resolveDiffRange's
+      # reachability/ancestor checks).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Reviewer runtime: a separate checkout of the PR's base branch (e.g.
+      # main). The Node process that runs scripts/review-pr.ts -- the script
+      # itself, the src/ modules it imports, and the node_modules it resolves
+      # against -- comes from this tree, so a PR that breaks the review
+      # pipeline (broken import in a src module, broken script, dependency
+      # change that breaks npm ci/tsx, ...) cannot stop its own review from
+      # being posted. ESM imports resolve relative to the importing file's
+      # location, not the cwd, so launching .reviewer-runtime/scripts/
+      # review-pr.ts while the cwd stays at the PR checkout gives an
+      # isolated runtime without moving the model's working context off the
+      # PR's code.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: .reviewer-runtime
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      # Runtime dependencies, from the base branch's own package-lock.json.
+      - name: Install reviewer runtime dependencies
+        working-directory: .reviewer-runtime
+        run: npm ci --legacy-peer-deps
+
+      # PR dependencies, for the validation commands the reviewer runs
+      # against the PR (tsc/eslint/vitest). A PR that breaks its own install
+      # must not stop the review from being posted, so this failure is
+      # tolerated: the reviewer sees the failure and can retry the install
+      # itself (which then is review signal).
+      - name: Install PR dependencies
+        run: npm ci --legacy-peer-deps
+        continue-on-error: true
+
+      - name: Run review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REVIEWER_PROVIDER: ${{vars.REVIEWER_PROVIDER}}
+          REVIEWER_MODEL: ${{vars.REVIEWER_MODEL}}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # cwd is the PR checkout, so tsx would otherwise discover the PR's
+          # tsconfig.json for the runtime script; pin it to the runtime's own
+          # copy so a PR that edits tsconfig cannot break script compilation.
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.reviewer-runtime/tsconfig.json
+        run: node .reviewer-runtime/node_modules/tsx/dist/cli.mjs .reviewer-runtime/scripts/review-pr.ts
