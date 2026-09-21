@@ -20,6 +20,7 @@ import {
   loadPreviousReviewState,
   isCommitReachable,
   isAncestor,
+  buildWorkingTreeNote,
   renderStateMarker,
   fetchComments,
   normalizeBotLogin,
@@ -271,11 +272,29 @@ async function main() {
   const hasDiffStat = existsSync(join(contextDir, 'diff-stat.txt'));
 
   const hasFullDiff = existsSync(join(contextDir, 'full-diff.patch'));
+
+  // The CI workflow (code-review.yml) checks out the PR's base branch for the
+  // reviewer runtime and exposes the PR's own code as a worktree under
+  // .review-context/pr-tree. Detect which situation we're actually in so the
+  // manifest note is truthful under both the new and the legacy checkout
+  // layout. A HEAD sha different from the PR head alone is NOT sufficient:
+  // the legacy workflow checks out refs/pull/N/merge (a merge commit whose
+  // second parent IS the PR head), so the PR's code is in the tree there too.
+  // Only claim "this is the base branch" when the PR head is not an ancestor
+  // of HEAD -- true for a base-branch checkout, false for a merge-commit one.
+  const prTreeDir = join(contextDir, 'pr-tree');
+  const hasPrTree = existsSync(prTreeDir);
+  const workingTreeNote = buildWorkingTreeNote(headSha, hasPrTree);
+
   const manifest = [
     '# PR Review Context Files',
+    ...(workingTreeNote ? ['', workingTreeNote, ''] : []),
     `- \`diff.patch\`: A standard unified diff of the changes in this PR${incremental ? ' since the last review' : ''}.`,
     hasFullDiff ? '- \`full-diff.patch\`: The full unified diff of all changes in this PR.' : null,
     hasDiffStat ? '- \`diff-stat.txt\`: A summary of the changed files and lines.' : null,
+    hasPrTree
+      ? '- \`pr-tree/\`: The PR head branch checked out as a git worktree -- the PR\'s version of every file, for reading full-file context around diff hunks and for running validation commands against the PR code.'
+      : null,
     '- \`pr-meta.md\`: The PR title and description.',
     '- \`comments.md\`: The full comment history of the PR.',
     linkedIssues.length

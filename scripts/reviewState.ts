@@ -145,3 +145,39 @@ export function isAncestor(ancestorSha: string, descendantSha: string): boolean 
     return false;
   }
 }
+
+/**
+ * Builds the reviewer context manifest's working-tree note, or '' when the
+ * working tree already IS the PR head. Two checkout layouts exist and must be
+ * distinguished:
+ *
+ * - Base-branch layout (code-review.yml checks out the PR's base branch and
+ *   exposes the PR head as a worktree): HEAD differs from the PR head AND the
+ *   PR head is not an ancestor of HEAD -- emit the note.
+ * - Legacy layout (workflow checks out refs/pull/N/merge): HEAD is a merge
+ *   commit whose second parent IS the PR head. HEAD differs from the PR head
+ *   whenever base has diverged, but the PR's code is still in the tree, so
+ *   claiming "this is the base branch" would be false -- emit no note. That
+ *   is why the ancestor check below is required and a bare sha comparison is
+ *   not enough.
+ *
+ * Like the other helpers in this module, operates on the process's cwd.
+ */
+export function buildWorkingTreeNote(headSha: string, hasPrTree: boolean): string {
+  try {
+    const localHeadSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    if (localHeadSha !== headSha && !isAncestor(headSha, localHeadSha)) {
+      return [
+        `**Working tree note:** This working directory is NOT the PR head -- it is checked out at the PR's base branch (HEAD \`${localHeadSha.slice(0, 12)}\`, PR head \`${headSha.slice(0, 12)}\`). The reviewer runtime deliberately runs on base-branch code so a broken PR cannot break the review itself.`,
+        `\`diff.patch\` is the authoritative record of the PR's changes.`,
+        hasPrTree
+          ? `The PR's own code is checked out at \`pr-tree/\` (read-only worktree, no node_modules -- run \`npm ci --legacy-peer-deps\` inside it before running tsc/eslint/vitest against the PR code).`
+          : '',
+      ].filter(Boolean).join(' ');
+    }
+    return '';
+  } catch {
+    // git unavailable or not a repo -- omit the note rather than guess.
+    return '';
+  }
+}
