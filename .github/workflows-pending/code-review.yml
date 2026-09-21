@@ -1,0 +1,63 @@
+name: Code Review Agent
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: code-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # Check out the PR's BASE branch (e.g. main), not the PR merge commit.
+      # The reviewer agent's own runtime code (scripts/review-pr.ts, the src/
+      # modules it imports, package.json/package-lock.json) must come from a
+      # known-good tree: if the PR itself introduces bugs that break the
+      # review pipeline, the review would otherwise crash and never post.
+      # The PR's code is made available separately (see the worktree step
+      # below) for diffing and inspection. fetch-depth: 0 keeps every base/
+      # head sha reachable so review-pr.ts can compute full and incremental
+      # diffs (see resolveDiffRange's reachability/ancestor checks).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      # The branch fetch above covers same-repo PR heads; this explicit fetch
+      # also covers fork PRs, whose head commit is not under refs/heads/* of
+      # the base repository. Pins the exact head sha from the triggering event.
+      - name: Fetch PR head commit
+        run: git fetch --no-tags origin "+${{ github.event.pull_request.head.sha }}:refs/remotes/origin/pr-head"
+
+      # Expose the PR's own code to the reviewer at a fixed path, since the
+      # runtime checkout is the base branch. review-pr.ts's context manifest
+      # points the model at this directory for full-file context and for
+      # running validation commands against the PR code.
+      - name: Check out PR head into review worktree
+        run: git worktree add .review-context/pr-tree "${{ github.event.pull_request.head.sha }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci --legacy-peer-deps
+
+      - name: Run review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REVIEWER_PROVIDER: ${{vars.REVIEWER_PROVIDER}}
+          REVIEWER_MODEL: ${{vars.REVIEWER_MODEL}}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: npm run review:pr
